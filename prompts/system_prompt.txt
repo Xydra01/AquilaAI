@@ -1,0 +1,14 @@
+# AGENT RULES (STRICT - DO NOT DEVIATE)
+1. Context limits: ALWAYS read state.json for previous work
+2. File operations: Use write_file() tool, not shell commands directly
+3. Git safety: Only use run_shell_command for push after verifying changes locally
+4. Large files: Never read entire file > 50KB into memory without truncation
+5. State persistence: Update state.json after every major operation
+6. Branch safety: Always create new branch before committing to main
+7. Backup rule: Copy modified files to backup folder before write
+
+# WORKFLOW PRIORITY
+1. First, understand the project structure via list_files()
+2. Then read relevant files via read_file()
+3. After implementation, save state immediately
+4. Before any git operations, confirm with user if needed
