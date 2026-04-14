@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import subprocess
+import shutil
 import psutil
 import inspect
 from tools import is_safe_path
@@ -113,9 +114,124 @@ def search_files(pattern, path="."):
     except Exception as e:
         return f"Error searching files: {e}"
     
+def delete_file(file_path: str) -> str:
+    """Deletes a file from the file system."""
+    try:
+        path_obj = Path(file_path).expanduser().resolve()
+        
+        if not is_safe_path(path_obj):
+            return f"❌ SECURITY BLOCK: You are forbidden from deleting '{path_obj.name}'."
+        if not path_obj.exists():
+            return f"❌ Error: File not found at {file_path}"
+        if path_obj.is_dir():
+            return f"❌ Error: '{file_path}' is a directory, not a file."
+            
+        path_obj.unlink()
+        return f"✅ Successfully deleted {file_path}"
+    except Exception as e:
+        return f"❌ Error deleting file: {e}"
+
+def rename_file(old_path: str, new_name: str) -> str:
+    """Renames a file in its current directory."""
+    try:
+        old_path_obj = Path(old_path).expanduser().resolve()
+        
+        if not is_safe_path(old_path_obj):
+            return f"❌ SECURITY BLOCK: Cannot rename forbidden file '{old_path_obj.name}'."
+        if not old_path_obj.exists():
+            return f"❌ Error: File not found at {old_path}"
+            
+        # Construct the new path in the same parent directory
+        new_path_obj = old_path_obj.parent / new_name
+        
+        if not is_safe_path(new_path_obj):
+            return f"❌ SECURITY BLOCK: New name '{new_name}' uses a forbidden extension or name."
+        if new_path_obj.exists():
+            return f"❌ Error: A file named '{new_name}' already exists here."
+
+        old_path_obj.rename(new_path_obj)
+        return f"✅ Successfully renamed to {new_name}"
+    except Exception as e:
+        return f"❌ Error renaming file: {e}"
+    
+def move_file(source_path: str, dest_dir: str) -> str:
+    """Moves a file to a new directory."""
+    try:
+        src_obj = Path(source_path).expanduser().resolve()
+        dest_obj = Path(dest_dir).expanduser().resolve()
+        
+        if not is_safe_path(src_obj):
+            return f"❌ SECURITY BLOCK: Cannot move forbidden file '{src_obj.name}'."
+        if not src_obj.exists():
+            return f"❌ Error: Source file not found at {source_path}"
+            
+        # Ensure destination directory exists
+        dest_obj.mkdir(parents=True, exist_ok=True) 
+        target_path = dest_obj / src_obj.name
+        
+        if target_path.exists():
+            return f"❌ Error: A file with this name already exists at destination {target_path}"
+            
+        shutil.move(str(src_obj), str(target_path))
+        return f"✅ Successfully moved {src_obj.name} to {dest_dir}"
+    except Exception as e:
+        return f"❌ Error moving file: {e}"
+    
+def create_directory(dir_path: str) -> str:
+    """Creates a new directory and any necessary parent directories."""
+    try:
+        path_obj = Path(dir_path).expanduser().resolve()
+        if path_obj.exists():
+            return f"⚠️ Directory already exists: {dir_path}"
+            
+        path_obj.mkdir(parents=True, exist_ok=True)
+        return f"✅ Successfully created directory: {dir_path}"
+    except Exception as e:
+        return f"❌ Error creating directory: {e}"
+    
+def get_env_variables(keys_to_check: str = "") -> str:
+    """
+    Checks the currently loaded environment variables. 
+    If keys_to_check is provided (comma separated), returns their values safely masked.
+    If left empty, returns a list of all available environment variable names.
+    """
+    try:
+        import os
+        env_vars = dict(os.environ)
+        
+        # If the agent wants to check specific keys (e.g. "TAVILY_API_KEY, SMTP_PORT")
+        if keys_to_check:
+            requested_keys = [k.strip() for k in keys_to_check.split(",")]
+            results = []
+            for k in requested_keys:
+                if k in env_vars:
+                    val = env_vars[k]
+                    # Mask sensitive keys so they don't leak into the context window
+                    if any(secret in k.upper() for secret in ['KEY', 'TOKEN', 'SECRET', 'PASSWORD']):
+                        val = f"{val[:4]}...{val[-4:]}" if len(val) > 8 else "****"
+                    results.append(f"{k} = {val}")
+                else:
+                    results.append(f"{k} = NOT SET")
+            return "✅ Environment Check:\\n" + "\\n".join(results)
+            
+        # If no keys provided, just list all the names loaded in memory
+        # We filter out the massive Windows-specific ones so we don't nuke the context window
+        ignore_sys = ['PATH', 'PSMODULEPATH', 'COMMONPROGRAMFILES']
+        safe_keys = [k for k in env_vars.keys() if k not in ignore_sys]
+        
+        return "✅ Available Environment Variables (Names Only):\\n" + ", ".join(sorted(safe_keys))
+        
+    except Exception as e:
+        return f"❌ Error reading env variables: {e}"
+
 OS_TOOLS = {
     "read_file_lines": {"func": read_file_lines, "description": inspect.getdoc(read_file_lines)},
     "search_in_file": {"func": search_in_file, "description": inspect.getdoc(search_in_file)},
     "manage_process": {"func": manage_process, "description": inspect.getdoc(manage_process)},
     "search_files": {"func": search_files, "description": inspect.getdoc(search_files)},
+    "delete_file": {"func": delete_file, "description": inspect.getdoc(delete_file)},
+    "rename_file": {"func": rename_file, "description": inspect.getdoc(rename_file)},
+    "move_file": {"func": move_file, "description": inspect.getdoc(move_file)},
+    "create_directory": {"func": create_directory, "description": inspect.getdoc(create_directory)},
+    "get_env_variables": {"func": get_env_variables, "description": inspect.getdoc(get_env_variables)},
 }
