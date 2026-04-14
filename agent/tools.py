@@ -55,57 +55,52 @@ def write_file(file_path: str, content: str) -> str:
             content = content[:-3].strip()
             
     target_path = Path(file_path)
+    
+    # Stops agent from destroying its ledger after waking up from context reset
+    if "Agent-Tasks" in target_path.parts and target_path.exists():
+        return ("❌ SECURITY BLOCK: You cannot use `write_file` to overwrite an existing Task Ledger. "
+                "Doing so causes amnesia and deletes your progress! "
+                "Use `update_task_ledger`, `mark_step_complete`, or `replace_in_file` instead.")
+
     target_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # 2. Python AST Auto-Healer for Token Cut-offs
-    if target_path.suffix == '.py':
-        try:
-            ast.parse(content)
-        except SyntaxError as e:
-            err_msg = str(e).lower()
-            original_content = content
-            healed = False
-            
-            # Heal A: Unterminated Strings / Docstrings
-            if "unterminated" in err_msg and "string" in err_msg:
-                for quote in ['"""', "'''"]:
-                    try:
-                        ast.parse(original_content + f"\n{quote}\n")
-                        content = original_content + f"\n{quote}\n"
-                        healed = True
-                        break
-                    except SyntaxError:
-                        pass
-            
-            # Heal B: Missing Parentheses or Brackets
-            elif "eof" in err_msg or "never closed" in err_msg:
-                for char in [')', ']', '}', '\n"""\n', "\n'''\n"]:
-                    try:
-                        ast.parse(original_content + f"\n{char}")
-                        content = original_content + f"\n{char}"
-                        healed = True
-                        break
-                    except SyntaxError:
-                        pass
-                        
-            # Heal C: Missing Indentations (e.g. cut off right after a 'try:' or 'def:')
-            elif "expected an indented block" in err_msg:
-                try:
-                    ast.parse(original_content + "\n    pass\n")
-                    content = original_content + "\n    pass\n"
-                    healed = True
-                except SyntaxError:
-                    pass
-            
-            if not healed:
-                return f"❌ Error: File NOT saved. Unrecoverable syntax error: {str(e)}"
-            else:
-                print(f"🔧 [bold green]Python Auto-Healed a syntax cut-off in {target_path.name}[/bold green]")
-
-    # 3. Write the clean, healed file
+    # 2. WRITE THE FILE IMMEDIATELY (No more blocking!)
     with open(target_path, 'w', encoding='utf-8') as f:
         f.write(content)
         
+    # 3. Post-Save Linting Feedback
+    if target_path.suffix == '.py':
+        import subprocess
+        import sys
+        
+        # Check basic syntax first using AST to give a clean pointer
+        try:
+            ast.parse(content)
+            # If AST passes, run flake8 for logic bugs
+            result = subprocess.run(
+                [sys.executable, "-m", "flake8", str(target_path), "--max-line-length=120"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                lint_errors = result.stdout.strip() or result.stderr.strip()
+                if "No module named flake8" not in lint_errors:
+                    return (f"✅ Successfully saved {file_path}.\n\n"
+                            f"⚠️ LINTER WARNINGS:\n{lint_errors}\n\n"
+                            f"SYSTEM HINT: Fix these logic errors using `replace_in_file` before running the script.")
+        except SyntaxError as e:
+            # Format a beautiful error pointer
+            error_line = e.text.rstrip() if e.text else ""
+            pointer = ""
+            if e.offset and e.text:
+                leading_whitespace = e.text[:e.offset - 1]
+                pointer_spacing = "".join("\t" if char == "\t" else " " for char in leading_whitespace)
+                pointer = f"{pointer_spacing}^"
+            
+            return (f"✅ File saved as {file_path}, BUT IT HAS A SYNTAX ERROR:\n\n"
+                    f"Line {e.lineno}: {e.msg}\n"
+                    f"```python\n{error_line}\n{pointer}\n```\n"
+                    f"SYSTEM HINT: Do NOT rewrite the whole file. Use `replace_in_file` to fix this specific line.")
+                    
     return f"✅ Successfully created/overwrote {file_path}."
 
 def read_file(file_path: str) -> str:
@@ -157,6 +152,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
+            
         if target_text not in content:
             lines = content.split('\n')
             target_lines = target_text.split('\n')
@@ -168,12 +164,19 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
             return f"❌ Error: The exact target text was not found. {hint}"
         
         new_content = content.replace(target_text, replacement_text)
-        if file_path.endswith('.py'):
-            is_valid, err_msg = check_syntax(new_content)
-            if not is_valid:
-                return f"❌ Error: Replacement NOT applied. It causes a syntax error:\n{err_msg}"
+        
+        # Save immediately!
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
+            
+        # Post-save syntax check
+        if file_path.endswith('.py'):
+            try:
+                ast.parse(new_content)
+            except SyntaxError as e:
+                return (f"✅ Replaced text, BUT the file still has a syntax error on line {e.lineno}: {e.msg}\n"
+                        f"SYSTEM HINT: Use `replace_in_file` again to fix the remaining syntax errors.")
+                        
         return f"✅ Successfully replaced text in {file_path}."
     except FileNotFoundError:
         return f"❌ Error: File {file_path} not found."

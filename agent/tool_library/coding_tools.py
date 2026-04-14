@@ -1,6 +1,8 @@
 #Tools used primarily for coding
 
 import subprocess
+from pathlib import Path
+from tools import is_safe_path
 import os
 import sys
 import ast
@@ -122,10 +124,50 @@ def replace_function(file_path: str, function_name: str, new_code: str) -> str:
         return f"❌ Error: File not found."
     except SyntaxError:
         return f"❌ Error: File has a syntax error, AST parsing failed. Use read_file to fix it."
+
+def lint_python_file(file_path: str) -> str:
+    """
+    Lints a Python file using flake8 to catch syntax errors, undefined names, and other static analysis bugs.
+    """
+    try:
+        path_obj = Path(file_path).expanduser()
+        if not is_safe_path(path_obj):
+            return f"❌ SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden."
+        if not path_obj.exists():
+            return f"❌ Error: File not found: {file_path}"
+        
+        #Uses flake8 through python, and has increased max line length so the agent doesn't get warnings
+
+        result = subprocess.run(
+            [sys.executable, "-m", "flake8", str(path_obj), "--max-line-length=120"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
+            return f"✅ Linting passed: No static analysis or syntax errors found in {path_obj.name}."
+            
+        else:
+            output = result.stdout.strip() or result.stderr.strip()
+            #Handles cases where flake8 isn't installed without crashing the entire coding_tools script
+            if "No module named flake8" in output:
+                return "❌ Error: 'flake8' is not installed in the virtual environment. Please run 'pip install flake8'."
+            
+            error_msg = (
+                f"❌ Flake8 found issues in {path_obj.name}:\n\n"
+                f"{output}\n\n"
+                f"SYSTEM HINT: Review the line numbers and error codes above, then use `replace_in_file` or `replace_function` to fix them."
+            )
+            return error_msg
+    
+    except Exception as e:
+        return f"❌ Error running flake8: {e}"
+
     
 CODING_TOOLS = {
     "_index_codebase": {"func": _index_codebase, "description": inspect.getdoc(_index_codebase)},
     "semantic_code_search": {"func": semantic_code_search, "description": inspect.getdoc(semantic_code_search)},
     "run_python_script": {"func": run_python_script, "description": inspect.getdoc(run_python_script)},
     "replace_function": {"func": replace_function, "description": inspect.getdoc(replace_function)},
+    "lint_python_file": {"func": lint_python_file, "description": inspect.getdoc(lint_python_file)},
 }
