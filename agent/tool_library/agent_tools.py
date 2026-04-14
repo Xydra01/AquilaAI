@@ -110,10 +110,29 @@ def ask_user(question: str) -> str:
     
     return f"The user responded with: {answer}"
 
+def append_to_ledger(new_text: str) -> str:
+    """
+    Appends new text, notes, or '- [ ]' steps to the bottom of your Task Ledger.
+    Use this when you need to add new tasks to your plan without overwriting the file.
+    """
+    tasks_dir = Path("Agent-Tasks")
+    if not tasks_dir.exists(): return "❌ No active tasks found."
+    
+    md_files = list(tasks_dir.glob("*.md"))
+    if not md_files: return "❌ No active task ledger found."
+    
+    active_file = max(md_files, key=os.path.getmtime)
+    
+    with open(active_file, 'a', encoding='utf-8') as f:
+        f.write(f"\n{new_text}\n")
+        
+    return f"✅ Successfully appended new steps/notes to your task ledger."
+
 AGENT_TOOLS = {
     "update_task_ledger": {"func": update_task_ledger, "description": inspect.getdoc(update_task_ledger)},
     "set_current_status": {"func": set_current_status, "description": inspect.getdoc(set_current_status)},
     "mark_step_complete": {"func": mark_step_complete, "description": inspect.getdoc(mark_step_complete)},
     "query_past_experience": {"func": query_past_experience, "description": inspect.getdoc(query_past_experience)},
-    "ask_user": {"func": ask_user, "description": inspect.getdoc(ask_user)}, 
+    "ask_user": {"func": ask_user, "description": inspect.getdoc(ask_user)},
+    "append_to_ledger": {"func": append_to_ledger, "description": inspect.getdoc(append_to_ledger)},
 }

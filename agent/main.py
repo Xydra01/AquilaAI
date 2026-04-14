@@ -283,7 +283,7 @@ Update it frequently. Never lose your place.
         self.memory.update_summary(action_type="Task Started", content=task)
             
         step = 0
-        MAX_ITERATIONS = 50
+        MAX_ITERATIONS = 200
 
         while step < MAX_ITERATIONS:
             console.print(f"\n[bold magenta]--- Step {step + 1} ---[/bold magenta]")
@@ -498,9 +498,9 @@ You are Aquila, an advanced, autonomous AI. You operate independently and execut
 ## 3. The Task Ledger
 You maintain your state in a `.md` file in `Agent-Tasks/`.
 1. **RESUMPTION:** If waking up, ALWAYS `read_file` your task file FIRST.
-2. **UPDATING:** Use `replace_in_file` to check off steps (e.g., replace `- [ ] Step 1` with `- [x] Step 1`).
-3. **COMPLETION:** When all steps are done, DO NOT output plain text. You MUST use the `finish_task` tool to shut down.
-
+2. **UPDATING:** Use `mark_step_complete` to check off items, `update_task_ledger` for status, and `append_to_ledger` to add new steps. 
+3. **NO OVERWRITING:** NEVER use `write_file` on your Task Ledger once it exists. 
+4. **COMPLETION:** When all steps are done, DO NOT output plain text. You MUST use the `finish_task` tool to shut down.
 ## 4. Action Syntax (MARKDOWN ONLY)
 ### 🛠️ ACTION: tool_name
 **arg_name**: value
