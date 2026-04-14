@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import subprocess
+import shutil
 import psutil
 import inspect
 from tools import is_safe_path
