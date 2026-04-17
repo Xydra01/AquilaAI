@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # Import the new entry function we just made in main.py
-from main import process_user_input
+from main import process_user_input, dispatch_and_route, client
 
 # 1. Page Configuration
 st.set_page_config(page_title="Aquila OS", page_icon="🦅", layout="wide")
@@ -49,23 +49,34 @@ with chat_col:
             
     # The Chat Input Box
     if prompt := st.chat_input("Command Aquila..."):
-        # Display user message instantly
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
             
-        # Trigger Aquila's backend
         with st.chat_message("assistant"):
-            with st.spinner("Aquila is processing..."):
+            with st.spinner("Aquila is thinking..."):
                 
-                # Hand the prompt to the backend and wait for the final string
-                final_response = process_user_input(prompt)
+                # 1. The Fast Path Routing
+                route_decision = dispatch_and_route(prompt)
                 
-                # Render her response
-                st.markdown(final_response)
-                
-        # Save her response to memory
-        st.session_state.messages.append({"role": "assistant", "content": final_response})
-        
-        # Force the UI to refresh so the Task Ledger on the right updates!
+                if route_decision.get("type") == "chat":
+                    # FAST PATH: Instant chat, no tools, no loops
+                    chat_history = [{"role": "system", "content": "You are Aquila. Reply concisely and naturally."}]
+                    chat_history.append({"role": "user", "content": prompt})
+                    
+                    # Normal LLM call
+                    final_response = client.chat(chat_history, temperature=0.4, max_tokens=500)
+                    st.markdown(final_response)
+                    st.session_state.messages.append({"role": "assistant", "content": final_response})
+                    
+                else:
+                    # HEAVY PATH: The Autonomous Loop
+                    task_name = route_decision.get("task_name", "new_task")
+                    st.info(f"🚀 Initializing autonomous task: `{task_name}`")
+                    
+                    # TODO: Phase 3 & 4 (Planner -> Creator Loop) will go right here!
+                    # For now, we just placeholder it so it doesn't crash.
+                    final_response = f"I have routed this to my task queue as `{task_name}`. Ready for Phase 3!"
+                    st.session_state.messages.append({"role": "assistant", "content": final_response})
+                    
         st.rerun()
