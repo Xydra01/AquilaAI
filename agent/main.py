@@ -4,6 +4,7 @@ import re
 import importlib
 import requests
 import inspect
+import json
 import glob
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -402,84 +403,38 @@ def select_active_task() -> str:
         safe_name = re.sub(r'_+', '_', safe_name).strip('_')
         return safe_name
     
-def dispatch_task(user_input: str, client) -> str:
+def dispatch_and_route(user_prompt: str) -> dict:
     """
-    Acts as the 'front desk' for Aquila. Reviews active tasks and routes the user,
-    or generates a clean task name for new requests.
+    Uses a muzzled, fast LLM call to classify the user's intent.
+    Returns a dict with 'type' ('chat' or 'task') and a 'task_name'.
     """
-    tasks_dir = Path("Agent-Tasks")
-    os.makedirs(tasks_dir, exist_ok=True)
+    routing_prompt = """
+    You are the routing system for Aquila OS. Analyze the user's request.
+    If the user is just chatting, asking a simple question, or making a greeting, classify it as 'chat'.
+    If the user is asking you to build, create, research, or execute a multi-step workflow, classify it as 'task'.
     
-    # 1. Read the board
-    active_tasks = [f.stem for f in tasks_dir.glob("*.md")]
+    You MUST respond with ONLY a raw JSON object. No markdown blocks, no formatting.
+    Format: {"type": "chat|task", "task_name": "snake_case_name_if_task_else_null"}
+    """
     
-    # 2. If the board is empty, just generate a name
-    if not active_tasks:
-        return _generate_task_name(user_input, client)
-        
-    # 3. Ask the LLM to route the request
-    routing_system_prompt = f"""You are an automated task router. 
-Your ONLY job is to decide if the user's input matches an ongoing task or is a completely new request.
-
-ACTIVE TASKS: {', '.join(active_tasks)}
-
-RULES:
-- If the input is clearly continuing or related to an ACTIVE TASK, reply with ONLY the exact name of that task (no extension).
-- If it is a completely new request, reply with exactly the word: NEW
-- Do not output any other text, reasoning, or punctuation."""
+    messages = [
+        {"role": "system", "content": routing_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
     
     try:
-        # Split into System and User messages to satisfy LM Studio's Jinja templates
-        messages = [
-            {"role": "system", "content": routing_system_prompt},
-            {"role": "user", "content": f"USER INPUT: '{user_input}'"}
-        ]
+        # The Muzzle: Temp 0.0, extremely low tokens for speed
+        response = client.chat(messages, temperature=0.0, max_tokens=50)
         
-        # --- THE MUZZLE: 0.0 temp (no creativity), 20 tokens max ---
-        response = client.chat(messages, temperature=0.0, max_tokens=500)
-        decision = response.strip()
+        # Clean potential markdown artifacts just in case
+        cleaned = response.strip().replace("```json", "").replace("```", "").strip()
+        decision = json.loads(cleaned)
         
-        if decision in active_tasks:
-            console.print(f"[dim cyan]🔀 Dispatcher routed to active task: {decision}[/dim cyan]")
-            return decision
-        else:
-            return _generate_task_name(user_input, client)
-            
+        return decision
     except Exception as e:
-        console.print(f"[dim red]⚠️ Dispatcher failed ({e}), falling back to default name...[/dim red]")
-        return "Manual_Task"
-
-def _generate_task_name(user_input: str, client) -> str:
-    """Generates a clean, 2-3 word snake_case slug based on the prompt."""
-    naming_system_prompt = """Convert the user request into a short, 2-3 word snake_case file name.
-Example 1: "Write a python script to download youtube videos" -> "youtube_downloader"
-Example 2: "Help me debug this FastAPI route" -> "fastapi_debugging"
-Reply ONLY with the snake_case name. No quotes, no markdown, no other text."""
-
-    try:
-        messages = [
-            {"role": "system", "content": naming_system_prompt},
-            {"role": "user", "content": f"USER REQUEST: '{user_input}'"}
-        ]
-        
-        # --- THE MUZZLE: 0.3 temp (slight creativity for naming), 15 tokens max ---
-        response = client.chat(messages, temperature=0.3, max_tokens=500)
-        name = response.strip().replace(" ", "_").replace('"', '').replace("'", "")
-        
-        # SANITY CHECK: If the LLM returns an error string or a massive sentence, abort to fallback
-        if "error" in name.lower() or len(name) > 30:
-            raise ValueError("LLM returned an invalid name format.")
-            
-        console.print(f"[dim cyan]✨ Dispatcher created new task: {name}[/dim cyan]")
-        return name
-    except Exception as e:
-        # Fallback heuristic if the LLM fails or goes crazy
-        words = "".join(char for char in user_input if char.isalnum() or char.isspace()).split()
-        fallback_name = "_".join(words[:3]).capitalize()
-        if not fallback_name:
-            fallback_name = "Aquila_Task"
-        console.print(f"[dim cyan]✨ Dispatcher created new task (fallback): {fallback_name}[/dim cyan]")
-        return fallback_name
+        # Fallback if parsing fails
+        print(f"Routing error: {e}")
+        return {"type": "chat", "task_name": None}
 
 if __name__ == "__main__":
     print("=== Agent System Initializing ===")
