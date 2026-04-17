@@ -53,6 +53,8 @@ class LMStudioClient:
             return f"Error: {response.status_code} - {response.text}"
         except Exception as e:
             return f"Error connecting to LM Studio: {e}"
+#here to allow access to client in app.py   
+client = LMStudioClient()
 
 def parse_tool_calls(response_text: str) -> list[dict]:
     """
