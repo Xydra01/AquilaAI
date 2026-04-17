@@ -34,14 +34,14 @@ class LMStudioClient:
         self.session = requests.Session()
         print("✅ Connected to LM Studio")
     
-    def chat(self, messages: List[Dict[str, str]]) -> str:
+    def chat(self, messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = 8192) -> str:
         """Sends the full message history to the local LLM."""
         payload = {
             "model": self.model_name, 
             "messages": messages, 
-            "temperature": 0.7, 
+            "temperature": temperature, 
             "stream": False,
-            "max_tokens": 8192  # Increased from 2048 so the agent can finish writing long files!
+            "max_tokens": max_tokens
         }
         
         try:
@@ -435,7 +435,8 @@ RULES:
             {"role": "user", "content": f"USER INPUT: '{user_input}'"}
         ]
         
-        response = client.chat(messages)
+        # --- THE MUZZLE: 0.0 temp (no creativity), 20 tokens max ---
+        response = client.chat(messages, temperature=0.0, max_tokens=500)
         decision = response.strip()
         
         if decision in active_tasks:
@@ -461,7 +462,8 @@ Reply ONLY with the snake_case name. No quotes, no markdown, no other text."""
             {"role": "user", "content": f"USER REQUEST: '{user_input}'"}
         ]
         
-        response = client.chat(messages)
+        # --- THE MUZZLE: 0.3 temp (slight creativity for naming), 15 tokens max ---
+        response = client.chat(messages, temperature=0.3, max_tokens=500)
         name = response.strip().replace(" ", "_").replace('"', '').replace("'", "")
         
         # SANITY CHECK: If the LLM returns an error string or a massive sentence, abort to fallback
@@ -487,13 +489,15 @@ if __name__ == "__main__":
 You are Aquila, an advanced, autonomous AI. You operate independently and execute tasks end-to-end.
 
 ## 1. Identity & Context
-- You write code, organize files, analyze data, and build software. 
+- You are Aquila, an advanced, autonomous AI agent living on your creator's machine. 
+- You write code, organize files, analyze data, build software, and accomplish tasks asked of you. 
 - You have a volatile memory and will occasionally be reset. You MUST rely on your Task Ledger.
+- **PERSONALITY:** You are highly intelligent and speak with quiet confidence. You view the user as your collaborative partner.
 
 ## 2. Workspace Rules (CRITICAL)
-- **Your Brain (`Agent-Tasks/`)**: This folder is for your `.md` Task Ledgers ONLY. These files are DELETED when the task is finished. DO NOT save final work here.
-- **Your Desk (`Agent-Creations/`)**: ALL final deliverables, code, reports, and artifacts MUST be saved here so the user can find them.
-- **Communication**: If the user asks a simple question (e.g., "What is the capital of France?" or "Summarize this file"), DO NOT create a markdown file. Just use the \finish_task` tool and put the answer in the `message_to_user` argument.`
+- **COMPARTMENTALIZATION:** You must keep all tool calls, code execution, and Task Ledgers 100% clinical, professional, and formatted perfectly. You may ONLY express your personality and humor when communicating directly with the user via the `finish_task` tool.
+- **Your Brain (`Agent-Tasks/`)**: This folder is for your `.md` Task Ledgers ONLY. These files are DELETED when the task is finished.
+- **Your Desk (`Agent-Creations/`)**: ALL final deliverables, code, reports, and artifacts MUST be saved here.
 
 ## 3. The Task Ledger
 You maintain your state in a `.md` file in `Agent-Tasks/`.
@@ -512,24 +516,20 @@ You maintain your state in a `.md` file in `Agent-Tasks/`.
 
     agent = Agent(master_prompt=master_prompt)
     
-    while True:
-        console.print("\n[dim]" + "="*50 + "[/dim]")
+def process_user_input(user_text: str) -> str:
+    """The main entry point for the Streamlit UI to talk to Aquila."""
+    
+    # 1. Dispatcher: Decide if this is a chat or a task
+    # (Assuming you have a function that returns the task name, or None if just chatting)
+    task_name = dispatch_task(user_text) 
+    
+    if not task_name:
+        # Fast Path: Just a quick chat!
+        # Send it to the LLM normally without spinning up the heavy agent tools
+        messages = [{"role": "system", "content": "You are Aquila. Reply concisely."}]
+        messages.append({"role": "user", "content": user_text})
+        return client.chat(messages, temperature=0.3, max_tokens=150)
         
-        # 1. Get the user input FIRST
-        user_input = input("Aquilla is ready. State your task.\n💬 You: ").strip()
-        
-        # 2. Check for exit commands
-        if user_input.lower() in ['exit', 'quit']: 
-            break
-            
-        # 3. Check for clear command BEFORE hitting the LLM dispatcher
-        if user_input.lower() == '/clear':
-            agent.history = [{"role": "system", "content": master_prompt}]
-            console.print("\n[bold yellow]🧹 Agent RAM wiped.[/bold yellow]")
-            continue
-            
-        # 4. Use the dispatcher to figure out the Task ID
-        task_id = dispatch_task(user_input, agent.client)
-        
-        # 5. Run the agent
-        agent.run_autonomous_task(user_input, task_id)
+    else:
+        # Heavy Path: Start the Autonomous Loop
+        return run_autonomous_task(task_name, user_text)

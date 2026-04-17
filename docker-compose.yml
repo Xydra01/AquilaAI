@@ -1,0 +1,11 @@
+services:
+  aquila-search:
+    image: searxng/searxng
+    container_name: aquila-search
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_SECRET_KEY=aquila_super_secret_key_999

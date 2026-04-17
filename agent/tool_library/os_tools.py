@@ -79,7 +79,7 @@ def manage_process(action: str, process_name: str) -> str:
         
     elif action == "start":
         # Check platform to determine the correct execution command
-        if sys.platform == "darwin":  # macOS
+        if sys.platform == "darwin":  # macOS logic
             safe_apps = {
                 "chrome": "open -a 'Google Chrome'",
                 "notepad": "open -e" # Opens TextEdit on Mac
@@ -88,7 +88,7 @@ def manage_process(action: str, process_name: str) -> str:
             if not cmd:
                 return f"❌ Cannot start '{process_name}'. Not in safe apps list."
             subprocess.Popen(cmd, shell=True)
-        else:  # Default to Windows/Linux logic
+        else: # Windows/Linux logic
             safe_apps = {
                 "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
                 "notepad": "notepad.exe"
