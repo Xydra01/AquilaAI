@@ -9,29 +9,37 @@ def web_search(query: str, max_results: int = 5) -> str:
     """Searches the web locally using your private SearXNG instance."""
     url = "http://localhost:8080/search"
     
-    params = {
-        "q": query,
-        "format": "json",
-        "engines": "google,bing,duckduckgo,wikipedia",
-        "language": "en"
-    }
-    
     try:
+        
+        limit = int(max_results)
+        
+        # 2. Clean the query FIRST
+        clean_query = query.replace('"', '').replace("'", "")
+        
+        params = {
+            "q": clean_query,
+            "format": "json",
+            "engines": "google,bing,duckduckgo,wikipedia",
+            "language": "en"
+        }
+        
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         data = response.json()
         
         results = data.get("results", [])
         if not results:
-            return f"No results found for '{query}'."
+            return f"No results found for '{clean_query}'."
             
-        output = f"Search Results for '{query}':\n\n"
-        for i, res in enumerate(results[:max_results]):
+        output = f"Search Results for '{clean_query}':\n\n"
+        for i, res in enumerate(results[:limit]):
             output += f"{i+1}. {res.get('title', 'No Title')}\n"
             output += f"URL: {res.get('url', 'No URL')}\n"
             output += f"Snippet: {res.get('content', 'No Content')}\n\n"
             
         return output
+    except ValueError:
+        return "❌ Error: max_results must be a number."
     except Exception as e:
         return f"❌ Error executing local web search: {e}"
 
@@ -44,23 +52,17 @@ def read_webpage(url: str) -> str:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        # Parse the HTML
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Strip out useless noise like scripts, styles, and footers
         for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
             element.decompose()
             
-        # Convert the remaining clean HTML to Markdown
         raw_markdown = markdownify.markdownify(str(soup), heading_style="ATX")
         
-        # Clean up excessive blank lines
         clean_markdown = "\n".join([line for line in raw_markdown.splitlines() if line.strip()])
         
-        # Truncate if it's absurdly long to protect the context window
         if len(clean_markdown) > 15000:
             return f"Content of {url} (Truncated):\n\n{clean_markdown[:15000]}\n\n...[CONTENT TRUNCATED]"
-            
         return f"Content of {url}:\n\n{clean_markdown}"
         
     except Exception as e:

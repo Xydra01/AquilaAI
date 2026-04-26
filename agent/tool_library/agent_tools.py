@@ -1,138 +1,54 @@
 #Tools that help Aquila function and complete tasks
 
-from pathlib import Path
-import os
 import inspect
-from memory import LongTermMemory
+from memory import DualMemorySystem
 from rich.console import Console
 
-ltm = LongTermMemory()
-
-def update_task_ledger(status_update: str, check_off_step: str = None) -> str:
-    """A dedicated tool for the agent to easily update its task ledger without exact string matching."""
-    # Find the newest .md file in Agent-Tasks
-    tasks_dir = Path("Agent-Tasks")
-    if not tasks_dir.exists(): return "❌ No active tasks found."
-    
-    md_files = list(tasks_dir.glob("*.md"))
-    if not md_files: return "❌ No active tasks found."
-    
-    # Assuming the most recently modified file is the active one
-    active_file = max(md_files, key=os.path.getmtime)
-    
-    with open(active_file, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-        
-    updated = False
-    for i, line in enumerate(lines):
-        # Update the status line
-        if line.startswith("## 📍 Current Status"):
-            if i + 1 < len(lines) and not lines[i+1].startswith("#"):
-                lines[i+1] = f"{status_update}\n"
-            else:
-                lines.insert(i+1, f"{status_update}\n")
-                
-        # Check off the step if requested
-        if check_off_step and check_off_step.lower() in line.lower() and "- [ ]" in line:
-            lines[i] = line.replace("- [ ]", "- [x]", 1)
-            updated = True
-            
-    with open(active_file, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-        
-    msg = f"✅ Updated Current Status in {active_file.name}."
-    if check_off_step:
-        msg += f" Marked step containing '{check_off_step}' as complete." if updated else f" ⚠️ Could not find unchecked step containing '{check_off_step}'."
-    return msg
-
-
-def set_current_status(status_message: str) -> str:
-    """Updates the 'Current Status' section of the active task ledger."""
-    tasks_dir = Path("Agent-Tasks")
-    md_files = list(tasks_dir.glob("*.md"))
-    if not md_files: return "❌ No active task ledger found."
-    active_file = max(md_files, key=os.path.getmtime)
-    
-    with open(active_file, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-        
-    for i, line in enumerate(lines):
-        if line.startswith("## 📍 Current Status"):
-            # Replace the line immediately after the header
-            if i + 1 < len(lines) and not lines[i+1].startswith("#"):
-                lines[i+1] = f"{status_message}\n\n"
-            else:
-                lines.insert(i+1, f"{status_message}\n\n")
-            
-            with open(active_file, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
-            return f"✅ Status updated to: {status_message}"
-            
-    return "❌ Error: Could not find '## 📍 Current Status' header in ledger."
-
-def mark_step_complete(step_keyword: str) -> str:
-    """Checks off a step in the To-Do list based on a keyword match."""
-    tasks_dir = Path("Agent-Tasks")
-    md_files = list(tasks_dir.glob("*.md"))
-    if not md_files: return "❌ No active task ledger found."
-    active_file = max(md_files, key=os.path.getmtime)
-    
-    with open(active_file, 'r', encoding='utf-8') as f:
-        content = f.read()
-        
-    lines = content.split('\n')
-    for i, line in enumerate(lines):
-        if "- [ ]" in line and step_keyword.lower() in line.lower():
-            lines[i] = line.replace("- [ ]", "- [x]", 1)
-            with open(active_file, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(lines))
-            return f"✅ Marked step complete: {lines[i]}"
-            
-    return f"❌ Error: Could not find an unchecked step containing '{step_keyword}'."
-
-def query_past_experience(keyword: str) -> str:
-    """Searches SQLite memory for past solved tasks."""
-    return ltm.search_experiences(keyword)
+aquila_memory = DualMemorySystem()
 
 def ask_user(question: str) -> str:
     """
-    Pauses your autonomous loop to ask the user a direct, clarifying question. 
-    Use this if you are genuinely stuck, need a decision made, or need a specific file path.
+    DEPRECATED IN WEB UI MODE (For now).
     """
-    from rich.console import Console
     console = Console()
+    console.print(f"\n[bold red]⚠️ Agent attempted to use ask_user to ask: {question}[/bold red]")
     
-    console.print(f"\n[bold green]🙋 Aquila has a question for you:[/bold green]")
-    console.print(f"{question}")
-    
-    # Physically pause the python script and wait for human input
-    answer = input("\nYour response: ")
-    
-    return f"The user responded with: {answer}"
+    return (
+        "❌ SYSTEM ERROR: You are operating in a headless Web UI. The `ask_user` tool is strictly blocked because it freezes the server.\n"
+        "If you absolutely need the user's input or a decision to proceed, you MUST use the `finish_task` tool, put your question in the `message_to_user` argument, and shut down."
+    )
 
-def append_to_ledger(new_text: str) -> str:
+def query_past_experience(keyword: str) -> str:
+    """Searches the ChromaDB vector database for past solved tasks."""
+    return aquila_memory.recall_experiences(keyword)
+
+def store_fact(topic: str, fact: str) -> str:
     """
-    Appends new text, notes, or '- [ ]' steps to the bottom of your Task Ledger.
-    Use this when you need to add new tasks to your plan without overwriting the file.
+    CRITICAL: Use this tool to permanently remember user preferences, lore corrections, or absolute rules.
+    Args:
+        topic: A 1-2 word category (e.g., 'lore', 'coding_style', 'formatting').
+        fact: The specific rule to remember.
     """
-    tasks_dir = Path("Agent-Tasks")
-    if not tasks_dir.exists(): return "❌ No active tasks found."
-    
-    md_files = list(tasks_dir.glob("*.md"))
-    if not md_files: return "❌ No active task ledger found."
-    
-    active_file = max(md_files, key=os.path.getmtime)
-    
-    with open(active_file, 'a', encoding='utf-8') as f:
-        f.write(f"\n{new_text}\n")
-        
-    return f"✅ Successfully appended new steps/notes to your task ledger."
+    return aquila_memory.store_fact(topic, fact)
+
+def save_research_note(task_name: str, gathered_data: str) -> str:
+    """
+    CRITICAL RESEARCH TOOL: Use this to save facts, URLs, and data you find on the web.
+    Instead of trying to hold information in your head, save it to your SQLite scratchpad.
+    """
+    return aquila_memory.save_scratchpad_note(task_name, gathered_data)
+
+def read_all_research_notes(task_name: str) -> str:
+    """
+    Retrieves all the research notes you have saved for the current task.
+    Use this right before you write your final report so you have all your gathered facts.
+    """
+    return aquila_memory.get_scratchpad_notes(task_name)
 
 AGENT_TOOLS = {
-    "update_task_ledger": {"func": update_task_ledger, "description": inspect.getdoc(update_task_ledger)},
-    "set_current_status": {"func": set_current_status, "description": inspect.getdoc(set_current_status)},
-    "mark_step_complete": {"func": mark_step_complete, "description": inspect.getdoc(mark_step_complete)},
     "query_past_experience": {"func": query_past_experience, "description": inspect.getdoc(query_past_experience)},
     "ask_user": {"func": ask_user, "description": inspect.getdoc(ask_user)},
-    "append_to_ledger": {"func": append_to_ledger, "description": inspect.getdoc(append_to_ledger)},
+    "store_fact": {"func": store_fact, "description": inspect.getdoc(store_fact)},
+    "save_research_note": {"func": save_research_note, "description": inspect.getdoc(save_research_note)},
+    "read_all_research_notes": {"func": read_all_research_notes, "description": inspect.getdoc(read_all_research_notes)},
 }

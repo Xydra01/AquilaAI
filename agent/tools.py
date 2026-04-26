@@ -6,10 +6,12 @@ import inspect
 import re
 from dotenv import load_dotenv
 
-
 """Security firewall"""
-FORBIDDEN_FILES = ['.env', 'state.json', '.gitignore']
-FORBIDDEN_EXTS = ['.pem', '.key']
+FORBIDDEN_FILES = ['.env', 'state.json', '.gitignore', 'chroma.sqlite3']
+# --- NEW: Added .log and database files to the forbidden extensions ---
+FORBIDDEN_EXTS = ['.pem', '.key', '.log', '.db', '.sqlite3']
+# --- NEW: Added forbidden directories so she can't wander into black holes ---
+FORBIDDEN_DIRS = ['Agent-Logs', 'vector_db', '__pycache__', '.git']
 
 """env and root path loading"""
 AGENT_ROOT_DIR = Path.cwd().resolve()
@@ -23,16 +25,14 @@ if root_env.exists():
 elif agent_env.exists():
     load_dotenv(dotenv_path=agent_env)
 
-
-# ==========================================
-# TOOL DEFINITIONS
-# ==========================================
-
 def is_safe_path(path_obj: Path) -> bool:
     """Checks if a file is safe for the LLM to read."""
     if path_obj.name in FORBIDDEN_FILES:
         return False
     if path_obj.suffix in FORBIDDEN_EXTS:
+        return False
+    # --- NEW: Block forbidden directories ---
+    if any(part in FORBIDDEN_DIRS for part in path_obj.parts):
         return False
     return True
 
@@ -46,8 +46,6 @@ def check_syntax(code_string: str):
     
 def write_file(file_path: str, content: str) -> str:
     """Creates a new file or completely overwrites an existing one."""
-    
-    # 1. Clean up LLM Markdown artifacts (strip ```python ... ```)
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\n", "", content)
@@ -56,27 +54,23 @@ def write_file(file_path: str, content: str) -> str:
             
     target_path = Path(file_path)
     
-    # Stops agent from destroying its ledger after waking up from context reset
-    if "Agent-Tasks" in target_path.parts and target_path.exists():
-        return ("❌ SECURITY BLOCK: You cannot use `write_file` to overwrite an existing Task Ledger. "
-                "Doing so causes amnesia and deletes your progress! "
-                "Use `update_task_ledger`, `mark_step_complete`, or `replace_in_file` instead.")
+    # THE UPDATED SECURITY BLOCK
+    if "Agent-Tasks" in target_path.parts:
+        return ("❌ SECURITY BLOCK: You are not allowed to directly edit files in Agent-Tasks. "
+                "The Python OS handles task states dynamically via JSON. "
+                "Focus on completing your active objective and use `mark_objective_complete`.")
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # 2. WRITE THE FILE IMMEDIATELY (No more blocking!)
     with open(target_path, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    # 3. Post-Save Linting Feedback
     if target_path.suffix == '.py':
         import subprocess
         import sys
         
-        # Check basic syntax first using AST to give a clean pointer
         try:
             ast.parse(content)
-            # If AST passes, run flake8 for logic bugs
             result = subprocess.run(
                 [sys.executable, "-m", "flake8", str(target_path), "--max-line-length=120"],
                 capture_output=True, text=True
@@ -88,7 +82,6 @@ def write_file(file_path: str, content: str) -> str:
                             f"⚠️ LINTER WARNINGS:\n{lint_errors}\n\n"
                             f"SYSTEM HINT: Fix these logic errors using `replace_in_file` before running the script.")
         except SyntaxError as e:
-            # Format a beautiful error pointer
             error_line = e.text.rstrip() if e.text else ""
             pointer = ""
             if e.offset and e.text:
@@ -107,9 +100,8 @@ def read_file(file_path: str) -> str:
     """Reads the contents of a file, capping it for context safety."""
     path_obj = Path(file_path).expanduser()
     
-    # --- SECURITY FIREWALL ---
     if not is_safe_path(path_obj):
-        return f"❌ SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden by the system admin."
+        return f"❌ SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden by the system admin. Do not attempt to read this file again."
         
     if os.path.isdir(file_path):
         return f"❌ Error: '{file_path}' is a directory, not a file."
@@ -129,7 +121,6 @@ def read_file(file_path: str) -> str:
     except Exception as e:
         return f"❌ Error reading file: {e}"
     
-
 def list_directory(path="."):
     """Lists all files and folders in a specific directory."""
     try:
@@ -138,6 +129,9 @@ def list_directory(path="."):
             return f"Error: Directory '{target}' does not exist."
         items = []
         for item in target.iterdir():
+            # --- NEW: Hide forbidden directories from her sight ---
+            if item.name in FORBIDDEN_DIRS:
+                continue
             if item.is_dir():
                 items.append(f"[DIR]  {item.name}/")
             else:
@@ -145,7 +139,6 @@ def list_directory(path="."):
         return f"Contents of {target}:\n" + "\n".join(items)
     except Exception as e:
         return f"Error listing directory: {e}"
-
 
 def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
     """Replaces exact target text with replacement text in a file."""
@@ -165,11 +158,9 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         
         new_content = content.replace(target_text, replacement_text)
         
-        # Save immediately!
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
             
-        # Post-save syntax check
         if file_path.endswith('.py'):
             try:
                 ast.parse(new_content)
@@ -180,23 +171,46 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
         return f"✅ Successfully replaced text in {file_path}."
     except FileNotFoundError:
         return f"❌ Error: File {file_path} not found."
+    
+def read_file_lines(file_path: str, start_line: int, end_line: int):
+    """Reads specific lines from a file."""
+    try:
+        path_obj = Path(file_path).expanduser()
+        if not is_safe_path(path_obj):
+            return f"SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden. Do not attempt to read this file again."
+        if not path_obj.exists():
+            return f"File not found: {file_path}"
+        
+        start = max(1, int(start_line))
+        end = int(end_line)
+        with open(path_obj, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+        total_lines = len(lines)
+        if start > total_lines:
+            return f"Error: start_line exceeds total lines."
+        end = min(total_lines, end)
+        
+        output_lines = [f"{i+1}: {lines[i].rstrip()}" for i in range(start - 1, end)]
+        return f"Lines {start} to {end} of {file_path}:\n\n" + "\n".join(output_lines)
+    except Exception as e:
+        return f"Error reading file lines: {e}"
    
-
 def search_tool_library(keyword: str) -> str:
     """
     Search the agent's massive offline tool library for a specific capability.
     """
-    # Clean up the LLM's input and split it into individual words
-    # e.g., "web_search or internet" -> ["web_search", "or", "internet"]
+    try:
+        from tool_library import ALL_TOOLS
+    except ImportError:
+        ALL_TOOLS = {}
+        
     search_terms = [term.strip().lower() for term in keyword.replace(',', ' ').split() if len(term) > 2]
-    
     found_tools = []
     
     for name, info in ALL_TOOLS.items():
-        # Combine name and description into one searchable block
-        tool_text = (name + " " + info['description']).lower()
+        tool_text = (name + " " + info.get('description', '')).lower()
         
-        # If ANY of the search terms are in the tool's text, it's a match!
         if any(term in tool_text for term in search_terms):
             sig = inspect.signature(info['func'])
             template = f"### 🛠️ ACTION: {name}"
@@ -205,12 +219,19 @@ def search_tool_library(keyword: str) -> str:
                 if param == 'kwargs': continue
                 template += f"\n**{param}**: ..."
                 
-            found_tools.append(f"TOOL: {name}\nDESC: {info['description']}\nFORMAT:\n{template}")
+            found_tools.append(f"TOOL: {name}\nDESC: {info.get('description', '')}\nFORMAT:\n{template}")
             
     if not found_tools:
         return f"❌ No tools found matching '{keyword}'. Try a different search term."
         
     return "✅ FOUND TOOLS:\n\n" + "\n\n".join(found_tools) + "\n\nTo use a tool, simply output its exact ACTION format in your next response."
+
+def mark_objective_complete(summary_of_work: str) -> str:
+    """
+    Call this tool the EXACT moment you have fully completed your current specific objective.
+    The OS will record your summary and advance you to the next step.
+    """
+    return f"TRIGGER_STEP_ADVANCE: {summary_of_work}"
 
 def finish_task(message_to_user: str) -> str:
     """
@@ -219,16 +240,78 @@ def finish_task(message_to_user: str) -> str:
     """
     return f"TASK_COMPLETED_SUCCESSFULLY: {message_to_user}"
 
+def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
+    """
+    Generates a visual tree structure of a directory. 
+    Automatically ignores massive bloat folders like .git, venv, and __pycache__.
+    Use this to understand project architecture in one single tool call instead of listing directories manually.
+    """
+    import os
+    from pathlib import Path
 
-# SURVIVAL TOOL REGISTRY
-from tool_library import ALL_TOOLS
+    try:
+        max_depth = int(max_depth)
+    except ValueError:
+        max_depth = 3
 
+    # THE FIX: Added 'vector_db' to the firewall!
+    ignore_dirs = {'.git', '__pycache__', 'node_modules', 'venv', 'env', 'ai-agent-env', '.pytest_cache', 'vector_db'}
+    
+    target_path = Path(path).expanduser().resolve()
+    if not target_path.exists():
+        return f"❌ Error: Directory '{target_path}' does not exist."
+    
+    tree_str = f"Directory Tree for: {target_path.name}/\n"
+    
+    def walk_dir(current_path, current_depth, prefix=""):
+        nonlocal tree_str
+        
+        if len(tree_str) > 5000:
+            return
+            
+        if current_depth > max_depth:
+            tree_str += f"{prefix}└── ... [MAX DEPTH REACHED]\n"
+            return
+            
+        try:
+            items = sorted(list(current_path.iterdir()), key=lambda x: (not x.is_dir(), x.name))
+        except PermissionError:
+            tree_str += f"{prefix}└── [PERMISSION DENIED]\n"
+            return
+            
+        items = [item for item in items if not (item.is_dir() and item.name in ignore_dirs)]
+        
+        for i, item in enumerate(items):
+            if len(tree_str) > 5000:
+                tree_str += f"{prefix}└── ... [TRUNCATED DUE TO MASSIVE SIZE]\n"
+                break
+                
+            is_last = (i == len(items) - 1)
+            connector = "└── " if is_last else "├── "
+            
+            if item.is_dir():
+                tree_str += f"{prefix}{connector}📁 {item.name}/\n"
+                extension_prefix = "    " if is_last else "│   "
+                walk_dir(item, current_depth + 1, prefix + extension_prefix)
+            else:
+                tree_str += f"{prefix}{connector}📄 {item.name}\n"
+
+    walk_dir(target_path, 1)
+    
+   
+    if len(tree_str) > 5000:
+        tree_str = tree_str[:5000] + "\n\n... [TREE TRUNCATED FOR SAFETY. DO NOT USE LARGE MAX_DEPTH HERE]"
+        
+    return tree_str
 
 SURVIVAL_TOOLS = {
     "read_file": {"func": read_file, "description": inspect.getdoc(read_file)},
+    "read_file_lines": {"func": read_file_lines, "description": inspect.getdoc(read_file_lines)},
     "write_file": {"func": write_file, "description": inspect.getdoc(write_file)},
     "replace_in_file": {"func": replace_in_file, "description": inspect.getdoc(replace_in_file)},
     "list_directory": {"func": list_directory, "description": inspect.getdoc(list_directory)},
+    "mark_objective_complete": {"func": mark_objective_complete, "description": inspect.getdoc(mark_objective_complete)},
     "finish_task": {"func": finish_task, "description": inspect.getdoc(finish_task)},
+    "get_directory_tree": {"func": get_directory_tree, "description": inspect.getdoc(get_directory_tree)},
     "search_tool_library": {"func": search_tool_library, "description": inspect.getdoc(search_tool_library)}
 }
