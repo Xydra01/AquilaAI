@@ -1,0 +1,9 @@
+use_default_settings: true
+
+server:
+  secret_key: "aquila_super_secret_key_999"
+
+search:
+  formats:
+    - html
+    - json

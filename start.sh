@@ -9,6 +9,7 @@ else
     # macOS / Linux
     source ai-agent-env/bin/activate
 fi
-
-# Run the agent
-python agent/main.py
+#start the docker container
+docker compose up -d
+# Run the agent through streamlit
+python agent/app.py

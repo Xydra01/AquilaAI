@@ -1,0 +1,9 @@
+# Pull from the base model you just downloaded
+FROM qwen3.5:9b
+
+# UNCHAIN THE MEMORY: Force the 32k Context Window
+PARAMETER num_ctx 32768
+# PARAMETER num_ctx 16384
+
+# KEEP HER DISCIPLINED: Lock the temperature low for coding
+PARAMETER temperature 0.2

@@ -1,44 +1,75 @@
-#Tools related to surfing the internet or getting information via web searches
+# Tools related to surfing the internet or getting information via web searches
 
 import requests
-import os
 import inspect
-from tavily import TavilyClient
+from bs4 import BeautifulSoup
+import markdownify
 
 def web_search(query: str, max_results: int = 5) -> str:
-    """Searches the web/internet using Tavily API."""
-    api_key = os.getenv("TAVILY_API_KEY")
-    if not api_key:
-        return "System Error: TAVILY_API_KEY environment variable is missing."
+    """Searches the web locally using your private SearXNG instance."""
+    url = "http://localhost:8080/search"
+    
     try:
-        client = TavilyClient(api_key=api_key)
-        response = client.search(query=query, max_results=max_results)
-        results = response.get("results", [])
+        
+        limit = int(max_results)
+        
+        # 2. Clean the query FIRST
+        clean_query = query.replace('"', '').replace("'", "")
+        
+        params = {
+            "q": clean_query,
+            "format": "json",
+            "engines": "google,bing,duckduckgo,wikipedia",
+            "language": "en"
+        }
+        
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        results = data.get("results", [])
         if not results:
-            return f"No results found for '{query}'."
-        output = f"Search Results for '{query}':\n\n"
-        for i, res in enumerate(results):
-            output += f"{i+1}. {res.get('title', 'No Title')}\nURL: {res.get('url', 'No URL')}\nSnippet: {res.get('content', 'No Content')}\n\n"
+            return f"No results found for '{clean_query}'."
+            
+        output = f"Search Results for '{clean_query}':\n\n"
+        for i, res in enumerate(results[:limit]):
+            output += f"{i+1}. {res.get('title', 'No Title')}\n"
+            output += f"URL: {res.get('url', 'No URL')}\n"
+            output += f"Snippet: {res.get('content', 'No Content')}\n\n"
+            
         return output
+    except ValueError:
+        return "❌ Error: max_results must be a number."
     except Exception as e:
-        return f"Error searching the web: {e}"
+        return f"❌ Error executing local web search: {e}"
 
 def read_webpage(url: str) -> str:
-    """Fetches a webpage and extracts clean Markdown text using Jina Reader."""
+    """Fetches a webpage and extracts clean Markdown text locally."""
     try:
-        jina_url = f"https://r.jina.ai/{url}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(jina_url, headers=headers, timeout=15)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
-        content = response.text
-        if len(content) > 15000:
-            return f"Content of {url} (Truncated):\n\n{content[:15000]}\n\n...[CONTENT TRUNCATED]"
-        return f"Content of {url}:\n\n{content}"
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+            element.decompose()
+            
+        raw_markdown = markdownify.markdownify(str(soup), heading_style="ATX")
+        
+        clean_markdown = "\n".join([line for line in raw_markdown.splitlines() if line.strip()])
+        
+        if len(clean_markdown) > 15000:
+            return f"Content of {url} (Truncated):\n\n{clean_markdown[:15000]}\n\n...[CONTENT TRUNCATED]"
+        return f"Content of {url}:\n\n{clean_markdown}"
+        
     except Exception as e:
-        return f"Error reading webpage: {e}"
-    
+        return f"❌ Error reading webpage locally: {e}"
+
 
 WEB_TOOLS = {
     "web_search": {"func": web_search, "description": inspect.getdoc(web_search)},
-    "read_webpage": {"func": read_webpage, "description": inspect.getdoc(read_webpage)},
+    "read_webpage": {"func": read_webpage, "description": inspect.getdoc(read_webpage)}
 }

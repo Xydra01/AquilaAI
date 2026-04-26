@@ -7,31 +7,34 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import smtplib
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path.cwd() / ".env")
 
 class EmailSender:
     """Advanced email sender class for full control over email configuration."""
     
     def __init__(self, smtp_server=None, smtp_port=None, from_email=None, 
                  smtp_password=None, use_tls=True):
-        """Initialize the email sender with SMTP credentials.
+        """Initialize the email sender with SMTP credentials."""
         
-        Args:
-            smtp_server: SMTP server address (e.g., 'smtp.gmail.com')
-            smtp_port: SMTP port number (e.g., 587 for TLS)
-            from_email: Sender email address
-            smtp_password: SMTP password or app-specific password
-            use_tls: Whether to use TLS encryption (default: True)
-        """
-        # Load credentials from environment variables if not provided
+        # Load credentials from environment variables
         self.smtp_server = smtp_server or os.getenv('SMTP_SERVER')
         self.smtp_port = smtp_port or int(os.getenv('SMTP_PORT', 587))
-        self.from_email = from_email or os.getenv('FROM_EMAIL')
-        self.smtp_password = smtp_password or os.getenv('SMTP_PASSWORD')
-        self.use_tls = use_tls
         
-        # Validate credentials
+        
+        self.from_email = from_email or os.getenv('SMTP_USER') or os.getenv('FROM_EMAIL') 
+        
+        self.smtp_password = smtp_password or os.getenv('SMTP_PASSWORD')
+        
+        
+        env_tls = os.getenv('SMTP_USE_TLS', 'true').lower() == 'true'
+        self.use_tls = use_tls if use_tls is not None else env_tls
+        
+        
         if not all([self.smtp_server, self.from_email, self.smtp_password]):
-            raise ValueError("SMTP credentials are missing. Please check your .env file.")
+            raise ValueError(f"SMTP credentials are missing. Server: {bool(self.smtp_server)}, User: {bool(self.from_email)}, Pass: {bool(self.smtp_password)}")
     
     def send_email(self, recipients, subject, html_body=None, plain_body=None, 
              cc=None, attachments=None):
@@ -49,17 +52,17 @@ class EmailSender:
             bool: True if email sent successfully, False otherwise
         """
         try:
-            # Create message container
+            #Message container
             msg = MIMEMultipart()
             msg['From'] = self.from_email
             msg['To'] = ', '.join(recipients)
             msg['Subject'] = subject
             
-            # Add CC if provided
+            # Add CC
             if cc:
                 msg['Cc'] = ', '.join(cc)
             
-            # Set body content
+            # Set body
             if html_body:
                 msg.attach(MIMEText(html_body, 'html', 'utf-8'))
             elif plain_body:
@@ -67,7 +70,7 @@ class EmailSender:
             else:
                 raise ValueError("Either html_body or plain_body must be provided.")
             
-            # Attach files if provided
+            # Attach files
             if attachments:
                 for file_path in attachments:
                     with open(file_path, 'rb') as attachment:
@@ -80,7 +83,6 @@ class EmailSender:
                     )
                     msg.attach(part)
             
-            # Connect to SMTP server and send email
             if self.use_tls:
                 server = smtplib.SMTP(self.smtp_server, self.smtp_port)
                 server.starttls()
@@ -111,31 +113,50 @@ def send_email_tool(subject: str, **kwargs) -> str:
     Args:
         subject: The subject line of the email.
         to_addresses: A comma-separated string of recipient emails (e.g., "user1@test.com, user2@test.com").
-        body: The plain text content of the email.
+        body: The content of the email.
+        cc: (Optional) A comma-separated string of CC recipient emails.
+        attachments: (Optional) A comma-separated string of file paths to attach.
+        is_html: (Optional) Set to 'true' if the body contains HTML formatting.
     """
     try:
-        # 1. Hallucination-Proof Argument Catching
-        # Even if the agent uses the wrong argument name, we catch it here.
         raw_to = kwargs.get('to_addresses') or kwargs.get('to') or kwargs.get('recipients') or kwargs.get('to_address')
         raw_body = kwargs.get('body') or kwargs.get('text') or kwargs.get('plain_body') or kwargs.get('content')
+        raw_cc = kwargs.get('cc') or kwargs.get('cc_addresses')
+        raw_attachments = kwargs.get('attachments') or kwargs.get('files')
+        
+        
+        is_html = str(kwargs.get('is_html', 'false')).lower() == 'true'
         
         if not raw_to or not raw_body:
             return "❌ Error: Tool failed. You MUST provide 'to_addresses', 'subject', and 'body' arguments."
             
-        # 2. Format the recipients into a list
-        recipients = [email.strip() for email in raw_to.split(",")]
         
-        # 3. Instantiate the class and send!
+        recipients = [email.strip() for email in raw_to.split(",")]
+        cc_list = [email.strip() for email in raw_cc.split(",")] if raw_cc else None
+        attachment_list = [path.strip() for path in raw_attachments.split(",")] if raw_attachments else None
+        
+       
         sender = EmailSender() 
+        
+        
+        html_body = raw_body if is_html else None
+        plain_body = raw_body if not is_html else None
+        
         
         success = sender.send_email(
             recipients=recipients, 
             subject=subject, 
-            plain_body=raw_body
+            plain_body=plain_body,
+            html_body=html_body,
+            cc=cc_list,
+            attachments=attachment_list
         )
         
         if success:
-            return f"✅ Email successfully sent to: {raw_to}"
+            msg = f"✅ Email successfully sent to: {raw_to}"
+            if cc_list: msg += f" (CC: {raw_cc})"
+            if attachment_list: msg += f" with {len(attachment_list)} attachment(s)."
+            return msg
         else:
             return "❌ Failed to send email. Check the terminal for details."
             

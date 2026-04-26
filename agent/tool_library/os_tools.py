@@ -1,36 +1,15 @@
 #Tools that interact directly with the OS
-
+import sys
+import os
+import fnmatch
 from pathlib import Path
 import subprocess
 import shutil
 import psutil
 import inspect
-from tools import is_safe_path
 
-
-def read_file_lines(file_path: str, start_line: int, end_line: int):
-    """Reads specific lines from a file."""
-    try:
-        path_obj = Path(file_path).expanduser()
-        if not is_safe_path(path_obj):
-            return f"SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden."
-        if not path_obj.exists():
-            return f"File not found: {file_path}"
-        
-        start = max(1, int(start_line))
-        end = int(end_line)
-        with open(path_obj, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-            
-        total_lines = len(lines)
-        if start > total_lines:
-            return f"Error: start_line exceeds total lines."
-        end = min(total_lines, end)
-        
-        output_lines = [f"{i+1}: {lines[i].rstrip()}" for i in range(start - 1, end)]
-        return f"Lines {start} to {end} of {file_path}:\n\n" + "\n".join(output_lines)
-    except Exception as e:
-        return f"Error reading file lines: {e}"
+# THE GLOBAL IMPORT: Pull the security rules from tools.py!
+from tools import is_safe_path, FORBIDDEN_DIRS
 
 def search_in_file(file_path: str, keyword: str = None, **kwargs) -> str:
     """Searches for a keyword in a file."""
@@ -58,9 +37,6 @@ def search_in_file(file_path: str, keyword: str = None, **kwargs) -> str:
         return f"Found {len(matches)} matches:\n\n" + "\n".join(matches)
     except Exception as e:
         return f"Error searching in file: {e}"
-    
-# os_tools.py - Surgical Change: Platform-Aware Process Management
-import sys
 
 def manage_process(action: str, process_name: str) -> str:
     """Safely starts or stops a specific background process on the host machine."""
@@ -78,17 +54,16 @@ def manage_process(action: str, process_name: str) -> str:
         return f"✅ Stopped {killed} instances of {process_name}."
         
     elif action == "start":
-        # Check platform to determine the correct execution command
-        if sys.platform == "darwin":  # macOS
+        if sys.platform == "darwin":  
             safe_apps = {
                 "chrome": "open -a 'Google Chrome'",
-                "notepad": "open -e" # Opens TextEdit on Mac
+                "notepad": "open -e" 
             }
             cmd = safe_apps.get(process_name.lower())
             if not cmd:
                 return f"❌ Cannot start '{process_name}'. Not in safe apps list."
             subprocess.Popen(cmd, shell=True)
-        else:  # Default to Windows/Linux logic
+        else: 
             safe_apps = {
                 "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
                 "notepad": "notepad.exe"
@@ -100,17 +75,26 @@ def manage_process(action: str, process_name: str) -> str:
             
         return f"✅ Started {process_name}."
     
-def search_files(pattern, path="."):
-    """Recursively searches for files matching a pattern."""
+def search_files(pattern: str, path: str = ".") -> str:
+    """Recursively searches for files matching a pattern, skipping forbidden directories."""
     try:
         target = Path(path).expanduser().resolve()
-        matches = list(target.rglob(pattern))
+        if not target.exists():
+            return f"❌ Error: Directory '{target}' does not exist."
+
+        matches = []
+        for root, dirs, files in os.walk(target):
+            # THE FIREWALL: Modify dirs in-place to skip black holes
+            dirs[:] = [d for d in dirs if d not in FORBIDDEN_DIRS]
+            
+            for filename in fnmatch.filter(files, pattern):
+                matches.append(str(Path(root) / filename))
+                if len(matches) >= 50:
+                    return f"⚠️ Found over 50 matches. Showing first 50 to prevent overload:\n" + "\n".join(matches)
+
         if not matches:
             return f"No files matching '{pattern}' found in {target}"
-        results = [str(m.relative_to(target)) for m in matches[:50]] 
-        if len(matches) > 50:
-            results.append(f"... and {len(matches) - 50} more.")
-        return f"Found {len(matches)} matches for '{pattern}':\n" + "\n".join(results)
+        return f"Found {len(matches)} matches for '{pattern}':\n" + "\n".join(matches)
     except Exception as e:
         return f"Error searching files: {e}"
     
@@ -140,8 +124,7 @@ def rename_file(old_path: str, new_name: str) -> str:
             return f"❌ SECURITY BLOCK: Cannot rename forbidden file '{old_path_obj.name}'."
         if not old_path_obj.exists():
             return f"❌ Error: File not found at {old_path}"
-            
-        # Construct the new path in the same parent directory
+        
         new_path_obj = old_path_obj.parent / new_name
         
         if not is_safe_path(new_path_obj):
@@ -165,7 +148,6 @@ def move_file(source_path: str, dest_dir: str) -> str:
         if not src_obj.exists():
             return f"❌ Error: Source file not found at {source_path}"
             
-        # Ensure destination directory exists
         dest_obj.mkdir(parents=True, exist_ok=True) 
         target_path = dest_obj / src_obj.name
         
@@ -193,39 +175,33 @@ def get_env_variables(keys_to_check: str = "") -> str:
     """
     Checks the currently loaded environment variables. 
     If keys_to_check is provided (comma separated), returns their values safely masked.
-    If left empty, returns a list of all available environment variable names.
     """
     try:
         import os
         env_vars = dict(os.environ)
         
-        # If the agent wants to check specific keys (e.g. "TAVILY_API_KEY, SMTP_PORT")
         if keys_to_check:
             requested_keys = [k.strip() for k in keys_to_check.split(",")]
             results = []
             for k in requested_keys:
                 if k in env_vars:
                     val = env_vars[k]
-                    # Mask sensitive keys so they don't leak into the context window
                     if any(secret in k.upper() for secret in ['KEY', 'TOKEN', 'SECRET', 'PASSWORD']):
                         val = f"{val[:4]}...{val[-4:]}" if len(val) > 8 else "****"
                     results.append(f"{k} = {val}")
                 else:
                     results.append(f"{k} = NOT SET")
-            return "✅ Environment Check:\\n" + "\\n".join(results)
+            return "✅ Environment Check:\n" + "\n".join(results)
             
-        # If no keys provided, just list all the names loaded in memory
-        # We filter out the massive Windows-specific ones so we don't nuke the context window
         ignore_sys = ['PATH', 'PSMODULEPATH', 'COMMONPROGRAMFILES']
         safe_keys = [k for k in env_vars.keys() if k not in ignore_sys]
         
-        return "✅ Available Environment Variables (Names Only):\\n" + ", ".join(sorted(safe_keys))
+        return "✅ Available Environment Variables (Names Only):\n" + ", ".join(sorted(safe_keys))
         
     except Exception as e:
         return f"❌ Error reading env variables: {e}"
 
 OS_TOOLS = {
-    "read_file_lines": {"func": read_file_lines, "description": inspect.getdoc(read_file_lines)},
     "search_in_file": {"func": search_in_file, "description": inspect.getdoc(search_in_file)},
     "manage_process": {"func": manage_process, "description": inspect.getdoc(manage_process)},
     "search_files": {"func": search_files, "description": inspect.getdoc(search_files)},

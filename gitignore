@@ -1,2 +1,7 @@
 *.env
 *.db
+*.pyc
+*.md
+*.log
+*.bin
+*.sqlite3
