@@ -12,4 +12,4 @@ fi
 #start the docker container
 docker compose up -d
 # Run the agent through streamlit
-python agent/app.py
+streamlit run agent/app.py
