@@ -25,8 +25,6 @@ with st.sidebar:
     if st.button("🌙 Initiate Sleep Cycle", use_container_width=True):
         with st.spinner("Consolidating memories & flushing cache..."):
             sleep_report = initiate_sleep_cycle()
-            
-            # Inject the report directly into the chat stream!
             st.session_state.messages.append({"role": "assistant", "content": sleep_report})
             st.rerun()
 
@@ -47,7 +45,6 @@ with ledger_col:
     ledger_placeholder = st.empty() 
     
     tasks_dir = Path("Agent-Tasks")
-    # --- FIX: Changed .md to .json to sync with the new architecture ---
     if tasks_dir.exists() and list(tasks_dir.glob("*.json")):
         latest_file = max(tasks_dir.glob("*.json"), key=os.path.getmtime)
         try:
@@ -75,12 +72,10 @@ with chat_col:
     st.header("💬 Terminal")
     st.markdown("---")
     
-    # Render all past messages
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             
-    # The Chat Input Box
     if prompt := st.chat_input("Command Aquila..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -92,7 +87,6 @@ with chat_col:
                 with st.spinner("Aquila is typing..."):
                     message_placeholder = st.empty()
                     
-                    # Clean, standard prompt. No <think> tag instructions!
                     chat_history = [{
                         "role": "system", 
                         "content": (
@@ -109,7 +103,6 @@ with chat_col:
                         chat_history.append({"role": msg["role"], "content": msg["content"]})
                     
                     try:
-                        # Removed max_tokens to prevent the Ollama Qwen EOS bug!
                         final_response = client.chat(chat_history, temperature=0.6, timeout=45)
                         if not final_response or not final_response.strip():
                             final_response = "*(System Error: The LLM returned a blank string. Check terminal logs.)*"
@@ -143,3 +136,38 @@ with chat_col:
                     status_placeholder.error(f"Task Engine Error: {e}")
                     
         st.rerun()
+
+# --- THE FIX: TASK MANAGER MOVED TO THE BOTTOM ---
+# It still renders in the sidebar, but now has access to the ledger_placeholder!
+with st.sidebar:
+    st.divider()
+    st.subheader("📂 Task Manager")
+    
+    if tasks_dir.exists():
+        pending_tasks = list(tasks_dir.glob("*.json"))
+        if pending_tasks:
+            task_names = [t.stem for t in pending_tasks]
+            task_to_resume = st.selectbox("In-Progress Tasks:", task_names)
+            
+            if st.button("▶️ Resume Selected Task", use_container_width=True):
+                resume_msg = f"Resuming background task: {task_to_resume}..."
+                st.session_state.messages.append({"role": "user", "content": resume_msg})
+                
+                with st.spinner(f"Waking up Aquila for '{task_to_resume}'..."):
+                    try:
+                        final_result = global_agent.run_autonomous_task(
+                            task_name=task_to_resume, 
+                            user_request="Resume and complete the remaining objectives in the task ledger.", 
+                            ledger_placeholder=ledger_placeholder
+                        )
+                        st.session_state.messages.append({
+                            "role": "assistant", 
+                            "content": f"**Task '{task_to_resume}' Finished.**\n\nResult: {final_result}"
+                        })
+                    except Exception as e:
+                        st.error(f"Task Engine Error: {e}")
+                st.rerun()
+        else:
+            st.caption("No pending tasks. Desk is clean.")
+    else:
+        st.caption("Task directory not found.")

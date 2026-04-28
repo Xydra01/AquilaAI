@@ -8,3 +8,4 @@
 *.json
 __pycache__/
 vector_db/
+Agent-Creations/

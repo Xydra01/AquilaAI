@@ -328,14 +328,15 @@ class Agent:
             except Exception as e:
                 return f"Fatal Error: Could not read JSON State. {e}"
 
-            # --- THE LASER-FOCUSED PROMPT ---
+            
             user_msg = f"""**Ultimate Goal:** {user_request}
 
 **YOUR CURRENT OBJECTIVE (Step {current_idx + 1} of {len(state['steps'])}):**
 > {current_objective}
 
-Execute tools to complete this objective. 
-Once fully complete, you MUST use the `mark_objective_complete` tool to advance."""
+Execute tools to complete this specific objective. Do not move on to other tasks.
+If you encounter a bug or error, you may use tools to investigate and fix it, BUT your primary focus must remain on completing the objective above.
+You MUST output the `mark_objective_complete` tool the moment this specific objective is fulfilled so the OS can advance."""
             
             if last_tool_output:
                 user_msg += f"\n\n**Result of last tool execution:**\n{last_tool_output}"
