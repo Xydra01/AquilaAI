@@ -88,18 +88,16 @@ with chat_col:
             
         with st.chat_message("assistant"):
             if operation_mode == "💬 Chat":
-                # --- THE FAST CHAT ROUTE ---
+                # --- THE FAST CHAT ROUTE (QWEN OPTIMIZED) ---
                 with st.spinner("Aquila is typing..."):
                     message_placeholder = st.empty()
                     
-                    # --- THE ANTI-OCD PROMPT ---
+                    # Clean, standard prompt. No <think> tag instructions!
                     chat_history = [{
                         "role": "system", 
                         "content": (
                             "You are Aquila, an advanced autonomous AI. You are highly intelligent, slightly dry/witty, and speak with quiet confidence. "
-                            "You are currently in Chat Mode, so do not attempt to use tools. "
-                            "CRITICAL RULE: Do NOT overthink formatting, spatial alignment, or ASCII art. "
-                            "Provide your best immediate attempt without endless self-correction."
+                            "You are currently in Chat Mode. Have a natural conversation with the user and assist them directly."
                         )
                     }]
                     
@@ -111,14 +109,13 @@ with chat_col:
                         chat_history.append({"role": msg["role"], "content": msg["content"]})
                     
                     try:
-                        # --- THE 45-SECOND LEASH & TOKEN CAP ---
-                        final_response = client.chat(chat_history, temperature=0.6, max_tokens=1000, timeout=45)
+                        # Removed max_tokens to prevent the Ollama Qwen EOS bug!
+                        final_response = client.chat(chat_history, temperature=0.6, timeout=45)
                         if not final_response or not final_response.strip():
-                            final_response = "*(System Error: The LLM returned a blank string.)*"
+                            final_response = "*(System Error: The LLM returned a blank string. Check terminal logs.)*"
                     except Exception as e:
-                        # Friendly timeout message for the UI
                         if "timed out" in str(e).lower():
-                            final_response = "*(System Timeout: I overthought the response and lost track of time. Try asking in a simpler way!)*"
+                            final_response = "*(System Timeout: The local model took too long to respond.)*"
                         else:
                             final_response = f"*(API Error: {str(e)})*"
                         

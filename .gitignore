@@ -5,4 +5,6 @@
 *.log
 *.bin
 *.sqlite3
+*.json
 __pycache__/
+vector_db/
