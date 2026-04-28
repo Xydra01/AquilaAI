@@ -1,0 +1,11 @@
+*.env
+*.db
+*.pyc
+*.md
+*.log
+*.bin
+*.sqlite3
+*.json
+__pycache__/
+vector_db/
+Agent-Creations/

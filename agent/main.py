@@ -55,43 +55,73 @@ console = DualLogger()
 # Add current directory path so Python can find agent tools/modules
 sys.path.insert(0, str(Path(__file__).parent))
 
+import time
+
 class OllamaClient:
     def __init__(self):
         self.base_url = "http://127.0.0.1:11434" 
         self.model_name = "aquila"
         self.session = requests.Session()
-        print("✅ Connected to Ollama")
+        print("✅ Connected to Ollama (With Streaming Kill-Switch)")
     
-    def chat(self, messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = None, timeout: int = 300) -> str:
+    def chat(self, messages: List[Dict[str, str]], temperature: float = 0.6, timeout: int = 120) -> str:
+        # We add frequency and presence penalties to stop Qwen from endlessly looping!
         payload = {
             "model": self.model_name, 
             "messages": messages, 
             "temperature": temperature, 
-            "stream": False
+            "stream": True,             # --- TURN ON STREAMING ---
+            "frequency_penalty": 1.05,  # --- ANTI-LOOPING MEASURE ---
+            "presence_penalty": 1.05
         }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
             
         try:
-            # --- PASS THE VARIABLE TIMEOUT HERE ---
-            response = self.session.post(f"{self.base_url}/v1/chat/completions", json=payload, timeout=timeout)
-            if response.status_code == 200:
-                result = response.json()
-                content = result["choices"][0]["message"]["content"]
+            start_time = time.time()
+            full_content = ""
+            
+            # timeout=(Connect_Timeout, Read_Timeout_Per_Chunk)
+            # If Ollama takes longer than 60 seconds to process the prompt, it aborts.
+            response = self.session.post(
+                f"{self.base_url}/v1/chat/completions", 
+                json=payload, 
+                stream=True, 
+                timeout=(5, 60) 
+            )
+            response.raise_for_status()
+
+            # Iterate through the chunks as they arrive from the GPU
+            for line in response.iter_lines():
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith("data: "):
+                        data_str = decoded_line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                full_content += delta["content"]
+                        except Exception:
+                            pass
+
+                # --- THE ACTIVE KILL SWITCH ---
+                # Check the clock on every single word generated.
+                if time.time() - start_time > timeout:
+                    console.print(f"\n[bold red]⚠️ KILL SWITCH ACTIVATED: Model exceeded {timeout}s limit. Severing connection to save GPU.[/bold red]")
+                    response.close() # <--- THIS STOPS THE GPU INSTANTLY
+                    return full_content.strip() + "\n\n*(System Note: Generation was forcibly severed to save GPU resources. The model may have been stuck in a loop.)*"
                 
-                # --- THE DEEPSEEK FIX: Strip reasoning blocks globally ---
-                # 1. Strip perfect blocks
-                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-                # 2. Catch any lingering unmatched closing tags
-                content = content.replace('</think>', '').strip()
-                
-                return content
-                
-            error_msg = f"API Error {response.status_code}: {response.text}"
+            return full_content.strip()
+            
+        except requests.exceptions.ReadTimeout:
+            error_msg = f"*(System Timeout: The model took too long to start writing. Context window may be flooded.)*"
             console.print(f"[bold red]{error_msg}[/bold red]")
             return error_msg
         except Exception as e:
-            return f"Error connecting to Ollama: {e}"
+            error_msg = f"*(API Error: {str(e)})*"
+            console.print(f"[bold red]{error_msg}[/bold red]")
+            return error_msg
 
 client = OllamaClient()
 
@@ -298,14 +328,15 @@ class Agent:
             except Exception as e:
                 return f"Fatal Error: Could not read JSON State. {e}"
 
-            # --- THE LASER-FOCUSED PROMPT ---
+            
             user_msg = f"""**Ultimate Goal:** {user_request}
 
 **YOUR CURRENT OBJECTIVE (Step {current_idx + 1} of {len(state['steps'])}):**
 > {current_objective}
 
-Execute tools to complete this objective. 
-Once fully complete, you MUST use the `mark_objective_complete` tool to advance."""
+Execute tools to complete this specific objective. Do not move on to other tasks.
+If you encounter a bug or error, you may use tools to investigate and fix it, BUT your primary focus must remain on completing the objective above.
+You MUST output the `mark_objective_complete` tool the moment this specific objective is fulfilled so the OS can advance."""
             
             if last_tool_output:
                 user_msg += f"\n\n**Result of last tool execution:**\n{last_tool_output}"
