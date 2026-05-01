@@ -231,6 +231,7 @@ class Agent:
     def __init__(self, master_prompt: str):
         self.executor = ToolExecutor()
         self.master_prompt = master_prompt
+        self.memory = aquila_memory 
         aquila_memory.index_tools({**SURVIVAL_TOOLS, **ALL_TOOLS})
         
     def _get_dynamic_system_prompt(self, routed_tool_names: list[str] = None) -> str:

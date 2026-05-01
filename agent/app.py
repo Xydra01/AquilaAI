@@ -83,18 +83,33 @@ with chat_col:
             
         with st.chat_message("assistant"):
             if operation_mode == "💬 Chat":
-                # --- THE FAST CHAT ROUTE (QWEN OPTIMIZED) ---
-                with st.spinner("Aquila is typing..."):
+                # --- V3.1 COGNITIVE CHAT ROUTE ---
+                with st.spinner("Aquila is searching her memory..."):
                     message_placeholder = st.empty()
                     
-                    chat_history = [{
-                        "role": "system", 
-                        "content": (
-                            "You are Aquila, an advanced autonomous AI. You are highly intelligent, slightly dry/witty, and speak with quiet confidence. "
-                            "You are currently in Chat Mode. Have a natural conversation with the user and assist them directly."
-                        )
-                    }]
+                    # 1. RAG INJECTION: Pull Facts and Experiences
+                    try:
+                        # We use the global_agent's memory system which is already instantiated in main.py
+                        system_facts = global_agent.memory.get_all_facts()
+                        past_experiences = global_agent.memory.recall_experiences(prompt, n_results=2)
+                    except Exception as e:
+                        system_facts = "*(Error retrieving facts)*"
+                        past_experiences = "*(Error retrieving experiences)*"
+                        st.sidebar.error(f"Memory Error: {e}")
+
+                    # 2. ASSEMBLE THE COGNITIVE PROMPT
+                    base_system_prompt = (
+                        "You are Aquila, an advanced autonomous AI. You are highly intelligent, slightly dry/witty, and speak with quiet confidence. "
+                        "You are currently in Chat Mode. Have a natural conversation with the user and assist them directly.\\n\\n"
+                        "=== YOUR INTERNAL KNOWLEDGE BASE ===\\n"
+                        f"{system_facts}\\n\\n"
+                        f"{past_experiences}\\n\\n"
+                        "Use the knowledge above to inform your answers. If the information is not relevant to the user's current question, ignore it."
+                    )
                     
+                    chat_history = [{"role": "system", "content": base_system_prompt}]
+                    
+                    # 3. APPEND RECENT CONVERSATION HISTORY
                     recent_msgs = st.session_state.messages[-6:]
                     while recent_msgs and recent_msgs[0]["role"] != "user":
                         recent_msgs.pop(0)
@@ -102,13 +117,15 @@ with chat_col:
                     for msg in recent_msgs:
                         chat_history.append({"role": msg["role"], "content": msg["content"]})
                     
+                    # 4. EXECUTE LLM CALL
                     try:
-                        final_response = client.chat(chat_history, temperature=0.6, timeout=45)
+                        # Removed the harsh timeout so she has time to think about her memories
+                        final_response = client.chat(chat_history, temperature=0.6, timeout=60)
                         if not final_response or not final_response.strip():
                             final_response = "*(System Error: The LLM returned a blank string. Check terminal logs.)*"
                     except Exception as e:
                         if "timed out" in str(e).lower():
-                            final_response = "*(System Timeout: The local model took too long to respond.)*"
+                            final_response = "*(System Timeout: The local model took too long to process the injected memory context.)*"
                         else:
                             final_response = f"*(API Error: {str(e)})*"
                         
