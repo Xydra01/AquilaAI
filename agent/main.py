@@ -65,22 +65,23 @@ class OllamaClient:
         print("✅ Connected to Ollama (With Streaming Kill-Switch)")
     
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.6, timeout: int = 120) -> str:
-        # We add frequency and presence penalties to stop Qwen from endlessly looping!
         payload = {
             "model": self.model_name, 
             "messages": messages, 
             "temperature": temperature, 
-            "stream": True,             # --- TURN ON STREAMING ---
-            "frequency_penalty": 1.05,  # --- ANTI-LOOPING MEASURE ---
-            "presence_penalty": 1.05
+            "stream": True,
+            "frequency_penalty": 0.2, 
+            "presence_penalty": 0.2
         }
             
         try:
             start_time = time.time()
+            first_token_received = False
             full_content = ""
             
-            # timeout=(Connect_Timeout, Read_Timeout_Per_Chunk)
-            # If Ollama takes longer than 60 seconds to process the prompt, it aborts.
+            # --- DEBUG 1: Pre-Connection ---
+            console.print(f"[yellow]⏳ Sending prompt to Ollama API at {self.base_url}...[/yellow]")
+            
             response = self.session.post(
                 f"{self.base_url}/v1/chat/completions", 
                 json=payload, 
@@ -89,9 +90,17 @@ class OllamaClient:
             )
             response.raise_for_status()
 
-            # Iterate through the chunks as they arrive from the GPU
+            # --- DEBUG 2: Post-Connection ---
+            console.print("[green]✅ Connected! Waiting for GPU to compute first token...[/green]")
+
             for line in response.iter_lines():
                 if line:
+                    if not first_token_received:
+                        # --- DEBUG 3: First Token ---
+                        console.print(f"[bold cyan]⚡ FIRST TOKEN RECEIVED in {time.time() - start_time:.2f} seconds![/bold cyan]")
+                        first_token_received = True
+                        start_time = time.time() 
+
                     decoded_line = line.decode('utf-8')
                     if decoded_line.startswith("data: "):
                         data_str = decoded_line[6:]
@@ -101,21 +110,26 @@ class OllamaClient:
                             chunk = json.loads(data_str)
                             delta = chunk["choices"][0].get("delta", {})
                             if "content" in delta:
-                                full_content += delta["content"]
+                                token = delta["content"]
+                                full_content += token
+                                
+                                # Force flush to terminal immediately
+                                sys.stdout.write(token)
+                                sys.stdout.flush()
                         except Exception:
                             pass
 
-                # --- THE ACTIVE KILL SWITCH ---
-                # Check the clock on every single word generated.
                 if time.time() - start_time > timeout:
-                    console.print(f"\n[bold red]⚠️ KILL SWITCH ACTIVATED: Model exceeded {timeout}s limit. Severing connection to save GPU.[/bold red]")
-                    response.close() # <--- THIS STOPS THE GPU INSTANTLY
-                    return full_content.strip() + "\n\n*(System Note: Generation was forcibly severed to save GPU resources. The model may have been stuck in a loop.)*"
+                    sys.stdout.write("\n")
+                    console.print(f"\n[bold red]⚠️ KILL SWITCH ACTIVATED: Model hit the {timeout}s limit.[/bold red]")
+                    response.close() 
+                    return full_content.strip() + "\n\n*(System Note: Generation was forcibly severed. Check the terminal to see what she was stuck on!)*"
                 
+            sys.stdout.write("\n")
             return full_content.strip()
             
         except requests.exceptions.ReadTimeout:
-            error_msg = f"*(System Timeout: The model took too long to start writing. Context window may be flooded.)*"
+            error_msg = f"*(System Timeout: The model took too long to load into VRAM or process the context.)*"
             console.print(f"[bold red]{error_msg}[/bold red]")
             return error_msg
         except Exception as e:
@@ -171,7 +185,6 @@ class ToolExecutor:
             arguments = call.get("arguments") or {} 
             
             if not name or name not in executable_tools:
-                # --- FIX: Stop her from hallucinating tools ---
                 results.append(f"Tool '{name}' returned: ❌ Error - Function does not exist. DO NOT guess tool names. Use 'search_tool_library' to find valid tools.")
                 continue
                 
@@ -186,7 +199,6 @@ class ToolExecutor:
                 results.append(f"Tool {name} returned: ❌ Error - {str(e)}")
         return results
 
-# --- JSON STATE MANAGEMENT ---
 def initialize_json_ledger(task_file: str, steps: list):
     state = {
         "status": "in_progress",
