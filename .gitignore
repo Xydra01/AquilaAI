@@ -9,3 +9,6 @@
 __pycache__/
 vector_db/
 Agent-Creations/
+Agent-Plans/
+Agent-Research/
+Agent-Tasks/

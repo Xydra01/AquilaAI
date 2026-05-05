@@ -18,6 +18,35 @@ try:
 except ImportError:
     ALL_TOOLS = {}
 
+# Constrained Decoding Schema
+AQUILA_ACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {
+            "type": "string",
+            "description": "Your internal thoughts, reasoning, and explanations. MUST be filled out before calling tools."
+        },
+        "tools": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The exact name of the tool to execute."
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "A dictionary of the parameters required for the tool."
+                    }
+                },
+                "required": ["name", "arguments"]
+            }
+        }
+    },
+    "required": ["reasoning", "tools"]
+}
+
 class DualLogger:
     def __init__(self):
         self.console = Console()
@@ -27,7 +56,6 @@ class DualLogger:
     def set_task(self, task_name: str):
         """Initializes the log file with a unique timestamp to prevent overlap."""
         self.current_task = task_name
-        os.makedirs("Agent-Logs", exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # --- FIX: Unique log file per session! ---
@@ -47,6 +75,20 @@ class DualLogger:
             
             with open(self.log_filename, "a", encoding="utf-8") as f:
                 f.write(clean_text + "\n")
+                
+    def log_iteration(self, iteration: int, content: str):
+        """Logs the raw LLM response for a specific iteration."""
+        if not self.log_filename:
+            return
+        with open(self.log_filename, "a", encoding="utf-8") as f:
+            f.write(f"\n--- Iteration {iteration} ---\n{content}\n")
+
+    def log_tool_execution(self, tool_name: str, args: dict, result: str):
+        """Logs the tool call and its output."""
+        if not self.log_filename:
+            return
+        with open(self.log_filename, "a", encoding="utf-8") as f:
+            f.write(f"\n[🛠️ TOOL EXECUTED: {tool_name}]\nARGS: {args}\nRESULT:\n{result}\n")
 
 aquila_memory = DualMemorySystem()
 # Replace the standard console with our new indestructible flight recorder
@@ -64,7 +106,7 @@ class OllamaClient:
         self.session = requests.Session()
         print("✅ Connected to Ollama (With Streaming Kill-Switch)")
     
-    def chat(self, messages: List[Dict[str, str]], temperature: float = 0.6, timeout: int = 120) -> str:
+    def chat(self, messages: List[Dict[str, str]], temperature: float = 0.6, timeout: int = 120, format: dict = None) -> str:
         payload = {
             "model": self.model_name, 
             "messages": messages, 
@@ -73,6 +115,9 @@ class OllamaClient:
             "frequency_penalty": 0.2, 
             "presence_penalty": 0.2
         }
+        
+        if format:
+            payload["format"] = format
             
         try:
             start_time = time.time()
@@ -86,7 +131,7 @@ class OllamaClient:
                 f"{self.base_url}/v1/chat/completions", 
                 json=payload, 
                 stream=True, 
-                timeout=(5, 60) 
+                timeout=(5, 90) 
             )
             response.raise_for_status()
 
@@ -140,40 +185,37 @@ class OllamaClient:
 client = OllamaClient()
 
 def parse_tool_calls(response_text: str) -> list[dict]:
-    action_header_pattern = r"###?.*?ACTION:\s*(\w+)"
-    tool_calls = []
-    chunks = re.split(action_header_pattern, response_text)
-    
-    if len(chunks) > 1:
-        for i in range(1, len(chunks), 2):
-            name = chunks[i].strip()
-            body = chunks[i+1]
-            arguments = {}
+    """Parses tool calls from the strictly constrained JSON output."""
+    try:
+        # If the LLM appended a Markdown report outside the JSON, strip it out first!
+        import re
+        clean_text = re.sub(r'\[START_REPORT\].*?\[END_REPORT\]', '', response_text, flags=re.DOTALL).strip()
+        
+        # In case there's still trailing garbage, try to isolate the JSON block
+        json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+        if json_match:
+            clean_text = json_match.group(0)
             
-            arg_pattern = r"\*\*(\w+)\*\*:\s*([\s\S]*?)(?=\*\*\w+\*\*:|$)"
-            matches = re.findall(arg_pattern, body)
-            
-            if not matches:
-                fallback_pattern = r"(?:^|\n)\s*(\w+):\s*([\s\S]*?)(?=(?:\n\s*\w+:\s*)|$)"
-                matches = re.findall(fallback_pattern, body)
-                valid_keys = {"file_path", "content", "target_text", "replacement_text", "keyword", "path", "args", "to", "subject", "body", "function_name", "code", "message_to_user", "summary_of_completed_steps", "summary_of_work"}
-                matches = [(k, v) for k, v in matches if k in valid_keys]
-            
-            for key, value in matches:
-                val = value.strip()
-                val = re.sub(r'\n\s*[-_*]{3,}\s*$', '', val).strip()
-                while val.endswith('---'): val = val[:-3].strip()
-                if val.startswith("```"):
-                    val = re.sub(r"^```[^\n]*\n", "", val)
-                    val = re.sub(r"\n```$", "", val)
-                elif val.startswith("`") and val.endswith("`"):
-                    val = val[1:-1]
-                if val:
-                    arguments[key] = val.strip()
-                    
-            if name: 
-                tool_calls.append({"name": name, "arguments": arguments})
-    return tool_calls
+        # --- THE FIX: Strip trailing commas before parsing ---
+        clean_text = re.sub(r',\s*([}\]])', r'\1', clean_text)
+        # -----------------------------------------------------
+        
+        data = json.loads(clean_text, strict=False)
+        # --------------------------------------------------------------
+        
+        tools_to_run = data.get("tools", [])
+        
+        parsed_calls = []
+        for t in tools_to_run:
+            parsed_calls.append({
+                "name": t.get("name", ""),
+                "arguments": t.get("arguments", {})
+            })
+        return parsed_calls
+        
+    except json.JSONDecodeError as e:
+        console.print(f"[bold red]⚠️ JSON Parser Error: {e}[/bold red]")
+        return []
 
 class ToolExecutor:
     def execute(self, tool_calls: list[dict]) -> list[str]:
@@ -229,171 +271,225 @@ def advance_json_state(task_file: str, result_summary: str):
 
 class Agent:
     def __init__(self, master_prompt: str):
+        # Initialize directories
+        os.makedirs("Agent-Tasks", exist_ok=True)
+        os.makedirs("Agent-Creations", exist_ok=True)
+        os.makedirs("Agent-Research", exist_ok=True)
+        os.makedirs("Agent-Plans", exist_ok=True)
         self.executor = ToolExecutor()
-        self.master_prompt = master_prompt
+        self.base_task_prompt = master_prompt
         self.memory = aquila_memory 
         aquila_memory.index_tools({**SURVIVAL_TOOLS, **ALL_TOOLS})
+
+    def _get_research_master_prompt(self, task_name: str) -> str:
+        """Returns the specific system prompt for Research Mode."""
+        current_date = datetime.datetime.now().strftime("%B %d, %Y")
+        return f"""# SYSTEM ROLE: Autonomous AI Researcher
+You are Aquila, operating in Research Mode. Your primary directive is to gather, extract, and preserve highly technical information and raw data from the internet.
+
+## 1. Identity & Environment
+- **Current Date:** {current_date}
+- **OS:** {sys.platform} | **Directory:** {os.getcwd()}
+- **The Brain:** Use `save_research_note` and `read_all_research_notes` to manage facts.
+
+## 2. The Objective Loop (How you work)
+- The OS will feed you exactly ONE objective at a time.
+- TOOL CAP: You may output up to 6 tool calls per response.
+- **OS AUTO-SCRAPE:** When you use the `web_search` tool, the OS will automatically read the top URL for you. Search once, read the auto-scraped text, and extract the data.
+- **NO MASSIVE DATASETS (CRITICAL):** Do not copy-paste raw scraped HTML. Extract the readable, factual data.
+- The exact moment you finish your current objective, use the `mark_objective_complete` tool.
+
+## 3. Research & State Management (THE SCRATCHPAD)
+- **Short-Term Memory:** You have a rolling memory buffer of your last few actions. However, your memory is COMPLETELY WIPED the moment you advance to a new objective.
+- **First Step Rule:** Because of the memory wipe, your FIRST action on a new objective should be to use `read_all_research_notes`. **Do not call this tool more than once per objective.**
+- **DATA EXTRACTION:** You MUST use your `save_research_note` tool to securely store facts.
+- **COMPLETION:** For the FINAL step, do not use the `write_file` tool. Instead, output your final organized Markdown report directly in your response, wrapped exactly between `[START_REPORT]` and `[END_REPORT]` tags. Then use `finish_task`.
+
+## 4. Tool Execution Formatting (CRITICAL)
+You are locked into a strict JSON output format. You MUST respond with a single, valid JSON object containing "reasoning" and "tools".
+
+Example of saving a note:
+{{
+    "reasoning": "I have extracted the context regarding EXL2 and need to save it to my scratchpad.",
+    "tools": [
+        {{
+            "name": "save_research_note",
+            "arguments": {{
+                "task_name": "{task_name}",
+                "gathered_data": "[Insert all facts here]"
+            }}
+        }}
+    ]
+}}
+
+Example of advancing to the next step:
+{{
+    "reasoning": "I have successfully verified all the data for this objective. I am ready to advance.",
+    "tools": [
+        {{
+            "name": "mark_objective_complete",
+            "arguments": {{
+                "summary_of_work": "Finished compiling genre taxonomy data."
+            }}
+        }}
+    ]
+}}
+"""
+
+
+    def generate_plan(self, topic_name: str, user_request: str, mode: str) -> str:
+        """Generates a universal JSON state array for both Tasks and Research."""
         
-    def _get_dynamic_system_prompt(self, routed_tool_names: list[str] = None) -> str:
-        executable_tools = {**SURVIVAL_TOOLS, **ALL_TOOLS}
-        
-        core_tools = {
-            "mark_objective_complete", "finish_task", "search_tool_library", 
-            "write_file", "read_file", "read_file_lines"
-        }
-        
-        if routed_tool_names:
-            core_tools.update(routed_tool_names)
+        if mode == "research":
+            role_desc = "You are Aquila's Lead Researcher."
+            objectives = "Focus on formulating searches, extracting technical data, and cross-referencing."
+            example_steps = """
+                {"status": "pending", "description": "Search for precursor genres...", "max_iterations": 3},
+                {"status": "pending", "description": "Dump the final extracted data to Agent-Research...", "max_iterations": 2}
+            """
         else:
-            core_tools.update(executable_tools.keys()) 
-            
-        dynamic_tools_text = ""
-        
-        for name in core_tools:
-            if name not in executable_tools: continue
-            tool_info = executable_tools[name]
-            
-            sig = inspect.signature(tool_info['func']) 
-            template = f"### 🛠️ ACTION: {name}"
-            for param in sig.parameters: 
-                if param == 'kwargs': continue 
-                template += f"\n**{param}**: ..."
-            dynamic_tools_text += f"TOOL: {name}\nDESC: {tool_info['description']}\nFORMAT:\n{template}\n\n"
+            role_desc = "You are the backend task router."
+            objectives = "Break the request down into a sequence of specific, executable coding or filing steps."
+            example_steps = """
+                {"status": "pending", "description": "Create the required python files...", "max_iterations": 2},
+                {"status": "pending", "description": "Write the final code logic...", "max_iterations": 4}
+            """
 
-        return self.master_prompt + f"\n=== AVAILABLE TOOLS ===\nUse ONLY this MARKDOWN format:\n{dynamic_tools_text}"
-
-    def generate_json_plan(self, user_request: str) -> list:
-        """Forces the LLM to output a strict JSON array of context-loaded steps."""
-        console.print("[dim cyan]⚙️ OS is generating structured task plan...[/dim cyan]")
-        
         prompt = f"""
-        You are the backend task router. The user wants to: "{user_request}"
+        {role_desc}
+        The user needs: {user_request}
         
-        Break this down into a sequence of specific, executable steps.
-        CRITICAL: Each step must contain full context (e.g., "Research Africa news" NOT "Research first item").
+        Create a strict JSON state object to manage this workflow.
+        {objectives}
         
-        You MUST output ONLY a raw, valid JSON array of strings. No markdown formatting. No explanation.
+        CRITICAL: For every step, you must assign a "max_iterations" integer. 
         
-        Example Output:
-        [
-            "Create reports directory.",
-            "Research current news for Africa.",
-            "Write the final report."
-        ]
+        Output ONLY valid JSON matching this exact structure:
+        {{
+            "status": "in_progress",
+            "current_step_index": 0,
+            "steps": [
+                {example_steps}
+            ]
+        }}
         """
-        response = client.chat([{"role": "user", "content": prompt}], temperature=0.1)
         
-        try:
+        for attempt in range(3):
+            response = client.chat([{"role": "user", "content": prompt}], temperature=0.1)
+            if "Generation was forcibly severed" in response:
+                console.print(f"[bold yellow]⚠️ Planner hit the Kill Switch. Retrying ({attempt + 1}/3)...[/bold yellow]")
+                continue
             clean_json = response.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean_json)
-        except Exception as e:
-            console.print(f"[bold red]Failed to parse JSON plan: {e}[/bold red]")
-            return [f"Execute user request: {user_request}"]
+            try:
+                json.loads(clean_json)
+                return clean_json 
+            except json.JSONDecodeError as e:
+                console.print(f"[bold yellow]⚠️ LLM generated corrupted JSON ({e}). Retrying ({attempt + 1}/3)...[/bold yellow]")
+                continue
+                
+        raise Exception("Fatal: LLM failed to generate a valid JSON plan after 3 attempts.")
 
-    def run_autonomous_task(self, task_name: str, user_request: str, ledger_placeholder=None) -> str:
-        # --- INITIALIZE THE BLACK BOX RECORDER ---
+    def run_unified_task(self, task_name: str, user_request: str, mode: str, ledger_placeholder=None) -> str:
+        """The Master Execution Engine for both Autonomous Tasks and Deep Research."""
         console.set_task(task_name)
+        mode_label = "Deep-Dive Research" if mode == "research" else "Autonomous Task"
+        console.print(f"\n[bold magenta]🚀 OS is initializing {mode_label} for: {task_name}[/bold magenta]")
         
-        tasks_dir = "Agent-Tasks"
-        os.makedirs(tasks_dir, exist_ok=True)
-        task_file = f"{tasks_dir}/{task_name}.json" 
-
-        # Phase 1: OS Initializes the Plan
+        # --- 1. DIRECTORY & PROMPT ROUTING ---
+        plan_dir = "Agent-Plans" if mode == "research" else "Agent-Tasks"
+        task_file = os.path.join(plan_dir, f"{task_name}.json")
+        system_prompt = self._get_research_master_prompt(task_name) if mode == "research" else self.base_task_prompt
+        
+        # --- 2. GENERATE OR LOAD THE PLAN ---
         if not os.path.exists(task_file):
-            steps = self.generate_json_plan(user_request)
-            initialize_json_ledger(task_file, steps)
-        
-        system_prompt = self._get_dynamic_system_prompt()
-        last_tool_output = None
-        step_count = 0
-        MAX_ITERATIONS = 50
-        
-        # --- ROLLING MEMORY BUFFER ---
-        conversation_history = []
+            plan_json = self.generate_plan(task_name, user_request, mode)
+            with open(task_file, "w", encoding="utf-8") as f:
+                f.write(plan_json)
 
-        # Phase 2: The Focused Worker Loop
-        while step_count < MAX_ITERATIONS:
-            console.print(f"\n[bold magenta]--- Aquila OS Iteration {step_count + 1} ---[/bold magenta]")
-            
+        # --- 3. THE EXECUTION LOOP ---
+        visited_urls = set()
+        conversation_history = []
+        step_count = 0
+        max_steps = 50 # High limit to allow for many iterations
+        
+        while step_count < max_steps:
             try:
                 state = read_json_state(task_file)
                 
                 if state["status"] == "completed":
-                    return "All objectives in the JSON task array have been completed successfully."
+                    return f"✅ {mode_label} completed successfully. Check the directory for the final outputs."
                     
                 current_idx = state["current_step_index"]
+                if current_idx >= len(state["steps"]):
+                    return "✅ All steps are completed."
+                    
                 current_objective = state["steps"][current_idx]["description"]
+                max_step_iterations = state["steps"][current_idx].get("max_iterations", 4)
                 
                 # Update UI
                 if ledger_placeholder:
-                    with ledger_placeholder.container():
-                        import streamlit as st
-                        st.subheader(f"Task: `{task_name}`")
-                        st.caption(f"Status: {state.get('status', 'unknown').upper()}")
-                        for i, step in enumerate(state.get("steps", [])):
-                            if step["status"] == "completed":
-                                st.markdown(f"✅ ~~{step['description']}~~")
-                            elif i == state.get("current_step_index"):
-                                st.markdown(f"🔄 **{step['description']}**")
-                            else:
-                                st.markdown(f"⏳ {step['description']}")
-                                
-            except Exception as e:
-                return f"Fatal Error: Could not read JSON State. {e}"
+                    ledger_text = f"### 📚 {mode_label.split()[-1]} Ledger\n\n"
+                    for i, step in enumerate(state.get("steps", [])):
+                        status_icon = "✅" if step.get("status") == "completed" else ("🔄" if i == current_idx else "⏳")
+                        ledger_text += f"{status_icon} **Step {i+1}:** {step.get('description', '')}\n\n"
+                    ledger_placeholder.markdown(ledger_text)
 
-            
-            user_msg = f"""**Ultimate Goal:** {user_request}
-
-**YOUR CURRENT OBJECTIVE (Step {current_idx + 1} of {len(state['steps'])}):**
-> {current_objective}
-
-Execute tools to complete this specific objective. Do not move on to other tasks.
-If you encounter a bug or error, you may use tools to investigate and fix it, BUT your primary focus must remain on completing the objective above.
-You MUST output the `mark_objective_complete` tool the moment this specific objective is fulfilled so the OS can advance."""
-            
-            if last_tool_output:
-                user_msg += f"\n\n**Result of last tool execution:**\n{last_tool_output}"
+                # Iteration Tracking
+                step_attempts = sum(1 for msg in conversation_history if msg["role"] == "assistant")
                 
-            # 1. Add OS message to the rolling buffer
-            conversation_history.append({"role": "user", "content": user_msg})
-            
-            # 2. Cap the buffer to the last 4 messages (2 full Agent/OS interaction turns)
-            # This prevents context bloat while letting her chain multiple tools!
-            if len(conversation_history) > 4:
-                conversation_history = conversation_history[-4:]
-                
-            active_memory = [{"role": "system", "content": system_prompt}] + conversation_history
-            
-            response_text = client.chat(active_memory, temperature=0.2)
+                user_msg = f"**Ultimate Topic/Goal:** {user_request}\n\n**YOUR CURRENT OBJECTIVE (Step {current_idx + 1} of {len(state['steps'])}):**\n> {current_objective}"
 
-            if response_text.startswith("Error connecting to Ollama") or response_text.startswith("API Error"):
-                error_msg = (
-                    "⚠️ SYSTEM ERROR: The LLM API timed out. "
-                    "Your last action requested too much data or caused an infinite loop. "
-                    "DO NOT repeat the exact same tool call. Try a smaller, more specific approach."
-                )
-                console.print(f"[bold red]API Timeout. Intercepting error and giving Aquila a chance to recover...[/bold red]")
+                # Budget Enforcer
+                if step_attempts >= max_step_iterations:
+                    console.print(f"[bold red]⏰ OS ENFORCER: Iteration budget ({max_step_iterations}) exhausted for Step {current_idx + 1}. Forcing advancement![/bold red]")
+                    user_msg += f"\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP FOR THIS OBJECTIVE.\nYou have reached the maximum allowed iterations ({max_step_iterations}/{max_step_iterations}). You MUST immediately save any facts you have and use `mark_objective_complete` to move on. Do not delay."
+                else:
+                    user_msg += f"\n\nExecute tools to complete this specific objective. Once fully complete, use the `mark_objective_complete` tool to advance.\n(Iteration {step_attempts + 1}/{max_step_iterations} for this step)"
+
+                active_memory = [{"role": "system", "content": system_prompt}] + conversation_history + [{"role": "user", "content": user_msg}]
                 
-                # Pass the warning directly into her memory buffer and skip the rest of the loop!
-                last_tool_output = error_msg
-                step_count += 1
-                continue
-            
-            console.print(f"[green]{response_text}[/green]")
-            
-            # 3. Add Agent response to the rolling buffer
-            conversation_history.append({"role": "assistant", "content": response_text})
-            
-            tool_calls = parse_tool_calls(response_text)
-            
-            if tool_calls:
-                # --- THE SMART HYBRID EXECUTOR ---
+                # Dynamic Timeout: Give her significantly more time on the final step to write the massive report
+                is_final_step = (current_idx == len(state['steps']) - 1)
+                current_timeout = 600 if is_final_step else 180
+                
+                # CONSTRAINED DECODING INJECTION
+                response_text = client.chat(active_memory, temperature=0.2, format=AQUILA_ACTION_SCHEMA, timeout=current_timeout)
+                
+                console.log_iteration(step_count + 1, response_text)
+                
+                # Report Tag Interceptor (Mostly for Research, but safe globally)
+                report_match = re.search(r'\[START_REPORT\](.*?)\[END_REPORT\]', response_text, re.DOTALL)
+                if report_match:
+                    report_content = report_match.group(1).strip()
+                    save_dir = "Agent-Research" if mode == "research" else "Agent-Creations"
+                    with open(f"{save_dir}/{task_name}.md", "w", encoding="utf-8") as f:
+                        f.write(report_content)
+                    console.print(f"[bold green]✅ Final report extracted and saved to {save_dir}![/bold green]")
+                
+                # Kill Switch Safety
+                if "Generation was forcibly severed" in response_text:
+                    console.print("[bold red]🚨 FATAL: Output was severed. Aborting tool execution.[/bold red]")
+                    conversation_history.extend([
+                        {"role": "assistant", "content": response_text},
+                        {"role": "user", "content": "SYSTEM ERROR: Your response was stuck and killed. Try a shorter approach."}
+                    ])
+                    step_count += 1
+                    continue
+                
+                if response_text.startswith("Error connecting to Ollama") or response_text.startswith("API Error"):
+                    return f"System Error: {response_text}"
+                    
+                conversation_history.append({"role": "assistant", "content": response_text})
+                
+                # Parse and execute tools
+                tool_calls = parse_tool_calls(response_text)
+                last_tool_output = ""
+                
                 has_advance = False
                 has_finish = False
                 advance_summary = ""
                 finish_msg = ""
                 
-                # 1. Scan ALL tool calls for State Changers (so they never get chopped off!)
                 for tc in tool_calls:
                     if tc["name"] == "mark_objective_complete":
                         has_advance = True
@@ -401,42 +497,71 @@ You MUST output the `mark_objective_complete` tool the moment this specific obje
                     elif tc["name"] == "finish_task":
                         has_finish = True
                         finish_msg = tc.get("arguments", {}).get("message_to_user", "Task completed.")
+                    else:
+                        execution_results = self.executor.execute([tc])
+                        result = execution_results[0] if execution_results else "No output."
 
-                # 2. Categorize and Cap Tools
-                # We ALWAYS allow memory saves. We ONLY cap active environment interactions.
-                save_tools = [tc for tc in tool_calls if tc["name"] == "save_research_note"]
-                normal_tools = [tc for tc in tool_calls if tc["name"] not in ["mark_objective_complete", "finish_task", "save_research_note"]]
-                
-                tools_to_execute = normal_tools[:3] + save_tools
-                last_tool_output = ""
-                
-                if tools_to_execute:
-                    execution_results = self.executor.execute(tools_to_execute)
-                    last_tool_output = "\n\n".join(execution_results)
-                
-                if len(normal_tools) > 3:
-                    last_tool_output += "\n\n⚠️ SYSTEM WARNING: You called too many action tools. Only the first 3 were executed to prevent context flooding."
+                        # Over-the-shoulder interceptor
+                        if tc["name"] == "save_research_note":
+                            note_content = tc.get("arguments", {}).get("gathered_data", "").upper()
+                            if re.search(r'(STEP|OBJECTIVE)\s*\d*\s*COMPLETE|(STEP|OBJECTIVE)\s*\d*\s*VERIFIED|ALL VERIFICATION COMPLETE', note_content):
+                                console.print(f"[bold yellow]⚡ OS Auto-Detect: Step completion detected inside notes. Forcing state advancement![/bold yellow]")
+                                has_advance = True
+                                advance_summary = "Auto-advanced by OS (Completion phrase detected)."
+                        
+                        # OS Auto-Scrape Interceptor
+                        if "web_search" in tc["name"].lower() or "search" in tc["name"].lower():
+                            urls = re.findall(r'URL:\s+(https?://[^\s]+)', result)
+                            best_url, best_score = None, -9999
+                            for url in urls:
+                                url = url.strip()
+                                if url in visited_urls: continue
+                                score = 0
+                                lower_url = url.lower()
+                                if '.edu' in lower_url or '.gov' in lower_url: score += 50
+                                if '.org' in lower_url: score += 20
+                                if 'arxiv.org' in lower_url or 'github.com' in lower_url: score += 30
+                                if 'reddit.com' in lower_url or 'quora.com' in lower_url: score -= 30
+                                if 'pinterest.com' in lower_url: score -= 50
+                                if score > best_score:
+                                    best_score, best_url = score, url
+                                    
+                            if best_url:
+                                visited_urls.add(best_url)
+                                console.print(f"[dim cyan]🔗 OS Smart-Scrape: Selected high-value URL (Score: {best_score}) -> {best_url}[/dim cyan]")
+                                try:
+                                    if "read_webpage" in ALL_TOOLS:
+                                        scrape_data = ALL_TOOLS["read_webpage"](url=best_url)
+                                    else:
+                                        scrape_data = "(Error: read_webpage missing)"
+                                    result += f"\n\n--- OS AUTO-SCRAPED TEXT FROM {best_url} ---\n{scrape_data}\n--- END AUTO-SCRAPE ---"
+                                except Exception as e:
+                                    result += f"\n\n(OS Auto-Scrape failed for {best_url}: {e})"
+                            else:
+                                result += "\n\n(OS Note: No new high-quality URLs found to auto-scrape.)"
 
-                # 3. Process State Changers Last
+                        last_tool_output += f"\nTool '{tc['name']}' result:\n{result}\n"
+                        console.log_tool_execution(tc["name"], tc.get("arguments", {}), result)
+                
+                if last_tool_output:
+                    conversation_history.append({"role": "user", "content": f"Tool Outputs:{last_tool_output}"})
+                
+                if has_advance:
+                    console.print(f"[bold blue]✅ OS advancing state to next objective...[/bold blue]")
+                    advance_json_state(task_file, advance_summary)
+                    conversation_history = [] 
+                    
                 if has_finish:
                     aquila_memory.store_experience(task_name, finish_msg)
                     return finish_msg
                     
-                elif has_advance:
-                    console.print(f"[bold blue]✅ OS advancing state to next objective...[/bold blue]")
-                    advance_json_state(task_file, advance_summary)
-                    last_tool_output += f"\n\nObjective complete: {advance_summary}. System has advanced you to the next step."
-                    
-                    # --- THE CLEAN SLATE ---
-                    conversation_history = []
-                    
-            else:
-                last_tool_output = "SYSTEM WARNING: Format your tool calls using '### 🛠️ ACTION: tool_name'."
-                console.print(f"[bold red]{last_tool_output}[/bold red]")
+                step_count += 1
                 
-            step_count += 1
-            
-        return "Task paused: Reached maximum safety iterations (50)."
+            except Exception as e:
+                console.print(f"[bold red]Critical OS Error in loop: {e}[/bold red]")
+                return f"OS Error: {str(e)}"
+                
+        return "⚠️ OS halted: Maximum iterations reached."
 
 # Global Agent Definition
 master_prompt = f"""# SYSTEM ROLE: Autonomous AI Worker & Executor
@@ -449,15 +574,44 @@ You are Aquila, a highly capable autonomous AI. The Python OS acts as your Proje
 
 ## 2. The Objective Loop (How you work)
 - The OS will feed you exactly ONE objective at a time. Your only goal is to complete that specific objective.
-- **TOOL CAP:** You may output up to 3 tool calls (`### 🛠️ ACTION:`) per response. This allows you to combine actions (e.g., using `save_research_note` and `mark_objective_complete` in the exact same turn).
-- If you don't know the exact name of a tool, use `search_tool_library`.
-- **ADVANCING:** The exact moment you finish your current objective, use `mark_objective_complete`. 
+- TOOL CAP: You may output up to 6 tool calls per response. 
+- **NO MASSIVE DATASETS (CRITICAL):** NEVER hardcode large lists, arrays, dictionaries, or long datasets in your code. It causes critical system crashes. If you need data, use a tiny 5-item mock list, or write a Python script to download the data via API.
 
 ## 3. Research & State Management (THE SCRATCHPAD)
 - **Short-Term Memory:** You have a rolling memory buffer of your last few actions. However, your memory is **COMPLETELY WIPED** the moment you advance to a new objective.
 - **First Step Rule:** Because of the memory wipe, when you start a new objective, your FIRST action should usually be `read_all_research_notes` to load previously gathered context.
 - If you gather data (using `web_search`, `get_directory_tree`, etc.), you MUST use `save_research_note` to dump the facts into your SQLite database so you don't lose them.
 - **NEVER use `replace_in_file` to build large reports line-by-line.** Write the final document using a SINGLE `write_file` action.
+
+## 4. Tool Execution Formatting (CRITICAL)
+You are locked into a strict JSON output format. You MUST respond with a single, valid JSON object containing "reasoning" and "tools".
+
+Example of saving a note:
+{{
+    "reasoning": "I have extracted the context regarding EXL2 and need to save it to my scratchpad.",
+    "tools": [
+        {{
+            "name": "save_research_note",
+            "arguments": {{
+                "task_name": "example_task",
+                "gathered_data": "[Insert all facts here]"
+            }}
+        }}
+    ]
+}}
+
+Example of advancing to the next step:
+{{
+    "reasoning": "I have successfully verified all the data for this objective. I am ready to advance.",
+    "tools": [
+        {{
+            "name": "mark_objective_complete",
+            "arguments": {{
+                "summary_of_work": "Finished compiling genre taxonomy data."
+            }}
+        }}
+    ]
+}}
 """
 
 global_agent = Agent(master_prompt=master_prompt)
