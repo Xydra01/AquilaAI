@@ -8,7 +8,7 @@ import shutil
 import psutil
 import inspect
 
-# THE GLOBAL IMPORT: Pull the security rules from tools.py!
+# Firewall Import
 from tools import is_safe_path, FORBIDDEN_DIRS
 
 def search_in_file(file_path: str, keyword: str = None, **kwargs) -> str:

@@ -4,16 +4,16 @@ import requests
 import inspect
 from bs4 import BeautifulSoup
 import markdownify
+import cloudscraper
+import fitz
+import io
 
 def web_search(query: str, max_results: int = 5) -> str:
     """Searches the web locally using your private SearXNG instance."""
     url = "http://localhost:8080/search"
     
     try:
-        
         limit = int(max_results)
-        
-        # 2. Clean the query FIRST
         clean_query = query.replace('"', '').replace("'", "")
         
         params = {
@@ -35,7 +35,7 @@ def web_search(query: str, max_results: int = 5) -> str:
         for i, res in enumerate(results[:limit]):
             output += f"{i+1}. {res.get('title', 'No Title')}\n"
             output += f"URL: {res.get('url', 'No URL')}\n"
-            output += f"Snippet: {res.get('content', 'No Content')}\n\n"
+            output += f"Snippet: {res.get('content', 'No Snippet')}\n\n"
             
         return output
     except ValueError:
@@ -44,21 +44,36 @@ def web_search(query: str, max_results: int = 5) -> str:
         return f"❌ Error executing local web search: {e}"
 
 def read_webpage(url: str) -> str:
-    """Fetches a webpage and extracts clean Markdown text locally."""
+    """Fetches a webpage or PDF and extracts clean text locally, bypassing basic bot protections."""
     try:
+        scraper = cloudscraper.create_scraper()
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        response = requests.get(url, headers=headers, timeout=15)
+        response = scraper.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
+        content_type = response.headers.get('Content-Type', '').lower()
+        
+        # PDF Parser
+        if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+            pdf_stream = io.BytesIO(response.content)
+            doc = fitz.open(stream=pdf_stream, filetype="pdf")
+            pdf_text = ""
+            for page in doc:
+                pdf_text += page.get_text()
+                
+            if len(pdf_text) > 15000:
+                return f"Content of {url} (PDF Truncated):\n\n{pdf_text[:15000]}\n\n...[CONTENT TRUNCATED]"
+            return f"Content of {url} (PDF):\n\n{pdf_text}"
+            
+        # HTML Parser ---
         soup = BeautifulSoup(response.text, 'html.parser')
         
         for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
             element.decompose()
             
         raw_markdown = markdownify.markdownify(str(soup), heading_style="ATX")
-        
         clean_markdown = "\n".join([line for line in raw_markdown.splitlines() if line.strip()])
         
         if len(clean_markdown) > 15000:
@@ -66,7 +81,7 @@ def read_webpage(url: str) -> str:
         return f"Content of {url}:\n\n{clean_markdown}"
         
     except Exception as e:
-        return f"❌ Error reading webpage locally: {e}"
+        return f"❌ Error reading URL: {str(e)}"
 
 
 WEB_TOOLS = {

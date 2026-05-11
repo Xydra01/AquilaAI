@@ -5,7 +5,7 @@ import chromadb
 import inspect
 from chromadb.utils import embedding_functions
 
-# THE GLOBAL IMPORT
+# Firewall Import
 from tools import AGENT_CORE_DIR, FORBIDDEN_DIRS
 
 chroma_client = chromadb.PersistentClient(path=str(AGENT_CORE_DIR / "vector_db"))

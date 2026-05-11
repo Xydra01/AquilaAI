@@ -1,3 +1,4 @@
+# Web UI
 import streamlit as st
 import os
 import json
@@ -6,14 +7,13 @@ from pathlib import Path
 # Import the direct instances from main
 from main import global_agent, client, initiate_sleep_cycle
 
-# 1. Page Configuration
+# Page Configuration
 st.set_page_config(page_title="Aquila OS", page_icon="🦅", layout="wide")
 
 with st.sidebar:
     st.header("🦅 Aquila OS Controls")
     st.markdown("Select how you want Aquila to handle your next request.")
     
-    # --- THE NEW ROUTING TOGGLE ---
     operation_mode = st.radio(
         "Operation Mode:",
         [
@@ -32,16 +32,16 @@ with st.sidebar:
             st.session_state.messages.append({"role": "assistant", "content": sleep_report})
             st.rerun()
 
-# 2. Session State (Memory)
+# Session State
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "System Online. How can I assist you today?"}
     ]
 
-# 3. Split-Pane Layout
+# Split-Pane Layout
 chat_col, ledger_col = st.columns([1.5, 1])
 
-# --- RIGHT PANE: THE TASK LEDGER ---
+# Right Pane
 with ledger_col:
     st.header("📋 Active Task Ledger")
     st.markdown("---")
@@ -71,7 +71,7 @@ with ledger_col:
     else:
         ledger_placeholder.info("No active tasks. Aquila is idle.")
 
-# --- LEFT PANE: THE TERMINAL ---
+# Left Pane
 with chat_col:
     st.header("💬 Terminal")
     st.markdown("---")
@@ -87,11 +87,10 @@ with chat_col:
             
         with st.chat_message("assistant"):
             if operation_mode == "💬 Chat":
-                # --- V3.1 COGNITIVE CHAT ROUTE ---
+                
                 with st.spinner("Aquila is searching her memory..."):
                     message_placeholder = st.empty()
                     
-                    # 1. RAG INJECTION: Pull Facts and Experiences
                     try:
                         system_facts = global_agent.memory.get_all_facts()
                         past_experiences = global_agent.memory.recall_experiences(prompt, n_results=20)
@@ -100,7 +99,6 @@ with chat_col:
                         past_experiences = "*(Error retrieving experiences)*"
                         st.sidebar.error(f"Memory Error: {e}")
 
-                    # 2. ASSEMBLE THE COGNITIVE PROMPT
                     base_system_prompt = (
                         "You are Aquila, an advanced autonomous AI. You are highly intelligent, slightly dry/witty, and speak with quiet confidence. "
                         "You are currently in Chat Mode. Have a natural conversation with the user and assist them directly.\\n\\n"
@@ -111,18 +109,15 @@ with chat_col:
                     )
                     
                     chat_history = [{"role": "system", "content": base_system_prompt}]
-                    
-                    # 3. APPEND RECENT CONVERSATION HISTORY
+            
                     recent_msgs = st.session_state.messages[-40:] 
                     while recent_msgs and recent_msgs[0]["role"] != "user":
                         recent_msgs.pop(0)
                     
                     for msg in recent_msgs:
                         chat_history.append({"role": msg["role"], "content": msg["content"]})
-                    
-                    # 4. EXECUTE LLM CALL
+                
                     try:
-                        # Removed the harsh timeout so she has time to think about her memories
                         final_response = client.chat(chat_history, temperature=0.6, timeout=60)
                         if not final_response or not final_response.strip():
                             final_response = "*(System Error: The LLM returned a blank string. Check terminal logs.)*"
@@ -142,7 +137,6 @@ with chat_col:
                 status_placeholder.info(f"🚀 Initializing autonomous task: `{task_name}`")
                 
                 try:
-                    # UPDATED CALL
                     final_result = global_agent.run_unified_task(
                         task_name=task_name, 
                         user_request=prompt, 
@@ -161,7 +155,6 @@ with chat_col:
                 status_placeholder.info(f"📚 Initializing Deep-Dive Research: `{research_topic}`")
                 
                 try:
-                    # UPDATED CALL
                     final_report = global_agent.run_unified_task(
                         task_name=research_topic, 
                         user_request=prompt, 
@@ -178,7 +171,7 @@ with chat_col:
                     
         st.rerun()
 
-# --- THE UNIFIED TASK MANAGER ---
+# Task manager and resume
 with st.sidebar:
     st.divider()
     st.subheader("📂 Task Manager")
