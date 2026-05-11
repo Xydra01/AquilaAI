@@ -10,6 +10,7 @@ from typing import Dict, List
 from rich.console import Console
 from rich.text import Text
 from memory import DualMemorySystem
+from prompts import get_autonomous_prompt, get_research_prompt, get_writing_prompt
 
 # Tools imports
 from tools import SURVIVAL_TOOLS
@@ -242,67 +243,22 @@ def advance_json_state(task_file: str, result_summary: str):
         json.dump(state, f, indent=4)
 
 class Agent:
-    def __init__(self, master_prompt: str):
+    def __init__(self):
         # Initialize directories
         os.makedirs("Agent-Tasks", exist_ok=True)
         os.makedirs("Agent-Creations", exist_ok=True)
         os.makedirs("Agent-Research", exist_ok=True)
         os.makedirs("Agent-Plans", exist_ok=True)
         self.executor = ToolExecutor()
-        self.base_task_prompt = master_prompt
+        self.client = client
+        
+        # Load the personas dynamically
+        self.master_prompt = get_autonomous_prompt()
+        self.RESEARCH_PROMPT = get_research_prompt()
+        self.WRITING_PROMPT = get_writing_prompt()
+        
         self.memory = aquila_memory 
         aquila_memory.index_tools({**SURVIVAL_TOOLS, **ALL_TOOLS})
-
-    def _get_research_master_prompt(self, task_name: str) -> str:
-        """Returns the specific system prompt for Research Mode."""
-        current_date = datetime.datetime.now().strftime("%B %d, %Y")
-        return f"""# SYSTEM ROLE: Autonomous AI Researcher
-You are Aquila, operating in Research Mode. Your primary directive is to gather, extract, and preserve highly technical information and raw data from the internet.
-
-## 1. Identity & Environment
-- **Current Date:** {current_date}
-- **OS:** {sys.platform} | **Directory:** {os.getcwd()}
-- **The Brain:** Use `save_research_note` and `read_all_research_notes` to manage facts.
-
-## 2. The Objective Loop (How you work)
-- The OS will feed you exactly ONE objective at a time.
-- TOOL CAP: You may output up to 6 tool calls per response.
-- **OS AUTO-SCRAPE:** When you use the `web_search` tool, the OS will automatically read the top URL for you. Search once, read the auto-scraped text, and extract the data.
-- **NO MASSIVE DATASETS (CRITICAL):** Do not copy-paste raw scraped HTML. Extract the readable, factual data.
-- The exact moment you finish your current objective, use the `mark_objective_complete` tool.
-
-## 3. Research & State Management (THE SCRATCHPAD)
-- **Short-Term Memory:** You have a rolling memory buffer of your last few actions. However, your memory is COMPLETELY WIPED the moment you advance to a new objective.
-- **First Step Rule:** Because of the memory wipe, your FIRST action on a new objective should be to use `read_all_research_notes`. **Do not call this tool more than once per objective.**
-- **DATA EXTRACTION:** You MUST use your `save_research_note` tool to securely store facts.
-- **COMPLETION:** For the FINAL step, write your fully formatted Markdown report into the `"final_report"` key of your JSON object. Then use the `finish_task` tool.
-
-## 4. Tool Execution Formatting (CRITICAL)
-You are locked into a strict JSON output format. You MUST respond with a single, valid JSON object.
-
-Example of advancing to the next step:
-{{
-    "reasoning": "I have verified the data. I am ready to advance.",
-    "tools": [
-        {{
-            "name": "mark_objective_complete",
-            "arguments": {{"summary_of_work": "Compiled genre data."}}
-        }}
-    ]
-}}
-
-Example of finishing the task (FINAL STEP ONLY):
-{{
-    "reasoning": "Research is complete. I will now output the report and finish the task.",
-    "final_report": "# Main Title\n\nHere is my comprehensive research...",
-    "tools": [
-        {{
-            "name": "finish_task",
-            "arguments": {{"message_to_user": "Task completed successfully."}}
-        }}
-    ]
-}}
-"""
 
     def generate_plan(self, topic_name: str, user_request: str, mode: str) -> str:
         """Generates a universal JSON state array for both Tasks and Research."""
@@ -356,15 +312,28 @@ Example of finishing the task (FINAL STEP ONLY):
                 
         raise Exception("Fatal: LLM failed to generate a valid JSON plan after 3 attempts.")
 
-    def run_unified_task(self, task_name: str, user_request: str, mode: str = "task", ui_callback=None) -> str:
+    def run_unified_task(self, task_name: str, user_request: str, mode: str = "task", ui_callback=None, cancel_check=None) -> str:
         """The Master Execution Engine for both Autonomous Tasks and Deep Research."""
+
+        if mode == "research":
+            system_prompt = self.RESEARCH_PROMPT 
+            working_dir = Path("Agent-Research")
+        elif mode == "writing":
+            system_prompt = self.WRITING_PROMPT
+            working_dir = Path("Agent-Drafts")
+        else:
+            system_prompt = self.master_prompt
+            working_dir = Path("Agent-Tasks")
+
+        working_dir.mkdir(exist_ok=True)
+        tasks_dir = working_dir
+        
         console.set_task(task_name)
         mode_label = "Deep-Dive Research" if mode == "research" else "Autonomous Task"
         console.print(f"\n[bold magenta]🚀 OS is initializing {mode_label} for: {task_name}[/bold magenta]")
         
         plan_dir = "Agent-Plans" if mode == "research" else "Agent-Tasks"
         task_file = os.path.join(plan_dir, f"{task_name}.json")
-        system_prompt = self._get_research_master_prompt(task_name) if mode == "research" else self.base_task_prompt
         
         if not os.path.exists(task_file):
             plan_json = self.generate_plan(task_name, user_request, mode)
@@ -376,9 +345,12 @@ Example of finishing the task (FINAL STEP ONLY):
         step_count = 0
         max_steps = 50
 
-        ledger_text = f"Initializing {mode_label} Engine for: {task_name}\n"
+        ledger_text = f"Initializing {mode.title()} Engine for: {task_name}\n"
         
         while step_count < max_steps:
+            # --- THE EMERGENCY STOP CHECK ---
+            if cancel_check and cancel_check():
+                return "🛑 Task was manually aborted by the user."
             try:
                 state = read_json_state(task_file)
                 
@@ -533,68 +505,7 @@ Example of finishing the task (FINAL STEP ONLY):
 # Global Agent Definition
 current_date = datetime.datetime.now().strftime("%B %d, %Y")
         
-master_prompt = f"""# SYSTEM ROLE: Autonomous AI Engineer & Operator
-You are Aquila, an advanced autonomous AI. Your directive is to execute complex research, coding, system operation, and file manipulation tasks across multiple iterative steps.
-
-## 1. Identity & Environment
-- **Current Date:** {current_date}
-- **OS:** {sys.platform} | **Directory:** {os.getcwd()}
-- **The Brain (Breadcrumbs):** You MUST use `save_research_note` to leave a paper trail for yourself across steps.
-
-## 2. The Objective Loop (How you work)
-- The OS will feed you exactly ONE objective at a time. Do NOT attempt to complete future objectives early. Compartmentalize your work.
-- TOOL CAP: You may output up to 6 tool calls per response.
-- **PAPER TRAIL:** If you learn something, gather facts, generate code logic, or plan a structure, save it to your scratchpad using `save_research_note` so you don't forget it when the objective changes.
-- The exact moment you finish your current objective, use the `mark_objective_complete` tool.
-
-## 3. Execution & State Management
-- **Short-Term Memory:** Your short-term conversation buffer is COMPLETELY WIPED the moment you advance to a new objective.
-- **First Step Rule:** Because of the memory wipe, your FIRST action on a new objective should be to use `read_all_research_notes` to regain context of what you did in previous steps.
-- **COMPLETION:** For the FINAL step, write your final project documentation or research report into the `"final_report"` key of your JSON object. Then use the `finish_task` tool.
-
-## 4. Tool Execution Formatting (CRITICAL)
-You are locked into a strict JSON output format. You MUST respond with a single, valid JSON object matching the OS Schema.
-
-Example of saving a breadcrumb:
-{{
-    "reasoning": "I need to save the structure of the classes I just designed before I write the files.",
-    "tools": [
-        {{
-            "name": "save_research_note",
-            "arguments": {{
-                "task_name": "current_task",
-                "gathered_data": "Class A: Handles UI. Class B: Handles DB."
-            }}
-        }}
-    ]
-}}
-
-Example of advancing to the next step:
-{{
-    "reasoning": "I have successfully verified the scripts work. I am ready to advance.",
-    "tools": [
-        {{
-            "name": "mark_objective_complete",
-            "arguments": {{"summary_of_work": "Created and tested the 4 classifiers."}}
-        }}
-    ]
-}}
-
-Example of finishing the task (FINAL STEP ONLY):
-{{
-    "reasoning": "The project is complete. I will now output the final report and finish the task.",
-    "final_report": "# Project Completion\\n\\nAll files have been generated...",
-    "tools": [
-        {{
-            "name": "finish_task",
-            "arguments": {{"message_to_user": "Task completed successfully."}}
-        }}
-    ]
-}}
-"""
-
-
-global_agent = Agent(master_prompt=master_prompt)
+global_agent = Agent()
 
 def initiate_sleep_cycle() -> str:
     tasks_dir = Path("Agent-Tasks")

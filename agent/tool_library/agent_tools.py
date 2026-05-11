@@ -1,22 +1,25 @@
-#Tools that help Aquila function and complete tasks
-
+# Tools that help Aquila function and complete tasks
 import inspect
 from memory import DualMemorySystem
 from rich.console import Console
 
 aquila_memory = DualMemorySystem()
 
+# --- NEW: QT THREADING BRIDGE ---
+USER_INPUT_CALLBACK = None
+
 def ask_user(question: str) -> str:
     """
-    DEPRECATED IN WEB UI MODE (For now).
+    Interrupts the autonomous loop to ask the human user a question.
+    Use this when you are stuck, need clarification, or require a strategic decision to proceed.
     """
     console = Console()
-    console.print(f"\n[bold red]⚠️ Agent attempted to use ask_user to ask: {question}[/bold red]")
+    console.print(f"\n[bold yellow]⚠️ Agent is asking the user: {question}[/bold yellow]")
     
-    return (
-        "❌ SYSTEM ERROR: You are operating in a headless Web UI. The `ask_user` tool is strictly blocked because it freezes the server.\n"
-        "If you absolutely need the user's input or a decision to proceed, you MUST use the `finish_task` tool, put your question in the `message_to_user` argument, and shut down."
-    )
+    if USER_INPUT_CALLBACK:
+        return USER_INPUT_CALLBACK(question)
+        
+    return "❌ SYSTEM ERROR: User input callback not connected. You must proceed autonomously."
 
 def query_past_experience(keyword: str) -> str:
     """Searches the ChromaDB vector database for past solved tasks."""
@@ -33,7 +36,7 @@ def store_fact(topic: str, fact: str) -> str:
 
 def save_research_note(task_name: str, gathered_data: str) -> str:
     """
-    CRITICAL RESEARCH TOOL: Use this to save facts, URLs, and data you find on the web.
+    CRITICAL RESEARCH TOOL: Use this to save facts, URLs, outlines, and data you find.
     Instead of trying to hold information in your head, save it to your SQLite scratchpad.
     """
     return aquila_memory.save_scratchpad_note(task_name, gathered_data)
@@ -50,5 +53,5 @@ AGENT_TOOLS = {
     "ask_user": {"func": ask_user, "description": inspect.getdoc(ask_user)},
     "store_fact": {"func": store_fact, "description": inspect.getdoc(store_fact)},
     "save_research_note": {"func": save_research_note, "description": inspect.getdoc(save_research_note)},
-    "read_all_research_notes": {"func": read_all_research_notes, "description": inspect.getdoc(read_all_research_notes)},
+    "read_all_research_notes": {"func": read_all_research_notes, "description": inspect.getdoc(read_all_research_notes)}
 }
