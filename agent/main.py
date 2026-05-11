@@ -356,7 +356,7 @@ Example of finishing the task (FINAL STEP ONLY):
                 
         raise Exception("Fatal: LLM failed to generate a valid JSON plan after 3 attempts.")
 
-    def run_unified_task(self, task_name: str, user_request: str, mode: str, ledger_placeholder=None) -> str:
+    def run_unified_task(self, task_name: str, user_request: str, mode: str = "task", ui_callback=None) -> str:
         """The Master Execution Engine for both Autonomous Tasks and Deep Research."""
         console.set_task(task_name)
         mode_label = "Deep-Dive Research" if mode == "research" else "Autonomous Task"
@@ -375,6 +375,8 @@ Example of finishing the task (FINAL STEP ONLY):
         conversation_history = []
         step_count = 0
         max_steps = 50
+
+        ledger_text = f"Initializing {mode_label} Engine for: {task_name}\n"
         
         while step_count < max_steps:
             try:
@@ -390,12 +392,8 @@ Example of finishing the task (FINAL STEP ONLY):
                 current_objective = state["steps"][current_idx]["description"]
                 max_step_iterations = state["steps"][current_idx].get("max_iterations", 4)
                 
-                if ledger_placeholder:
-                    ledger_text = f"### 📚 {mode_label.split()[-1]} Ledger\n\n"
-                    for i, step in enumerate(state.get("steps", [])):
-                        status_icon = "✅" if step.get("status") == "completed" else ("🔄" if i == current_idx else "⏳")
-                        ledger_text += f"{status_icon} **Step {i+1}:** {step.get('description', '')}\n\n"
-                    ledger_placeholder.markdown(ledger_text)
+                if ui_callback:
+                    ui_callback(ledger_text)
 
                 step_attempts = sum(1 for msg in conversation_history if msg["role"] == "assistant")
                 
@@ -417,6 +415,10 @@ Example of finishing the task (FINAL STEP ONLY):
                 
                 console.log_iteration(step_count + 1, response_text)
                 
+                ledger_text += f"\n\n--- Iteration {step_count + 1} ---\n{response_text}\n"
+                if ui_callback:
+                    ui_callback(ledger_text)
+
                 parsed_response = parse_agent_response(response_text)
                 
                 if parsed_response.get("final_report"):
@@ -507,6 +509,10 @@ Example of finishing the task (FINAL STEP ONLY):
                 if last_tool_output:
                     conversation_history.append({"role": "user", "content": f"Tool Outputs:{last_tool_output}"})
                 
+                    ledger_text += f"\n{last_tool_output}\n"
+                    if ui_callback:
+                        ui_callback(ledger_text)
+
                 if has_advance:
                     console.print(f"[bold blue]✅ OS advancing state to next objective...[/bold blue]")
                     advance_json_state(task_file, advance_summary)

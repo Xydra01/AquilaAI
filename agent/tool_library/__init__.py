@@ -3,6 +3,8 @@ from .coding_tools import CODING_TOOLS
 from .agent_tools import AGENT_TOOLS
 from .os_tools import OS_TOOLS
 from .email_tools import EMAIL_TOOLS
+from .writing_tools import WRITING_TOOLS
+
 
 
 ALL_TOOLS = {
@@ -11,4 +13,5 @@ ALL_TOOLS = {
     **AGENT_TOOLS,
     **OS_TOOLS,
     **EMAIL_TOOLS,
+    **WRITING_TOOLS,
 }
