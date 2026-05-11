@@ -8,9 +8,7 @@ from dotenv import load_dotenv
 
 """Security firewall"""
 FORBIDDEN_FILES = ['.env', 'state.json', '.gitignore', 'chroma.sqlite3']
-# --- NEW: Added .log and database files to the forbidden extensions ---
 FORBIDDEN_EXTS = ['.pem', '.key', '.log', '.db', '.sqlite3']
-# --- NEW: Added forbidden directories so she can't wander into black holes ---
 FORBIDDEN_DIRS = ['Agent-Logs', 'vector_db', '__pycache__', '.git']
 
 """env and root path loading"""
@@ -31,7 +29,6 @@ def is_safe_path(path_obj: Path) -> bool:
         return False
     if path_obj.suffix in FORBIDDEN_EXTS:
         return False
-    # --- NEW: Block forbidden directories ---
     if any(part in FORBIDDEN_DIRS for part in path_obj.parts):
         return False
     return True
@@ -54,7 +51,6 @@ def write_file(file_path: str, content: str) -> str:
             
     target_path = Path(file_path)
     
-    # THE UPDATED SECURITY BLOCK
     if "Agent-Tasks" in target_path.parts:
         return ("❌ SECURITY BLOCK: You are not allowed to directly edit files in Agent-Tasks. "
                 "The Python OS handles task states dynamically via JSON. "
@@ -129,7 +125,6 @@ def list_directory(path="."):
             return f"Error: Directory '{target}' does not exist."
         items = []
         for item in target.iterdir():
-            # --- NEW: Hide forbidden directories from her sight ---
             if item.name in FORBIDDEN_DIRS:
                 continue
             if item.is_dir():
@@ -254,7 +249,6 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
     except ValueError:
         max_depth = 3
 
-    # THE FIX: Added 'vector_db' to the firewall!
     ignore_dirs = {'.git', '__pycache__', 'node_modules', 'venv', 'env', 'ai-agent-env', '.pytest_cache', 'vector_db'}
     
     target_path = Path(path).expanduser().resolve()

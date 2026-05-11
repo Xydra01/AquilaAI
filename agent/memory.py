@@ -17,7 +17,7 @@ class DualMemorySystem:
         self.collection = self.chroma_client.get_or_create_collection(name="episodic_experiences")
         self.tool_collection = self.chroma_client.get_or_create_collection(name="agent_tools")
 
-    # --- TOOL ROUTING ---
+    # Tool Routing
     def index_tools(self, tools_dict: dict):
         """Embeds all available tools into the vector database on startup."""
         if not tools_dict: return
@@ -69,7 +69,7 @@ class DualMemorySystem:
             ''')
             conn.commit()
 
-    # --- SCRATCHPAD ---
+    # Scratchpad
     def save_scratchpad_note(self, task_name: str, note: str) -> str:
         """Saves a temporary research note tied to the current task."""
         with sqlite3.connect(self.db_path) as conn:
@@ -93,7 +93,7 @@ class DualMemorySystem:
             compiled_notes += f"--- Note {idx + 1} ---\n{row[0]}\n\n"
         return compiled_notes
 
-    # --- SEMANTIC MEMORY ---
+    # Semantic Memory
     def store_fact(self, topic: str, fact: str) -> str:
         """Stores an absolute rule or preference."""
         with sqlite3.connect(self.db_path) as conn:
@@ -117,7 +117,7 @@ class DualMemorySystem:
             formatted_facts += f"- [{topic.upper()}]: {fact}\n"
         return formatted_facts
 
-    # --- LONG TERM MEMORY ---
+    # Long Term Episodic Memory
     def store_experience(self, task_name: str, summary: str):
         """Embeds a completed task summary into the vector database."""
         doc_id = f"{task_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

@@ -1,3 +1,4 @@
+# Web UI
 import streamlit as st
 import os
 import json
@@ -6,18 +7,21 @@ from pathlib import Path
 # Import the direct instances from main
 from main import global_agent, client, initiate_sleep_cycle
 
-# 1. Page Configuration
+# Page Configuration
 st.set_page_config(page_title="Aquila OS", page_icon="🦅", layout="wide")
 
 with st.sidebar:
     st.header("🦅 Aquila OS Controls")
     st.markdown("Select how you want Aquila to handle your next request.")
     
-    # --- THE NEW ROUTING TOGGLE ---
     operation_mode = st.radio(
         "Operation Mode:",
-        ["💬 Chat", "⚙️ Autonomous Task"],
-        help="Chat is for quick questions. Task wakes up the execution loop."
+        [
+            "💬 Chat", 
+            "⚙️ Autonomous Task",
+            "🔍 Research Mode"
+        ],
+        help="Select the specialized environment for your request."
     )
     
     st.divider()
@@ -28,16 +32,16 @@ with st.sidebar:
             st.session_state.messages.append({"role": "assistant", "content": sleep_report})
             st.rerun()
 
-# 2. Session State (Memory)
+# Session State
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "System Online. How can I assist you today?"}
     ]
 
-# 3. Split-Pane Layout
+# Split-Pane Layout
 chat_col, ledger_col = st.columns([1.5, 1])
 
-# --- RIGHT PANE: THE TASK LEDGER ---
+# Right Pane
 with ledger_col:
     st.header("📋 Active Task Ledger")
     st.markdown("---")
@@ -67,7 +71,7 @@ with ledger_col:
     else:
         ledger_placeholder.info("No active tasks. Aquila is idle.")
 
-# --- LEFT PANE: THE TERMINAL ---
+# Left Pane
 with chat_col:
     st.header("💬 Terminal")
     st.markdown("---")
@@ -83,32 +87,43 @@ with chat_col:
             
         with st.chat_message("assistant"):
             if operation_mode == "💬 Chat":
-                # --- THE FAST CHAT ROUTE (QWEN OPTIMIZED) ---
-                with st.spinner("Aquila is typing..."):
+                
+                with st.spinner("Aquila is searching her memory..."):
                     message_placeholder = st.empty()
                     
-                    chat_history = [{
-                        "role": "system", 
-                        "content": (
-                            "You are Aquila, an advanced autonomous AI. You are highly intelligent, slightly dry/witty, and speak with quiet confidence. "
-                            "You are currently in Chat Mode. Have a natural conversation with the user and assist them directly."
-                        )
-                    }]
+                    try:
+                        system_facts = global_agent.memory.get_all_facts()
+                        past_experiences = global_agent.memory.recall_experiences(prompt, n_results=20)
+                    except Exception as e:
+                        system_facts = "*(Error retrieving facts)*"
+                        past_experiences = "*(Error retrieving experiences)*"
+                        st.sidebar.error(f"Memory Error: {e}")
+
+                    base_system_prompt = (
+                        "You are Aquila, an advanced autonomous AI. You are highly intelligent, slightly dry/witty, and speak with quiet confidence. "
+                        "You are currently in Chat Mode. Have a natural conversation with the user and assist them directly.\\n\\n"
+                        "=== YOUR INTERNAL KNOWLEDGE BASE ===\\n"
+                        f"{system_facts}\\n\\n"
+                        f"{past_experiences}\\n\\n"
+                        "Use the knowledge above to inform your answers. If the information is not relevant to the user's current question, ignore it."
+                    )
                     
-                    recent_msgs = st.session_state.messages[-6:]
+                    chat_history = [{"role": "system", "content": base_system_prompt}]
+            
+                    recent_msgs = st.session_state.messages[-40:] 
                     while recent_msgs and recent_msgs[0]["role"] != "user":
                         recent_msgs.pop(0)
                     
                     for msg in recent_msgs:
                         chat_history.append({"role": msg["role"], "content": msg["content"]})
-                    
+                
                     try:
-                        final_response = client.chat(chat_history, temperature=0.6, timeout=45)
+                        final_response = client.chat(chat_history, temperature=0.6, timeout=60)
                         if not final_response or not final_response.strip():
                             final_response = "*(System Error: The LLM returned a blank string. Check terminal logs.)*"
                     except Exception as e:
                         if "timed out" in str(e).lower():
-                            final_response = "*(System Timeout: The local model took too long to respond.)*"
+                            final_response = "*(System Timeout: The local model took too long to process the injected memory context.)*"
                         else:
                             final_response = f"*(API Error: {str(e)})*"
                         
@@ -116,58 +131,84 @@ with chat_col:
                     st.session_state.messages.append({"role": "assistant", "content": final_response})
                     
             elif operation_mode == "⚙️ Autonomous Task":
-                # --- THE HEAVY EXECUTION ROUTE ---
                 status_placeholder = st.empty()
-                
                 clean_prompt = "".join(c if c.isalnum() or c.isspace() else "" for c in prompt)
                 task_name = "_".join(clean_prompt.split()[:4]).lower() or "unnamed_task"
-                
                 status_placeholder.info(f"🚀 Initializing autonomous task: `{task_name}`")
                 
                 try:
-                    final_result = global_agent.run_autonomous_task(
+                    final_result = global_agent.run_unified_task(
                         task_name=task_name, 
                         user_request=prompt, 
+                        mode="autonomous",
                         ledger_placeholder=ledger_placeholder
                     )
                     status_placeholder.success("Execution Complete.")
                     st.session_state.messages.append({"role": "assistant", "content": f"**Task '{task_name}' Finished.**\n\nResult: {final_result}"})
                 except Exception as e:
                     status_placeholder.error(f"Task Engine Error: {e}")
+
+            elif operation_mode == "🔍 Research Mode":
+                status_placeholder = st.empty()
+                clean_prompt = "".join(c if c.isalnum() or c.isspace() else "" for c in prompt)
+                research_topic = "_".join(clean_prompt.split()[:4]).lower() or "unnamed_research"
+                status_placeholder.info(f"📚 Initializing Deep-Dive Research: `{research_topic}`")
+                
+                try:
+                    final_report = global_agent.run_unified_task(
+                        task_name=research_topic, 
+                        user_request=prompt, 
+                        mode="research",
+                        ledger_placeholder=ledger_placeholder
+                    )
+                    status_placeholder.success("Research Complete.")
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": f"**Research Data Compiled: '{research_topic}'**\n\nCheck your `Agent-Research/` directory.\n\nSummary:\n{final_report}"
+                    })
+                except Exception as e:
+                    status_placeholder.error(f"Research Engine Error: {e}")
                     
         st.rerun()
 
-# --- THE FIX: TASK MANAGER MOVED TO THE BOTTOM ---
-# It still renders in the sidebar, but now has access to the ledger_placeholder!
+# Task manager and resume
 with st.sidebar:
     st.divider()
     st.subheader("📂 Task Manager")
     
-    if tasks_dir.exists():
-        pending_tasks = list(tasks_dir.glob("*.json"))
-        if pending_tasks:
-            task_names = [t.stem for t in pending_tasks]
-            task_to_resume = st.selectbox("In-Progress Tasks:", task_names)
+    # Scan both directories!
+    tasks_dir = Path("Agent-Tasks")
+    plans_dir = Path("Agent-Plans")
+    
+    pending_files = []
+    if tasks_dir.exists(): pending_files.extend([(f, "autonomous") for f in tasks_dir.glob("*.json")])
+    if plans_dir.exists(): pending_files.extend([(f, "research") for f in plans_dir.glob("*.json")])
+        
+    if pending_files:
+        # Create a display name indicating the mode
+        task_options = {f"{f.stem} ({mode.title()})": (f.stem, mode) for f, mode in pending_files}
+        selected_display = st.selectbox("In-Progress Ledgers:", list(task_options.keys()))
+        
+        task_to_resume, task_mode = task_options[selected_display]
+        
+        if st.button("▶️ Resume Selected", use_container_width=True):
+            resume_msg = f"Resuming {task_mode} background process: {task_to_resume}..."
+            st.session_state.messages.append({"role": "user", "content": resume_msg})
             
-            if st.button("▶️ Resume Selected Task", use_container_width=True):
-                resume_msg = f"Resuming background task: {task_to_resume}..."
-                st.session_state.messages.append({"role": "user", "content": resume_msg})
-                
-                with st.spinner(f"Waking up Aquila for '{task_to_resume}'..."):
-                    try:
-                        final_result = global_agent.run_autonomous_task(
-                            task_name=task_to_resume, 
-                            user_request="Resume and complete the remaining objectives in the task ledger.", 
-                            ledger_placeholder=ledger_placeholder
-                        )
-                        st.session_state.messages.append({
-                            "role": "assistant", 
-                            "content": f"**Task '{task_to_resume}' Finished.**\n\nResult: {final_result}"
-                        })
-                    except Exception as e:
-                        st.error(f"Task Engine Error: {e}")
-                st.rerun()
-        else:
-            st.caption("No pending tasks. Desk is clean.")
+            with st.spinner(f"Waking up Aquila for '{task_to_resume}'..."):
+                try:
+                    final_result = global_agent.run_unified_task(
+                        task_name=task_to_resume, 
+                        user_request="Resume and complete the remaining objectives in the task ledger.", 
+                        mode=task_mode,
+                        ledger_placeholder=ledger_placeholder
+                    )
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": f"**Process '{task_to_resume}' Finished.**\n\nResult: {final_result}"
+                    })
+                except Exception as e:
+                    st.error(f"Engine Error: {e}")
+            st.rerun()
     else:
-        st.caption("Task directory not found.")
+        st.caption("No pending ledgers. Desk is clean.")
