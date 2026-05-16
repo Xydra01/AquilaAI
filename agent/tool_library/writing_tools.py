@@ -22,25 +22,45 @@ def init_document(title: str, synopsis: str) -> str:
 
 def write_section(section_header: str, content: str) -> str:
     """Appends a new chunk/section of text to the active document."""
-    if not ACTIVE_DRAFT_FILE.exists():
+    state_file = ACTIVE_DRAFT_FILE
+    if not state_file.exists():
         return "❌ Error: No active document found. Use init_document first."
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state_data = json.load(f)
+            
+        sections = state_data.get("sections", [])
         
-    with open(ACTIVE_DRAFT_FILE, "r", encoding="utf-8") as f:
-        draft_state = json.load(f)
+        # Check if the section already exists (Upsert Logic)
+        section_exists = False
+        for i, sec in enumerate(sections):
+            if sec.get("header", "").strip() == section_header.strip():
+                sections[i]["content"] = content
+                section_exists = True
+                break
+                
+        if not section_exists:
+            sections.append({
+                "header": section_header,
+                "content": content
+            })
+            
+        state_data["sections"] = sections
         
-    draft_state["sections"].append({
-        "header": section_header,
-        "content": content
-    })
-    
-    # Update word count
-    words = len(content.split())
-    draft_state["word_count"] += words
-    
-    with open(ACTIVE_DRAFT_FILE, "w", encoding="utf-8") as f:
-        json.dump(draft_state, f, indent=4)
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(state_data, f, indent=4)
+            
+        word_count = len(content.split())
+        total_words = sum(len(s.get("content", "").split()) for s in sections)
         
-    return f"✅ Section '{section_header}' added ({words} words). Total document length: {draft_state['word_count']} words."
+        if section_exists:
+            return f"✅ Section '{section_header}' successfully OVERWRITTEN ({word_count} words). Total document length: {total_words} words."
+        else:
+            return f"✅ Section '{section_header}' added ({word_count} words). Total document length: {total_words} words."
+            
+    except Exception as e:
+        return f"❌ Error writing to draft state: {str(e)}"
 
 def read_outline() -> str:
     """Reads the current document outline (headers only) so you know what you have written so far."""
@@ -61,24 +81,34 @@ def read_outline() -> str:
 
 def compile_final_document(file_name: str) -> str:
     """Compiles all written sections into a final Markdown file and saves it to the disk."""
-    if not ACTIVE_DRAFT_FILE.exists():
-        return "❌ Error: No active document to compile."
+    state_file = ACTIVE_DRAFT_FILE
+    if not state_file.exists():
+        return "❌ Error: No active document to compile. Use init_document first."
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state_data = json.load(f)
+            
+        # Strip redundant .md extensions if she provided them
+        clean_file_name = file_name.replace(".md", "")
         
-    with open(ACTIVE_DRAFT_FILE, "r", encoding="utf-8") as f:
-        draft_state = json.load(f)
+        # Ensure it saves to the correct directory
+        save_path = Path("Agent-Drafts") / f"{clean_file_name}.md"
         
-    final_text = f"# {draft_state['title']}\n\n"
-    for sec in draft_state["sections"]:
-        final_text += f"## {sec['header']}\n\n{sec['content']}\n\n"
+        # Compile the markdown
+        markdown_content = f"# {state_data.get('title', 'Untitled Document')}\n\n"
+        for sec in state_data.get("sections", []):
+            markdown_content += f"## {sec.get('header', '')}\n\n{sec.get('content', '')}\n\n"
+            
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
         
-    output_path = DRAFT_DIR / f"{file_name}.md"
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(final_text)
-        
-    # Clear the buffer
-    ACTIVE_DRAFT_FILE.unlink()
+        # Clear the buffer
+        ACTIVE_DRAFT_FILE.unlink()
     
-    return f"✅ SUCCESS: Final document compiled and saved to {output_path}"
+        return f"✅ SUCCESS: Final document compiled and saved to {save_path}"
+    except Exception as e:
+        return f"❌ Error compiling document: {str(e)}"
 
 WRITING_TOOLS = {
     "init_document": {"func": init_document, "description": inspect.getdoc(init_document)},
