@@ -2,6 +2,11 @@
 *.db
 *.pyc
 *.md
+# Allow repository documentation (agent output .md files remain ignored)
+!README.md
+!ARCHITECTURE.md
+!docs/
+!docs/**
 *.log
 *.bin
 *.sqlite3

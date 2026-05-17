@@ -1,100 +1,480 @@
-# 🦅 AquilaAI (Version 3.1)
+# Aquila OS 3.2
 
-**A Multi-Modal, Locally-Run Autonomous Agent OS**
+**Aquila OS** is a **local-first autonomous AI agent** that runs on your machine, talks to **[Ollama](https://ollama.com)** with a custom fine-tuned workflow model (`aquila`), and executes real work through **strict JSON tool-calling** — file I/O, web research, coding, email, and long-form writing — without sending your data to a cloud LLM.
 
-AquilaAI is an advanced, tool-based autonomous agent designed to execute complex research, software development, and system operation tasks. Built entirely around open-source, locally hosted LLMs (via Ollama), AquilaAI acts as a true digital colleague capable of deep compartmentalization, memory management, and self-correction.
+Version **3.2** is a stabilization and quality release on top of 3.1: a **PySide6 desktop GUI** replaces Streamlit as the primary interface, the **agent loop** is hardened for reliable tool calls, **Writing Mode** ships end-to-end, attachments work in all modes, and a **pytest suite** (~30 modules, 98+ tests) covers core behavior.
 
-## 🚀 Key Features
+For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
-### 1. The Unified Execution Engine
+---
 
-In Version 3.1, AquilaAI abandoned legacy reactive chat loops in favor of a robust, state-managed **Unified Execution Loop**.
+## Table of contents
 
-* **The OS Enforcer:** Aquila operates on a strict iteration budget per objective. If she gets stuck debugging code or falls down a research rabbit hole, the OS Enforcer physically interrupts her context window, forcing her to save her work and advance to the next step.
-* **The "Kill Switch":** Integrated watchdog timers protect local hardware from infinite loops or generation hang-ups.
+1. [What Aquila does](#what-aquila-does)
+2. [What's new in 3.2](#whats-new-in-32)
+3. [System requirements](#system-requirements)
+4. [Installation](#installation)
+5. [Quick start](#quick-start)
+6. [Operational modes](#operational-modes)
+7. [How the agent loop works](#how-the-agent-loop-works)
+8. [Filesystem layout](#filesystem-layout)
+9. [Tools reference](#tools-reference)
+10. [Memory and sleep cycle](#memory-and-sleep-cycle)
+11. [Attachments](#attachments)
+12. [Configuration](#configuration)
+13. [Testing](#testing)
+14. [Security model](#security-model)
+15. [Troubleshooting](#troubleshooting)
+16. [Known limitations and 3.3 direction](#known-limitations-and-33-direction)
+17. [Development notes](#development-notes)
 
-### 2. Deep-Dive Research & Autonomous Tasking
+---
 
-AquilaAI operates across distinct, specialized modes routed through a Streamlit UI:
+## What Aquila does
 
-* **🔍 Research Mode:** Utilizes an integrated, privacy-focused web scraper (with Cloudflare bypass and native PDF parsing) to autonomously gather, synthesize, and extract targeted data.
-* **⚙️ Autonomous Task:** Empowers Aquila to write multi-file software projects, manipulate local directories, and run automated testing.
-* **💬 Cognitive Chat:** A fast, RAG-injected chat interface for rapid interactions that bypasses the heavy tool-execution loop.
+Aquila is not a chat wrapper. It is a small **operating system for an agent**:
 
-### 3. The JSON "Final Report" Schema
+| Layer | Responsibility |
+|-------|----------------|
+| **GUI** (`agent/gui.py`) | PySide6 app: chat, autonomous tasks, research, writing, task tracker, attachments |
+| **Brain** (`agent/main.py`) | Plans multi-step work, runs the tool loop, saves deliverables, sleep consolidation |
+| **Tools** (`agent/tools.py` + `agent/tool_library/`) | Callable capabilities exposed to the model via JSON schema |
+| **Memory** (`agent/memory.py`) | SQLite facts + ChromaDB episodic / tool / codebase search |
+| **Ledgers** (`Agent-Tasks/`, `Agent-Plans/`) | JSON state machines that survive restarts and UI disconnects |
+| **Search** (Docker SearXNG) | Private web search on `localhost:8080` — no Bing/Google API keys |
 
-Aquila uses a strictly constrained JSON schema for all internal monologue and tool execution. By injecting the `"final_report"` key directly into her root schema, the OS securely extracts massive, heavily formatted Markdown documentation and code blocks without breaking the Python JSON parsers.
+The model (`aquila`, based on **Qwen 3.5 9B** with 32k context) must output **only** valid JSON each turn: `reasoning`, optional `final_report`, and a `tools` array. The OS executes tools, feeds results back, and advances step ledgers until the task completes.
 
-### 4. Epistemic State Tracking (The Scratchpad)
+---
 
-To prevent context-window bloat, Aquila undergoes a complete short-term memory wipe between objectives. To survive this, she relies on **The First Step Rule** and a **Mandatory Paper Trail**:
+## What's new in 3.2
 
-* She must use the `save_research_note` tool to dump variables, code structures, and facts to her local scratchpad.
-* Upon starting a new objective, her very first autonomous action is to use `read_all_research_notes` to re-orient herself and pass the context to her "future self."
+Compared to **Aquila 3.1** (Streamlit-first, research-complete):
 
-## 🛠️ Architecture Stack
+### User-facing
 
-* **LLM Engine:** Ollama (Local)
-* **Web Search:** Local SearXNG Instance
-* **UI/Frontend:** Streamlit
-* **Web Extraction:** BeautifulSoup, PyMuPDF, Cloudscraper
+- **PySide6 desktop UI** — dark theme, tabbed ledger tracker, streaming chat, cancel button, resume in-progress ledgers, **Clear Chat View** (display only; history preserved for the model).
+- **Writing Mode** — `init_document`, `write_section`, `read_outline`, `compile_final_document`; drafts under `Agent-Drafts/`.
+- **Attachments** — images (vision in chat/research), PDF, DOCX, CSV, HTML, and many text/code formats via `agent/file_parser.py` (5 MB cap per file).
+- **Task State Tracker** — live HTML for autonomous, research (`Agent-Plans/`), and writing steps.
 
-## 🏁 Getting Started & Setup
+### Agent core
 
-Currently, AquilaAI v3.1 requires manual orchestration of its backend services.
+- **Dynamic strict JSON schema** — `build_strict_schema()` generates per-tool `anyOf` branches from function signatures; Ollama `format` + `stream=False` on tool turns (streaming broke schema compliance).
+- **Loop guards** — max 6 tools per turn, parse/schema retry, duplicate-tool warning, programmatic advance on stall, `complete_ledger_state()` on `finish_task`.
+- **Deliverables** — `save_task_deliverable()` writes `Agent-Research/{task}.md` or `Agent-Creations/{task}.md`; research `final_report` at top level of JSON response.
+- **Attachment injection** — `text_chunks` injected into planner and first loop turn.
+- **Shared memory singleton** — `memory_singleton.aquila_memory` used by `main` and `agent_tools` (fixes split-brain scratchpad).
+- **Sleep cycle** — consolidates completed tasks from both `Agent-Tasks/` and `Agent-Plans/`.
 
-### Prerequisites
+### Engineering
 
-* **Python 3.10+**
-* **Ollama** (Locally installed and running)
-* **Docker** (Required for the SearXNG local search container)
+- **`requirements.txt`** at repo root.
+- **`agent/pytest.ini`** + **`agent/tests/conftest.py`** + 30 test modules (unit + optional live Ollama).
+- **`ARCHITECTURE.md`** — full system documentation.
 
-### Step 1: Initialize the LLM Engine
+### Intentionally unchanged / legacy
 
-Ensure Ollama is running on your machine and that you have pulled your preferred target model.
+- **`agent/app.py`** (Streamlit) — legacy 3.1 UI; **not maintained** for 3.2. Use `gui.py`.
+- **`route_tools()`** — semantic tool routing exists but is **not wired** into the loop; full tool schema is always sent.
+
+---
+
+## System requirements
+
+| Component | Version / notes |
+|-----------|-----------------|
+| **OS** | Windows 10+, macOS, or Linux |
+| **Python** | 3.10+ recommended |
+| **Ollama** | Running locally; model `aquila` built from repo `Modelfile` |
+| **Docker** | For SearXNG (`docker compose`); port **8080** |
+| **RAM** | 16 GB+ recommended for 9B model + Chroma |
+| **GPU** | Optional; Ollama uses GPU when available |
+
+---
+
+## Installation
+
+### 1. Clone and enter the repo
 
 ```bash
-ollama serve
-ollama pull llama3  # Or your designated Aquila model
-
+git clone <your-repo-url> agent-projects
+cd agent-projects
 ```
 
-### Step 2: Spin Up Local Web Search (SearXNG)
+**Important:** Always run Aquila from the **repository root** (`agent-projects/`). Tool paths and `Agent-*` output folders are resolved relative to `os.getcwd()`.
 
-Aquila relies on a local SearXNG instance to perform privacy-respecting, rate-limit-free web scraping. Start the container via Docker:
+### 2. Create a virtual environment
 
 ```bash
-docker run -d -p 8080:8080 searxng/searxng
+python -m venv ai-agent-env
 
+# Windows
+ai-agent-env\Scripts\activate
+
+# macOS / Linux
+source ai-agent-env/bin/activate
 ```
 
-### Step 3: Install Python Dependencies
-
-Clone the repository and install the required environmental packages:
+### 3. Install Python dependencies
 
 ```bash
-git clone https://github.com/your-repo/aquila-ai.git
-cd aquila-ai
 pip install -r requirements.txt
-
 ```
 
-### Step 4: Launch the OS
-
-Boot up the Streamlit interface to access the Unified Execution Engine:
+Optional Excel attachments (`.xlsx`):
 
 ```bash
-streamlit run app.py
-
+pip install openpyxl>=3.1.0
 ```
 
-Navigate to `http://localhost:8501` in your browser. From the sidebar, you can select between Chat, Research, or Task modes and begin deploying Aquila.
+### 4. Install and build the Ollama model
 
-## 🔮 The Roadmap (Version 4.0 "True OS")
+Install [Ollama](https://ollama.com), pull the base model, then create `aquila`:
 
-The 3.x era is laying the groundwork for Aquila's evolution into a persistent desktop OS.
+```bash
+ollama pull qwen3.5:9b
+ollama create aquila -f Modelfile
+```
 
-* **v3.2:** Transition to a Python Qt (PySide6) GUI with a real-time, side-by-side Writing Canvas. This update will also introduce a **1-Click executable/installer** to automatically orchestrate Docker, local servers, and the Python backend for frictionless startup.
-* **v3.3:** Code Mode Canvas with a sandboxed TDD (Test-Driven Development) loop to resolve linter/execution catch-22s.
-* **v3.4:** Cross-Modal Interoperability (e.g., Write Mode autonomously triggering Research Mode).
-* **v4.0:** Deep Git integration, recurring background tasks, and a unified calendar/email dashboard.
+The `Modelfile` sets `num_ctx 32768` and `temperature 0.2` at the model level; the agent uses lower temperatures (0.1–0.2) for task loops and 0.6 for chat.
+
+Verify:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
+```
+
+### 5. Start SearXNG (web search)
+
+```bash
+docker compose up -d
+```
+
+Search endpoint: `http://localhost:8080/search` (used by `web_search`).
+
+### 6. Optional: email tools
+
+Copy `.env.EXAMPLE` to `.env` at the repo root and set SMTP variables for `send_email_tool`.
+
+---
+
+## Quick start
+
+### One-command startup (recommended)
+
+```bash
+./start.sh
+```
+
+`start.sh` activates `ai-agent-env`, starts Docker, and launches `python agent/gui.py`.
+
+### Manual startup
+
+```bash
+source ai-agent-env/bin/activate   # or Scripts\activate on Windows
+docker compose up -d
+python agent/gui.py
+```
+
+### First tasks to try
+
+| Mode | Example prompt |
+|------|----------------|
+| **Chat** | "Summarize what Aquila OS does in three bullets." |
+| **Autonomous** | "Create `hello_aquila.py` in the repo root that prints Hello from Aquila and run it." |
+| **Research** | "Compare local vs cloud LLM deployment costs for 7B–70B models in 2026." |
+| **Writing** | "Write a 3-section markdown essay on why local AI agents matter." |
+
+After a research or writing task finishes, check **`Agent-Research/`** or **`Agent-Drafts/`** for output. Ledgers live in **`Agent-Tasks/`** or **`Agent-Plans/`**.
+
+---
+
+## Operational modes
+
+```mermaid
+flowchart LR
+    subgraph modes [Aquila modes]
+        Chat[Chat Mode]
+        Task[Autonomous Task]
+        Research[Research Mode]
+        Writing[Writing Mode]
+    end
+    Chat -->|no ledger| Ollama[Ollama aquila]
+    Task --> LedgerTasks[Agent-Tasks JSON]
+    Research --> LedgerPlans[Agent-Plans JSON]
+    Writing --> LedgerTasks
+    LedgerTasks --> Loop[run_unified_task]
+    LedgerPlans --> Loop
+    Loop --> Ollama
+```
+
+| Mode | Ledger file | Output folder | Completion |
+|------|-------------|---------------|------------|
+| **Chat** | None | N/A (in-UI only) | Streaming response |
+| **Autonomous** | `Agent-Tasks/{task_name}.json` | `Agent-Creations/` (if `final_report`) | `finish_task` |
+| **Research** | `Agent-Plans/{task_name}.json` | `Agent-Research/{task_name}.md` | `finish_task` + `final_report` |
+| **Writing** | `Agent-Tasks/{task_name}.json` | `Agent-Drafts/` via `compile_final_document` | `finish_task` + brief summary in `final_report` |
+
+**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`.
+
+---
+
+## How the agent loop works
+
+High-level flow for autonomous / research / writing (`run_unified_task` in `agent/main.py`):
+
+1. **Planning** — If no ledger exists, `generate_plan()` asks the model for a JSON object: `steps[]` each with `description` and `max_iterations`. Plan is saved to disk.
+2. **Step loop** — For the current step index, the OS sends one objective at a time. Conversation history is **wiped** when advancing steps (intentional amnesia); scratchpad notes persist in SQLite.
+3. **Model turn** — Non-streaming chat with `format=build_strict_schema(executable_tools)`. Prefill starts `{"reasoning": "` to steer JSON.
+4. **Validation** — `parse_agent_response()` + `validate_tool_calls()`; on failure, retry message (max 2 parse failures then forced advance or `finish_task` on last step).
+5. **Execution** — Up to **6** tools per turn via `ToolExecutor`. Meta-tools: `mark_objective_complete`, `finish_task`.
+6. **Advance** — `mark_objective_complete` updates ledger; `finish_task` saves deliverable, `complete_ledger_state()`, stores episodic memory.
+7. **Guards** — Iteration limit per step, duplicate-tool warning, OS override messages when time is up.
+
+**Paper trail rule:** The model should call `save_research_note` before `mark_objective_complete`, and `read_all_research_notes` at the start of a new step after a memory wipe.
+
+---
+
+## Filesystem layout
+
+### Repository (tracked)
+
+```
+agent-projects/
+├── agent/                 # Application package
+│   ├── main.py            # Agent brain, loop, Ollama client
+│   ├── gui.py             # PySide6 UI (primary)
+│   ├── prompts.py         # System prompts per mode
+│   ├── tools.py           # Core file tools + security
+│   ├── memory.py          # DualMemorySystem
+│   ├── memory_singleton.py
+│   ├── file_parser.py     # Attachments
+│   ├── gui_state.py       # Ledger path + HTML renderers
+│   ├── tool_library/      # Extended tools
+│   └── tests/             # pytest suite
+├── requirements.txt
+├── Modelfile              # Ollama aquila model
+├── docker-compose.yml     # SearXNG
+├── start.sh
+├── README.md              # This file
+└── ARCHITECTURE.md        # Deep technical reference
+```
+
+### Runtime (created at use; mostly gitignored)
+
+| Path | Purpose |
+|------|---------|
+| `Agent-Tasks/` | JSON ledgers for autonomous + writing |
+| `Agent-Plans/` | JSON ledgers for research |
+| `Agent-Research/` | Research markdown deliverables |
+| `Agent-Creations/` | Task markdown deliverables |
+| `Agent-Drafts/` | Writing-mode draft state + compiled docs |
+| `Agent-Logs/` | Per-run execution logs |
+| `Agent-Memory/` | SQLite `fact_graph.db` |
+| `agent/vector_db/` | ChromaDB persistence |
+
+---
+
+## Tools reference
+
+Tools are merged from `SURVIVAL_TOOLS` and `tool_library.ALL_TOOLS`. Internal `_index_codebase` is indexed into Chroma but **excluded** from the executable schema.
+
+### Core (`agent/tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `read_file`, `read_file_lines` | Read workspace files |
+| `write_file`, `replace_in_file` | Write / patch files |
+| `list_directory`, `get_directory_tree` | Directory listing |
+| `mark_objective_complete` | Advance ledger step |
+| `finish_task` | Complete entire task |
+| `search_tool_library` | Semantic search over tool docs in Chroma |
+
+### Web (`tool_library/web_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `web_search` | SearXNG JSON API |
+| `read_webpage` | Fetch and extract page text |
+
+### Coding (`tool_library/coding_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `semantic_code_search` | Chroma codebase search |
+| `replace_function` | AST-aware function replace |
+| `test_python_script` | Run a Python file |
+
+### OS (`tool_library/os_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `search_in_file`, `search_files` | Grep-style search |
+| `create_directory`, `delete_file`, `rename_file`, `move_file` | Filesystem ops |
+| `manage_process` | Start/stop allowlisted processes |
+| `get_env_variables` | Environment snapshot |
+
+### Agent / memory (`tool_library/agent_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `save_research_note`, `read_all_research_notes` | SQLite scratchpad per task |
+| `store_fact`, `query_past_experience` | Long-term memory |
+| `ask_user` | Blocking question to GUI |
+
+### Writing (`tool_library/writing_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `init_document`, `write_section`, `read_outline` | Draft buffer |
+| `compile_final_document` | Flush to `Agent-Drafts/` |
+
+### Email (`tool_library/email_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `send_email_tool` | SMTP (requires `.env`) |
+
+---
+
+## Memory and sleep cycle
+
+**Dual memory** (`DualMemorySystem`):
+
+- **Facts** — SQLite `Agent-Memory/fact_graph.db`
+- **Episodic** — ChromaDB `agent/vector_db/` (experiences, tool docs, codebase chunks)
+
+**Sleep cycle** (`initiate_sleep_cycle()` from GUI or API): scans completed ledgers in `Agent-Tasks/` and `Agent-Plans/`, consolidates scratchpad + outcomes into long-term memory.
+
+---
+
+## Attachments
+
+Use the paperclip in the GUI to attach files before sending a message. `file_parser.process_local_attachments()` returns:
+
+- **Text chunks** — injected into planner / first loop turn as `--- ATTACHED CONTEXT ---`
+- **Images** — base64 payloads for Ollama vision in chat/research
+
+Supported formats include `.pdf`, `.docx`, `.csv`, `.html`, images (`.png`, `.jpg`, `.webp`, `.gif`), and common code/text extensions. Max **5 MB** per file; CSV capped at 200 rows in preview.
+
+---
+
+## Configuration
+
+| Item | Location | Notes |
+|------|----------|-------|
+| Ollama URL / model | `agent/main.py` → `OllamaClient` | Default `http://127.0.0.1:11434`, model `aquila` |
+| SearXNG | `docker-compose.yml`, `searxng-settings.yml` | Port 8080 |
+| SMTP | `.env` (from `.env.EXAMPLE`) | Email tool only |
+| Pytest | `agent/pytest.ini` | `live` marker for Ollama integration tests |
+| Working directory | Process cwd | Must be repo root for consistent `Agent-*` paths |
+
+---
+
+## Testing
+
+From `agent/` with venv active:
+
+```bash
+cd agent
+pytest tests/ -q --ignore=tests/test_live_ollama.py --ignore=tests/test_live_prompts.py
+```
+
+Include live Ollama tests (requires running `aquila` on port 11434):
+
+```bash
+pytest tests/ -m live -v
+```
+
+**Coverage highlights:**
+
+| Area | Test modules |
+|------|----------------|
+| Planner JSON recovery | `test_behavior_planner.py` |
+| Loop guards / schema | `test_loop_guards.py`, `test_schema_tools.py` |
+| Unified task flow | `test_run_unified_task.py` |
+| GUI / tracker | `test_gui.py`, `test_gui_state_tracker.py` |
+| Attachments | `test_attachment_injection.py`, `test_file_parser.py` |
+| Ledgers / sleep | `test_ledger_completion.py`, `test_sleep_cycle.py` |
+| Tools | `test_coding_tools.py`, `test_web_tools.py`, `test_writing_tools.py`, … |
+
+---
+
+## Security model
+
+Defense in depth for a tool-using agent:
+
+1. **Path firewall** — `is_safe_path()` blocks writes outside `AGENT_ROOT_DIR` (repo cwd).
+2. **Strict JSON schema** — Unknown tools and malformed tool objects are rejected.
+3. **Ledger protection** — Tools cannot directly edit `Agent-Tasks/*.json` / `Agent-Plans/*.json`.
+4. **Process allowlist** — `manage_process` only starts/stops known apps.
+5. **Output truncation** — Large directory trees and tool outputs are capped.
+
+**You are still running an autonomous agent with shell and file access.** Use on trusted machines; review plans and logs in `Agent-Logs/`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Connection refused` to Ollama | Ollama not running | `ollama serve` / start Ollama app |
+| Model not found | `aquila` not created | `ollama create aquila -f Modelfile` |
+| `web_search` fails | SearXNG down | `docker compose up -d` |
+| Empty Task State Tracker | Wrong cwd or missing ledger | Run from repo root; check `Agent-Plans/` or `Agent-Tasks/` |
+| Deliverable not on disk | Missing `final_report` or wrong mode path | Research: top-level `final_report` in JSON; see `save_task_deliverable()` |
+| `tool_name` instead of `name` | Streaming on tool turns | 3.2 uses `stream=False` for tool loop — ensure you are on 3.2 `main.py` |
+| Double chat messages | Old GUI | Upgrade to 3.2 `chat_finished` signal handling |
+| Tests fail on import | Wrong directory | Run pytest from `agent/` per `pytest.ini` |
+| Chroma / slow test collection | `Agent()` indexes on import | Tests use lazy `global_agent` proxy where possible |
+
+---
+
+## Known limitations and 3.3 direction
+
+Documented in [ARCHITECTURE.md §16](ARCHITECTURE.md):
+
+- Planner `max_iterations` defaults are often too low for complex steps; OS may force-advance before work is done.
+- No **reflect/act** turn split yet (planned for 3.3).
+- `route_tools()` not used — full tool list every turn.
+- Streamlit UI not maintained.
+- Some integration paths are sensitive to **cwd** and duplicate tool calls under budget pressure.
+
+**3.3 (planned):** budget-aware planner, loop engine refactor, reflect/act turns, smarter iteration accounting, step-entry scratchpad injection.
+
+---
+
+## Development notes
+
+### Project conventions
+
+- **Primary UI:** `agent/gui.py` — not `app.py`.
+- **Do not normalize** bad tool calls (e.g. `tool_name` → `name`); fix via schema + non-streaming.
+- **Commits:** User-led; this README documents release state on branch `Aquila-3.2`.
+- **Logs:** `Agent-Logs/{task}_{timestamp}.log` for full iteration + tool traces.
+
+### Useful commands
+
+```bash
+# Dump current strict JSON schema (dev)
+python agent/test_schema.py
+
+# Sleep consolidation (if exposed in your build)
+python -c "from main import initiate_sleep_cycle; print(initiate_sleep_cycle())"
+```
+
+### Branch / release
+
+- **3.1:** `Aquila-3.1` — Streamlit, research mode complete.
+- **3.2:** `Aquila-3.2` — PySide6, writing mode, tests, loop hardening (this document).
+
+---
+
+## Credits and model
+
+- Base model: **Qwen 3.5 9B** via Ollama (`Modelfile`).
+- Web search: **SearXNG** (Docker).
+- Desktop UI: **Qt for Python (PySide6)**.
+
+For questions about internals, start with [ARCHITECTURE.md](ARCHITECTURE.md) §17 (key files to read first).

@@ -43,6 +43,8 @@ def check_syntax(code_string: str):
     
 def write_file(file_path: str, content: str) -> str:
     """Creates a new file or completely overwrites an existing one."""
+    if not is_safe_path(Path(file_path)):
+        return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\n", "", content)
@@ -137,6 +139,14 @@ def list_directory(path="."):
 
 def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
     """Replaces exact target text with replacement text in a file."""
+    if not is_safe_path(Path(file_path)):
+        return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
+
+    full_path = AGENT_ROOT_DIR / file_path
+    
+    if not full_path.exists():
+        return f"❌ Error: File {file_path} not found."
+    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()

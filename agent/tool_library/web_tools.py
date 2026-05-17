@@ -44,7 +44,7 @@ def web_search(query: str, max_results: int = 5) -> str:
         return f"❌ Error executing local web search: {e}"
 
 def read_webpage(url: str) -> str:
-    """Fetches a webpage or PDF and extracts clean text locally, bypassing basic bot protections."""
+    """Fetches a webpage or PDF and extracts clean text locally, bypassing basic bot protections. SEARCH WEB HAS AN AUTO_PARSER ONLY USE THIS IF YOU NEED TO SEARCH A SPECIFIC URL THAT WASN'T SCRAPED ALREADY. PRIRITIZE USING web_search OVER USING read_webpage ."""
     try:
         scraper = cloudscraper.create_scraper()
         headers = {
