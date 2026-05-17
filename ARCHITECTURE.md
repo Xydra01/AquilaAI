@@ -557,9 +557,39 @@ SleepWorker → initiate_sleep_cycle
 
 ---
 
-## 16. Extension points and rough edges
+## 16. Aquila OS 3.3 — Loop and planner
 
-| Item | Status (3.2) |
+### Planner (`plan_validator.py`)
+
+- Each step includes `step_kind` (`search`, `read`, `code`, `verify`, `synthesize`, `write`, `finalize`) and `max_iterations` tuned via **BUDGET_RUBRIC** (min/default/max per kind).
+- `validate_and_tune_plan()` runs after `generate_plan()`; caps at 8 steps and total budget 60.
+
+### Execution loop (`loop_engine.py`)
+
+```mermaid
+flowchart TD
+    stepEntry[OS step entry: scratchpad + cwd + hints]
+    actTurn[Act turn: strict tool schema]
+    tools[Execute tools]
+    reflectTurn[Reflect turn: reasoning only]
+    stepEntry --> actTurn
+    actTurn --> tools
+    tools --> reflectTurn
+    reflectTurn --> actTurn
+```
+
+- **Reflect/act:** After non-meta tools run, next turn is reflect-only (`REFLECT_SCHEMA`); then act again.
+- **Budget:** Parse/schema failures pop the assistant message (do not burn `step_attempts`). Grace +2 iterations once per step if tools succeeded.
+- **Step entry:** Scratchpad notes, `WORKSPACE_ROOT`, and `step_kind` hints injected without an LLM call.
+- **Hardening:** `validate_tool_arguments()`, `save_research_note` 8KB cap, `normalize_workspace_path()` for doubled `agent/agent` paths.
+
+`Agent.run_unified_task` delegates to `LoopEngine.run()`.
+
+---
+
+## 17. Extension points and rough edges
+
+| Item | Status (3.3) |
 |------|----------------|
 | `route_tools(objective)` | Implemented, not used in `run_unified_task` (full schema + server guards instead) |
 | Inter-modal automation | Prompt says “in development” |
@@ -570,8 +600,10 @@ SleepWorker → initiate_sleep_cycle
 | Dependencies | `requirements.txt` at repo root |
 | Chat double-bubble | Fixed: `chat_finished` vs `task_finished` in `gui.py` |
 | Attachment injection | Fixed: `text_chunks` injected in planner + first loop turn |
-| Loop guards | Max 6 tools/turn, parse recovery, forced advance on stall |
-| Tests | 98+ tests (unit + live Ollama) in `agent/tests/`; run `pytest` from `agent/` |
+| Loop engine | `loop_engine.py`: reflect/act, grace budget, step entry ritual |
+| Planner tuning | `plan_validator.py` after `generate_plan` |
+| Loop guards | Max 6 tools/turn, parse pop (no budget burn), smart override before force advance |
+| Tests | 100+ tests (unit + live Ollama) in `agent/tests/`; run `pytest` from `agent/` |
 | Ledger on `finish_task` | `complete_ledger_state()` marks all steps + status completed |
 | Research deliverables | `save_task_deliverable()` → `Agent-Research/{task}.md` (top-level or `finish_task` args) |
 | Sleep cycle | Consolidates `Agent-Tasks/` and `Agent-Plans/` |
@@ -580,11 +612,12 @@ SleepWorker → initiate_sleep_cycle
 
 ---
 
-## 17. Quick reference: key files to read first
+## 18. Quick reference: key files to read first
 
 | Question | Start here |
 |----------|------------|
-| How does the agent loop work? | `agent/main.py` — `run_unified_task`, `generate_plan` |
+| How does the agent loop work? | `agent/loop_engine.py`, `agent/main.py` — `run_unified_task`, `generate_plan` |
+| Planner budgets? | `agent/plan_validator.py` |
 | How are tools registered? | `agent/tools.py`, `agent/tool_library/__init__.py` |
 | How is memory stored? | `agent/memory.py` |
 | What does the model see? | `agent/prompts.py` |

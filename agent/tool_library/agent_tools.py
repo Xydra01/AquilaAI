@@ -32,12 +32,27 @@ def store_fact(topic: str, fact: str) -> str:
     """
     return aquila_memory.store_fact(topic, fact)
 
+MAX_SCRATCHPAD_NOTE_BYTES = 8 * 1024
+
+
 def save_research_note(task_name: str, gathered_data: str) -> str:
     """
     CRITICAL RESEARCH TOOL: Use this to save facts, URLs, outlines, and data you find.
     Instead of trying to hold information in your head, save it to your SQLite scratchpad.
     """
-    return aquila_memory.save_scratchpad_note(task_name, gathered_data)
+    data = gathered_data or ""
+    truncated = False
+    encoded = data.encode("utf-8")
+    if len(encoded) > MAX_SCRATCHPAD_NOTE_BYTES:
+        data = encoded[:MAX_SCRATCHPAD_NOTE_BYTES].decode("utf-8", errors="ignore")
+        truncated = True
+    result = aquila_memory.save_scratchpad_note(task_name, data)
+    if truncated:
+        return (
+            f"{result}\n⚠️ OS NOTE: gathered_data was truncated to {MAX_SCRATCHPAD_NOTE_BYTES} "
+            "bytes to prevent JSON parse failures. Save smaller chunks."
+        )
+    return result
 
 def read_all_research_notes(task_name: str) -> str:
     """

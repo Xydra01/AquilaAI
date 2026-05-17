@@ -326,6 +326,58 @@ def validate_tool_calls(tool_calls: list) -> tuple[bool, str]:
     return True, ""
 
 
+def _tool_argument_properties(tool_name: str) -> dict | None:
+    """Return properties dict for a tool's arguments from the strict schema."""
+    tools = get_executable_tools()
+    if tool_name not in tools:
+        return None
+    func = tools[tool_name]["func"]
+    sig = inspect.signature(func)
+    props = {}
+    for param_name, param in sig.parameters.items():
+        if param.kind in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL):
+            continue
+        props[param_name] = {"type": "string"}
+    return props
+
+
+def validate_tool_arguments(tool_calls: list) -> tuple[bool, str]:
+    """Reject unknown keys inside each tool's arguments object."""
+    for i, tc in enumerate(tool_calls):
+        if not isinstance(tc, dict):
+            continue
+        name = tc.get("name")
+        args = tc.get("arguments")
+        if not name or not isinstance(args, dict):
+            continue
+        allowed = _tool_argument_properties(name)
+        if allowed is None:
+            continue
+        extra = set(args.keys()) - set(allowed.keys())
+        if extra:
+            return (
+                False,
+                f"tools[{i}] ({name}) illegal argument keys {sorted(extra)}. "
+                f"Allowed: {sorted(allowed.keys())}.",
+            )
+    return True, ""
+
+
+REFLECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {
+            "type": "string",
+            "description": "Brief reflection on tool results and next steps. No tools this turn.",
+        },
+    },
+    "required": ["reasoning"],
+    "additionalProperties": False,
+}
+
+META_TOOL_NAMES = frozenset({"mark_objective_complete", "finish_task"})
+
+
 class ToolExecutor:
     def _coerce_arguments(self, func, arguments: dict) -> dict:
         """Coerce string LLM arguments to int where the signature expects int."""
@@ -478,28 +530,66 @@ class Agent:
         return self.client.chat(messages, temperature=0.6, stream=stream)
 
     def generate_plan(self, topic_name: str, user_request: str, mode: str, text_chunks: list = None, image_payloads: list = None) -> str:
+        from plan_validator import BUDGET_RUBRIC, STEP_KINDS
+
+        workspace_root = os.getcwd()
+        rubric_lines = "\n".join(
+            f"  - {kind}: min={lo}, default={default}, max={hi}"
+            for kind, (lo, default, hi) in BUDGET_RUBRIC.items()
+        )
+        kinds_list = ", ".join(STEP_KINDS)
+
         if mode == "research":
             role_desc = "You are Aquila's Lead Researcher."
-            objectives = "Focus on formulating searches, extracting technical data, and cross-referencing."
-            example_steps = """{"status": "pending", "description": "Search...", "max_iterations": 3}"""
+            objectives = (
+                "Decompose into focused steps: search → read sources → save notes → "
+                "synthesize → final report. Do NOT combine search+read+synthesis in one step."
+            )
+            example_step = (
+                '{"status": "pending", "description": "Search for ...", '
+                '"step_kind": "search", "max_iterations": 4}'
+            )
+        elif mode == "writing":
+            role_desc = "You are Aquila's Writing Mode planner."
+            objectives = "Outline, draft sections, then compile. One major writing action per step."
+            example_step = (
+                '{"status": "pending", "description": "Draft section 1", '
+                '"step_kind": "write", "max_iterations": 5}'
+            )
         else:
             role_desc = "You are the backend task router."
-            objectives = "Break the request down into a sequence of specific, executable coding or filing steps."
-            example_steps = """{"status": "pending", "description": "Create files...", "max_iterations": 2}"""
+            objectives = (
+                "Break the request into small executable steps (code, verify, file ops). "
+                "Never assign only 2 iterations to multi-file grep or multi-file read tasks."
+            )
+            example_step = (
+                '{"status": "pending", "description": "Implement ...", '
+                '"step_kind": "code", "max_iterations": 6}'
+            )
 
         attachment_block = format_attachment_context(text_chunks)
         prompt = f"""
         {role_desc}
+        WORKSPACE_ROOT (all paths relative to): {workspace_root}
         The user needs: {user_request}
         {attachment_block}
         Create a strict JSON state object to manage this workflow.
         {objectives}
-        CRITICAL: For every step, assign a "max_iterations" integer. 
+
+        Each step MUST include:
+        - "description" (string)
+        - "step_kind" (one of: {kinds_list})
+        - "max_iterations" (integer; use rubric below — do NOT default everything to 2–3)
+        - "status": "pending"
+
+        Iteration budget rubric:
+{rubric_lines}
+
         Output ONLY valid JSON matching this structure:
         {{
             "status": "in_progress",
             "current_step_index": 0,
-            "steps": [ {example_steps} ]
+            "steps": [ {example_step} ]
         }}
         """
         
@@ -533,8 +623,15 @@ class Agent:
             clean_json = response.replace(f"{bt}json", "").replace(bt, "").strip()
             
             try:
-                json.loads(clean_json)
-                return clean_json 
+                plan_dict = json.loads(clean_json)
+                from plan_validator import validate_and_tune_plan
+
+                tuned, tune_notes = validate_and_tune_plan(plan_dict, mode, user_request)
+                if tune_notes:
+                    console.print("[cyan]📋 Plan tuning:[/cyan]")
+                    for note in tune_notes:
+                        console.print(f"  • {note}")
+                return json.dumps(tuned, indent=2)
             except json.JSONDecodeError:
                 continue
                 
@@ -553,7 +650,12 @@ class Agent:
 
         working_dir.mkdir(exist_ok=True)
         console.set_task(task_name)
-        mode_label = "Deep-Dive Research" if mode == "research" else "Autonomous Task"
+        if mode == "research":
+            mode_label = "Deep-Dive Research"
+        elif mode == "writing":
+            mode_label = "Writing Task"
+        else:
+            mode_label = "Autonomous Task"
         
         plan_dir = "Agent-Plans" if mode == "research" else "Agent-Tasks"
         task_file = os.path.join(plan_dir, f"{task_name}.json")
@@ -566,267 +668,27 @@ class Agent:
             with open(task_file, "w", encoding="utf-8") as f:
                 f.write(plan_json)
 
-        conversation_history = []
-        step_count = 0
-        max_steps = 50
-        attachments_injected = False
-        parse_failures = 0
-        recent_tool_signatures: list[str] = []
+        from loop_engine import LoopEngine
 
-        while step_count < max_steps:
-            if cancel_check and cancel_check():
-                return "🛑 Task was manually aborted by the user."
-            try:
-                state = read_json_state(task_file)
-                if state["status"] == "completed":
-                    return f"✅ {mode_label} completed successfully. Check the directory for final outputs."
-                    
-                current_idx = state["current_step_index"]
-                if current_idx >= len(state["steps"]):
-                    return "✅ All steps are completed."
-                    
-                current_objective = state["steps"][current_idx]["description"]
-                max_step_iterations = state["steps"][current_idx].get("max_iterations", 4)
-                
-                step_attempts = sum(1 for msg in conversation_history if msg["role"] == "assistant")
-                user_msg = f"**Ultimate Topic/Goal:** {user_request}\n\n**YOUR CURRENT OBJECTIVE (Step {current_idx + 1} of {len(state['steps'])}):**\n> {current_objective}"
-
-                if step_attempts >= max_step_iterations:
-                    if current_idx == len(state['steps']) - 1:
-                        user_msg += f"\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Output final report into `final_report` and use `finish_task`."
-                    else:
-                        user_msg += f"\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Use `save_research_note` then use `mark_objective_complete` to move on."
-                else:
-                    user_msg += f"\n\nExecute tools to complete objective. Once fully complete, use `mark_objective_complete`.\n(Iteration {step_attempts + 1}/{max_step_iterations})"
-
-                if not attachments_injected and text_chunks:
-                    user_msg += format_attachment_context(text_chunks)
-                    attachments_injected = True
-
-                # FIXED: Properly format the user message with image payloads if present
-                if image_payloads:
-                    content_list = [{"type": "text", "text": user_msg}]
-                    for img_b64 in image_payloads:
-                        prefix = "data:image/jpeg;base64,"
-                        clean_b64 = img_b64.split(",", 1)[-1] if "," in img_b64 else img_b64
-                        content_list.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"{prefix}{clean_b64}"}
-                        })
-                    message_dict = {"role": "user", "content": content_list}
-                else:
-                    message_dict = {"role": "user", "content": user_msg}
-
-                active_memory = [{"role": "system", "content": system_prompt}] + conversation_history + [message_dict]
-                
-                bt = chr(96) * 3
-                prefill_text = f"{bt}json\n" + '{\n  "reasoning": "'
-                active_memory.append({"role": "assistant", "content": prefill_text})
-                
-                if ui_callback:
-                    ui_callback(f"{ledger_text}\n\n⏳ [Aquila is processing Iteration {step_count + 1}...]")
-
-                # Strict JSON schema is reliable with non-streaming on Ollama /v1.
-                # Streaming can emit schema-invalid keys (e.g. tool_name instead of name).
-                result_dict = self.client.chat(
-                    active_memory,
-                    temperature=0.2,
-                    format=self.action_schema,
-                    stream=False,
-                )
-                raw_response = ""
-                if isinstance(result_dict, dict):
-                    raw_response = result_dict.get("message", {}).get("content", "") or ""
-
-                if raw_response.startswith("*(API Error") or raw_response.startswith("*(System Note"):
-                    response_text = raw_response 
-                else:
-                    response_text = prefill_text + raw_response
-                
-                console.log_iteration(step_count + 1, response_text)
-                ledger_text += f"\n\n--- Iteration {step_count + 1} ---\n{response_text}\n"
-                
-                if ui_callback: ui_callback(ledger_text)
-
-                conversation_history.append({"role": "assistant", "content": response_text})
-
-                parsed_response = parse_agent_response(response_text)
-                parse_ok = bool(parsed_response) and isinstance(
-                    parsed_response.get("tools"), list
-                )
-
-                if not parse_ok:
-                    parse_failures += 1
-                    retry_msg = (
-                        "Tool Outputs:\n❌ OS PARSE ERROR: Your last response was not valid JSON "
-                        "with a 'tools' array. Output ONLY a single JSON object matching the schema."
-                    )
-                    conversation_history.append({"role": "user", "content": retry_msg})
-                    ledger_text += f"\n{retry_msg}\n"
-                    if ui_callback:
-                        ui_callback(ledger_text)
-                    if parse_failures >= 2:
-                        if current_idx == len(state["steps"]) - 1:
-                            conversation_history.append({
-                                "role": "user",
-                                "content": (
-                                    "Tool Outputs:\n⚠️ OS OVERRIDE: Parse failures exceeded. "
-                                    "Use finish_task immediately."
-                                ),
-                            })
-                        else:
-                            advance_json_state(
-                                task_file, "OS forced advance (parse failure limit)"
-                            )
-                            conversation_history = []
-                            parse_failures = 0
-                            recent_tool_signatures = []
-                    continue
-
-                parse_failures = 0
-
-                pending_final_report = parsed_response.get("final_report") or ""
-                if pending_final_report:
-                    save_task_deliverable(task_name, mode, pending_final_report)
-
-                tool_calls = parsed_response.get("tools", [])
-                if not isinstance(tool_calls, list):
-                    tool_calls = []
-
-                schema_ok, schema_err = validate_tool_calls(tool_calls)
-                if not schema_ok:
-                    parse_failures += 1
-                    retry_msg = (
-                        f"Tool Outputs:\n❌ OS SCHEMA VIOLATION: {schema_err} "
-                        "Constrained decoding requires each tool to use keys "
-                        "'name' and 'arguments' only."
-                    )
-                    conversation_history.append({"role": "user", "content": retry_msg})
-                    ledger_text += f"\n{retry_msg}\n"
-                    if ui_callback:
-                        ui_callback(ledger_text)
-                    if parse_failures >= 2:
-                        if current_idx == len(state["steps"]) - 1:
-                            conversation_history.append({
-                                "role": "user",
-                                "content": (
-                                    "Tool Outputs:\n⚠️ OS OVERRIDE: Schema violations exceeded. "
-                                    "Use finish_task immediately."
-                                ),
-                            })
-                        else:
-                            advance_json_state(
-                                task_file, "OS forced advance (schema violation limit)"
-                            )
-                            conversation_history = []
-                            parse_failures = 0
-                            recent_tool_signatures = []
-                    continue
-
-                if len(tool_calls) > MAX_TOOLS_PER_TURN:
-                    console.print(
-                        f"[yellow]⚠️ Truncated {len(tool_calls)} tools to {MAX_TOOLS_PER_TURN} per turn.[/yellow]"
-                    )
-                    tool_calls = tool_calls[:MAX_TOOLS_PER_TURN]
-
-                last_tool_output = ""
-                has_advance = False
-                has_finish = False
-                advance_summary = ""
-                finish_msg = ""
-                saved_deliverable = None
-
-                for tc in tool_calls:
-                    tool_name = tc.get("name", "")
-                    
-                    if tool_name == "mark_objective_complete":
-                        if current_idx == len(state['steps']) - 1:
-                            result = "❌ OS BLOCK: On final step. Use `finish_task`."
-                        else:
-                            has_advance = True
-                            advance_summary = tc.get("arguments", {}).get("summary_of_work", "Completed.")
-                            result = "✅ State marked complete."
-                    elif tool_name == "finish_task":
-                        has_finish = True
-                        args = tc.get("arguments", {})
-                        finish_msg = (
-                            args.get("message_to_user")
-                            or args.get("summary")
-                            or "Task completed."
-                        )
-                        report_in_args = args.get("final_report")
-                        if report_in_args:
-                            pending_final_report = report_in_args
-                        result = "✅ Finish task triggered."
-                    else:
-                        execution_results = self.executor.execute([tc])
-                        result = execution_results[0] if execution_results else "No output."
-
-                    last_tool_output += f"\nTool '{tool_name}' result:\n{result}\n"
-                    console.log_tool_execution(tool_name, tc.get("arguments", {}), result)
-                
-                if last_tool_output:
-                    conversation_history.append({"role": "user", "content": f"Tool Outputs:{last_tool_output}"})
-                    ledger_text += f"\n{last_tool_output}\n"
-                    if ui_callback: ui_callback(ledger_text)
-
-                if has_advance:
-                    advance_json_state(task_file, advance_summary)
-                    conversation_history = []
-                    recent_tool_signatures = []
-
-                if has_finish:
-                    saved_deliverable = save_task_deliverable(
-                        task_name, mode, pending_final_report
-                    )
-                    complete_ledger_state(task_file, finish_msg)
-                    aquila_memory.store_experience(task_name, finish_msg)
-                    if saved_deliverable:
-                        finish_msg += f"\n\n📄 Final report saved to: {saved_deliverable}"
-                    return finish_msg
-
-                if step_attempts >= max_step_iterations and not has_advance and not has_finish:
-                    if current_idx == len(state["steps"]) - 1:
-                        conversation_history.append({
-                            "role": "user",
-                            "content": (
-                                "Tool Outputs:\n⚠️ OS FORCED: Iteration limit reached on final step. "
-                                "You must use finish_task now."
-                            ),
-                        })
-                    else:
-                        advance_json_state(
-                            task_file, "OS forced advance (iteration limit)"
-                        )
-                        conversation_history = []
-                        recent_tool_signatures = []
-                    continue
-
-                for tc in tool_calls:
-                    if isinstance(tc, dict):
-                        sig = json.dumps(
-                            {"name": tc.get("name"), "arguments": tc.get("arguments")},
-                            sort_keys=True,
-                        )
-                        recent_tool_signatures.append(sig)
-                if len(recent_tool_signatures) >= 3:
-                    last_three = recent_tool_signatures[-3:]
-                    if last_three[0] == last_three[1] == last_three[2]:
-                        conversation_history.append({
-                            "role": "user",
-                            "content": (
-                                "Tool Outputs:\n⚠️ OS WARNING: You repeated the same tool call "
-                                "three times. Try a different approach or mark_objective_complete."
-                            ),
-                        })
-                        recent_tool_signatures = []
-
-                step_count += 1
-                
-            except Exception as e:
-                return f"OS Error: {str(e)}"
-                
-        return "⚠️ OS halted: Maximum iterations reached."
+        engine = LoopEngine(
+            client=self.client,
+            executor=self.executor,
+            console=console,
+            action_schema=self.action_schema,
+            system_prompt=system_prompt,
+            mode=mode,
+            mode_label=mode_label,
+            plan_dir=plan_dir,
+        )
+        return engine.run(
+            task_name=task_name,
+            user_request=user_request,
+            task_file=task_file,
+            ui_callback=ui_callback,
+            cancel_check=cancel_check,
+            text_chunks=text_chunks,
+            image_payloads=image_payloads,
+        )
 
 _agent_instance = None
 

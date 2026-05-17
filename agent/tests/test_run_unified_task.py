@@ -25,16 +25,15 @@ def test_finish_task_ends_run(tmp_agent_dirs, write_ledger, monkeypatch):
         '"arguments": {"message_to_user": "All done!"}}]}'
     )
 
-    def fake_stream(*args, **kwargs):
-        yield {"message": {"content": suffix}}
+    def fake_chat(*args, **kwargs):
+        return {"message": {"content": suffix}}
 
-    monkeypatch.setattr(main_mod.client, "chat", fake_stream)
+    monkeypatch.setattr(main_mod.client, "chat", fake_chat)
     monkeypatch.setattr(
         main_mod.aquila_memory,
         "store_experience",
         lambda *a, **k: None,
     )
-
     agent = main_mod.Agent()
     result = agent.run_unified_task("finish_me", "goal", mode="autonomous")
     assert "All done!" in result
@@ -89,14 +88,13 @@ def test_mark_objective_complete_advances(tmp_agent_dirs, write_ledger, monkeypa
     ]
     idx = {"i": 0}
 
-    def fake_stream(*args, **kwargs):
+    def fake_chat(*args, **kwargs):
         payload = responses[min(idx["i"], len(responses) - 1)]
         idx["i"] += 1
-        yield {"message": {"content": payload}}
+        return {"message": {"content": payload}}
 
-    monkeypatch.setattr(main_mod.client, "chat", fake_stream)
+    monkeypatch.setattr(main_mod.client, "chat", fake_chat)
     monkeypatch.setattr(main_mod.aquila_memory, "store_experience", lambda *a, **k: None)
-
     agent = main_mod.Agent()
     agent.run_unified_task("advance_me", "goal", mode="autonomous")
 

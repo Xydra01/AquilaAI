@@ -11,10 +11,13 @@ from main import (
     MAX_TOOLS_PER_TURN,
     get_executable_tools,
     validate_tool_calls,
+    validate_tool_arguments,
     parse_agent_response,
     ToolExecutor,
     build_strict_schema,
 )
+from tools import normalize_workspace_path
+from tool_library.agent_tools import save_research_note, MAX_SCRATCHPAD_NOTE_BYTES
 
 
 def test_validate_rejects_tool_name_alias():
@@ -80,3 +83,43 @@ def test_tool_calls_slice_respects_max():
     if len(tool_calls) > MAX_TOOLS_PER_TURN:
         tool_calls = tool_calls[:MAX_TOOLS_PER_TURN]
     assert len(tool_calls) == MAX_TOOLS_PER_TURN
+
+
+def test_validate_rejects_unknown_argument_keys():
+    ok, err = validate_tool_arguments([
+        {
+            "name": "save_research_note",
+            "arguments": {"task_name": "t", "gathered_data": "x", "format": "markdown"},
+        },
+    ])
+    assert ok is False
+    assert "format" in err
+
+
+def test_normalize_workspace_path_collapses_doubled_agent():
+    assert normalize_workspace_path("agent/agent/tests/foo.py") == "agent/tests/foo.py"
+
+
+def test_save_research_note_truncates_large_payload(monkeypatch):
+    from tool_library import agent_tools as at
+
+    saved = {}
+
+    def fake_save(task_name, note):
+        saved["note"] = note
+        return "ok"
+
+    monkeypatch.setattr(at.aquila_memory, "save_scratchpad_note", fake_save)
+    big = "x" * (MAX_SCRATCHPAD_NOTE_BYTES + 500)
+    result = save_research_note("task1", big)
+    assert "truncated" in result.lower()
+    assert len(saved["note"].encode("utf-8")) <= MAX_SCRATCHPAD_NOTE_BYTES + 100
+
+
+def test_loop_engine_duplicate_warning_at_two():
+    from loop_engine import LoopEngine
+
+    sig = '{"arguments": {}, "name": "list_directory"}'
+    msg = LoopEngine._duplicate_tool_warning([sig, sig])
+    assert msg is not None
+    assert "twice" in msg

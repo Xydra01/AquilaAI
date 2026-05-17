@@ -23,6 +23,18 @@ if root_env.exists():
 elif agent_env.exists():
     load_dotenv(dotenv_path=agent_env)
 
+def normalize_workspace_path(file_path: str) -> str:
+    """Fix doubled path segments (e.g. agent/agent/tests -> agent/tests)."""
+    if not file_path:
+        return file_path
+    p = str(file_path).replace("\\", "/").strip()
+    while "/agent/agent/" in p or p.startswith("agent/agent/"):
+        p = p.replace("/agent/agent/", "/agent/", 1)
+        if p.startswith("agent/agent/"):
+            p = "agent/" + p[len("agent/agent/") :]
+    return p
+
+
 def is_safe_path(path_obj: Path) -> bool:
     """Checks if a file is safe for the LLM to read."""
     if path_obj.name in FORBIDDEN_FILES:
@@ -43,6 +55,7 @@ def check_syntax(code_string: str):
     
 def write_file(file_path: str, content: str) -> str:
     """Creates a new file or completely overwrites an existing one."""
+    file_path = normalize_workspace_path(file_path)
     if not is_safe_path(Path(file_path)):
         return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
     content = content.strip()
@@ -96,6 +109,7 @@ def write_file(file_path: str, content: str) -> str:
 
 def read_file(file_path: str) -> str:
     """Reads the contents of a file, capping it for context safety."""
+    file_path = normalize_workspace_path(file_path)
     path_obj = Path(file_path).expanduser()
     
     if not is_safe_path(path_obj):
@@ -139,6 +153,7 @@ def list_directory(path="."):
 
 def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
     """Replaces exact target text with replacement text in a file."""
+    file_path = normalize_workspace_path(file_path)
     if not is_safe_path(Path(file_path)):
         return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
 
