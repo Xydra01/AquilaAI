@@ -199,11 +199,14 @@ flowchart LR
         Task[Autonomous Task]
         Research[Research Mode]
         Writing[Writing Mode]
+        Code[Code Mode]
     end
     Chat -->|no ledger| Ollama[Ollama aquila]
     Task --> LedgerTasks[Agent-Tasks JSON]
     Research --> LedgerPlans[Agent-Plans JSON]
     Writing --> LedgerTasks
+    Code --> LedgerTasks
+    Code --> CodeBuf[Agent-Code buffer]
     LedgerTasks --> Loop[run_unified_task]
     LedgerPlans --> Loop
     Loop --> Ollama
@@ -215,8 +218,11 @@ flowchart LR
 | **Autonomous** | `Agent-Tasks/{task_name}.json` | `Agent-Creations/` (if `final_report`) | `finish_task` |
 | **Research** | `Agent-Plans/{task_name}.json` | `Agent-Research/{task_name}.md` | `finish_task` + `final_report` |
 | **Writing** | `Agent-Tasks/{task_name}.json` | `Agent-Drafts/` via `compile_final_document` | `finish_task` + brief summary in `final_report` |
+| **Code** | `Agent-Tasks/{task_name}.json` + `Agent-Code/active_code_state.json` | Workspace via `sync_project_to_disk` | `finish_task` after TDD verify |
 
-**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`.
+**Code Mode (3.3):** Python-first TDD with `run_pytest` / `run_linter`; patch-first editing (`replace_lines`, `apply_unified_patch`). JS/TS/Rust/Go: read/write + basic lint when CLIs are installed. Required: `pytest`, `flake8` (recommended).
+
+**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`, `get_code_prompt`.
 
 ---
 
@@ -270,6 +276,7 @@ agent-projects/
 | `Agent-Research/` | Research markdown deliverables |
 | `Agent-Creations/` | Task markdown deliverables |
 | `Agent-Drafts/` | Writing-mode draft state + compiled docs |
+| `Agent-Code/` | Code Mode buffer (`active_code_state.json`) + synced workspace files |
 | `Agent-Logs/` | Per-run execution logs |
 | `Agent-Memory/` | SQLite `fact_graph.db` |
 | `agent/vector_db/` | ChromaDB persistence |
@@ -329,6 +336,15 @@ Tools are merged from `SURVIVAL_TOOLS` and `tool_library.ALL_TOOLS`. Internal `_
 |------|---------|
 | `init_document`, `write_section`, `read_outline` | Draft buffer |
 | `compile_final_document` | Flush to `Agent-Drafts/` |
+
+### Code canvas (`tool_library/code_canvas_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `init_code_project`, `read_code_outline` | Code buffer in `Agent-Code/` |
+| `create_buffer_file`, `replace_lines`, `apply_unified_patch`, `replace_symbol` | Incremental edits |
+| `read_file_region`, `sync_project_to_disk` | Targeted read + disk sync |
+| `run_pytest`, `run_linter`, `set_test_targets` | TDD + lint (Python full) |
 
 ### Email (`tool_library/email_tools.py`)
 
@@ -433,15 +449,15 @@ Defense in depth for a tool-using agent:
 
 ## Known limitations and 3.3 direction
 
-Documented in [ARCHITECTURE.md §16](ARCHITECTURE.md):
+Documented in [ARCHITECTURE.md](ARCHITECTURE.md):
 
-- Planner `max_iterations` defaults are often too low for complex steps; OS may force-advance before work is done.
-- No **reflect/act** turn split yet (planned for 3.3).
 - `route_tools()` not used — full tool list every turn.
 - Streamlit UI not maintained.
+- Code Mode canvas is **read-only** in the GUI (agent edits via tools; user edit-back deferred).
+- Non-Python test runners (Jest, `cargo test`, `go test`) not wired in v1.
 - Some integration paths are sensitive to **cwd** and duplicate tool calls under budget pressure.
 
-**3.3 (planned):** budget-aware planner, loop engine refactor, reflect/act turns, smarter iteration accounting, step-entry scratchpad injection.
+**Shipped in 3.3:** budget-aware planner (`plan_validator.py`), reflect/act loop (`loop_engine.py`), **Code Mode** with TDD canvas (`code_canvas_tools.py`, `language_registry.py`).
 
 ---
 

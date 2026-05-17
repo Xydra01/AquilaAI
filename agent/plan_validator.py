@@ -15,6 +15,9 @@ STEP_KINDS = (
     "synthesize",
     "write",
     "finalize",
+    "tdd_red",
+    "tdd_green",
+    "tdd_refactor",
 )
 
 # min, default, max iterations per step_kind
@@ -26,6 +29,9 @@ BUDGET_RUBRIC: dict[str, tuple[int, int, int]] = {
     "synthesize": (5, 6, 9),
     "write": (4, 5, 8),
     "finalize": (4, 6, 8),
+    "tdd_red": (4, 5, 6),
+    "tdd_green": (6, 8, 10),
+    "tdd_refactor": (4, 5, 6),
 }
 
 MAX_PLAN_STEPS = 8
@@ -35,20 +41,26 @@ _KIND_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("finalize", ("final report", "finalize", "finish task", "deliverable", "wrap up")),
     ("search", ("search", "find", "query", "look up", "web", "google")),
     ("read", ("read", "fetch", "scrape", "extract", "pull", "download")),
-    ("verify", ("verify", "test", "validate", "check", "confirm", "grep", "lint")),
+    ("tdd_red", ("failing test", "write test", "tdd red", "red phase", "test first")),
+    ("tdd_green", ("implement", "make test pass", "tdd green", "green phase", "minimal code")),
+    ("tdd_refactor", ("refactor", "clean up", "tdd refactor", "improve code")),
+    ("verify", ("verify", "validate", "check", "confirm", "grep", "lint", "full pytest")),
     ("synthesize", ("synthesize", "compile", "summarize", "compare", "analyze")),
     ("write", ("write", "draft", "document", "section", "essay", "outline")),
-    ("code", ("create", "implement", "build", "code", "script", "file", "run")),
+    ("code", ("create", "build", "script", "file", "run")),
 ]
 
 STEP_KIND_HINTS: dict[str, str] = {
     "search": "Prefer web_search, then read_webpage for top URLs. Batch reads.",
     "read": "Use read_webpage or read_file; avoid re-reading the same URL/file.",
-    "code": "Use write_file / replace_in_file; run test_python_script to verify.",
+    "code": "Use init_code_project, replace_lines, apply_unified_patch; run_pytest to verify.",
     "verify": "Prefer search_in_file or search_files over read_file per file.",
     "synthesize": "Use save_research_note for snippets; keep notes under 8KB.",
     "write": "Use write_section with grouped subsections; read_outline if needed.",
     "finalize": "Put the full report in top-level final_report; finish_task on last step.",
+    "tdd_red": "Write/update pytest test; run_pytest must show FAILED before mark_objective_complete.",
+    "tdd_green": "Minimal implementation; use replace_lines/replace_symbol; run_pytest until PASSED.",
+    "tdd_refactor": "Refactor only; run_pytest after edits; tests must stay green.",
 }
 
 MODE_MIN_STEPS: dict[str, int] = {
@@ -56,7 +68,10 @@ MODE_MIN_STEPS: dict[str, int] = {
     "writing": 3,
     "task": 2,
     "autonomous": 2,
+    "code": 4,
 }
+
+TDD_KEYWORDS = ("implement", "build", "feature", "fix bug", "add ", "create ", "tdd", "pytest")
 
 
 def infer_step_kind(description: str, mode: str, step_index: int, total_steps: int) -> str:
@@ -70,6 +85,8 @@ def infer_step_kind(description: str, mode: str, step_index: int, total_steps: i
         return "search" if step_index == 0 else "read"
     if mode == "writing":
         return "write"
+    if mode == "code":
+        return "read" if step_index == 0 else "code"
     return "code"
 
 
@@ -114,7 +131,7 @@ def validate_and_tune_plan(
         desc = step.get("description", "")
         kind = step.get("step_kind")
         if kind not in STEP_KINDS:
-            kind = infer_step_kind(desc, mode_key, i, total_steps)
+            kind = infer_step_kind(desc, mode_key if mode != "code" else "code", i, total_steps)
             step["step_kind"] = kind
             notes.append(f"Step {i + 1}: inferred step_kind={kind}.")
 
@@ -153,6 +170,13 @@ def validate_and_tune_plan(
             f"Research plan has only {len(steps)} steps; consider at least {min_steps} "
             "(search, read, notes, synthesize)."
         )
+
+    if mode == "code" and user_request:
+        req_lower = user_request.lower()
+        if any(kw in req_lower for kw in TDD_KEYWORDS) and len(steps) < 4:
+            notes.append(
+                "Code TDD workflow recommended: explore → tdd_red → tdd_green → verify → finalize."
+            )
 
     plan.setdefault("status", "in_progress")
     plan.setdefault("current_step_index", 0)

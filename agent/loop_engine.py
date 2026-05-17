@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from memory_singleton import aquila_memory
 from plan_validator import get_step_kind_hint
@@ -321,11 +322,17 @@ class LoopEngine:
                         if current_idx == len(state["steps"]) - 1:
                             result = "❌ OS BLOCK: On final step. Use `finish_task`."
                         else:
-                            has_advance = True
-                            advance_summary = tc.get("arguments", {}).get(
-                                "summary_of_work", "Completed."
+                            gate = self._tdd_advance_gate(
+                                step_kind, conversation_history, last_tool_output
                             )
-                            result = "✅ State marked complete."
+                            if gate:
+                                result = gate + " Run sync_project_to_disk then run_pytest."
+                            else:
+                                has_advance = True
+                                advance_summary = tc.get("arguments", {}).get(
+                                    "summary_of_work", "Completed."
+                                )
+                                result = "✅ State marked complete."
                     elif tool_name == "finish_task":
                         has_finish = True
                         args = tc.get("arguments", {})
@@ -553,6 +560,49 @@ class LoopEngine:
             })
             return True
         return False
+
+    @staticmethod
+    def _recent_pytest_output(conversation_history: list[dict], current_chunk: str) -> str:
+        parts = [current_chunk or ""]
+        for msg in reversed(conversation_history):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, str) and "Tool 'run_pytest' result:" in content:
+                parts.append(content)
+                break
+        return "\n".join(parts)
+
+    @staticmethod
+    def _tdd_advance_gate(
+        step_kind: str,
+        conversation_history: list[dict],
+        last_tool_output: str,
+    ) -> str | None:
+        """Soft gates for Code Mode TDD steps."""
+        if step_kind not in ("tdd_red", "tdd_green"):
+            return None
+        blob = LoopEngine._recent_pytest_output(conversation_history, last_tool_output)
+        lower = blob.lower()
+        if step_kind == "tdd_red":
+            if "failed" not in lower and "error" not in lower:
+                return (
+                    "❌ OS BLOCK (tdd_red): Call run_pytest and confirm failing tests "
+                    "(output should mention failed) before mark_objective_complete."
+                )
+        if step_kind == "tdd_green":
+            failed_m = re.search(r"(\d+) failed", blob)
+            if failed_m and int(failed_m.group(1)) > 0:
+                return (
+                    "❌ OS BLOCK (tdd_green): run_pytest must show 0 failed "
+                    "before mark_objective_complete."
+                )
+            if "✅ pytest" not in blob and "passed" not in lower:
+                return (
+                    "❌ OS BLOCK (tdd_green): Call run_pytest until tests pass "
+                    "before mark_objective_complete."
+                )
+        return None
 
     @staticmethod
     def _duplicate_tool_warning(recent_tool_signatures: list[str]) -> str | None:

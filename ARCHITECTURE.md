@@ -587,14 +587,50 @@ flowchart TD
 
 ---
 
-## 17. Extension points and rough edges
+## 17. Aquila OS 3.3 — Code Canvas
+
+### Dual ledger (same pattern as Writing 3.2)
+
+| Ledger | Path | Role |
+|--------|------|------|
+| Execution | `Agent-Tasks/{task}.json` | Planner steps, `step_kind`, budgets |
+| Code buffer | `Agent-Code/active_code_state.json` | In-memory project: files, lint/test status, dirty flags |
+
+Authoritative edits in Code Mode go through **code canvas tools** (`init_code_project`, `replace_lines`, `apply_unified_patch`, `sync_project_to_disk`). Autonomous Task keeps generic `write_file`.
+
+### Language support (v1)
+
+| Language | Lint | Tests |
+|----------|------|-------|
+| Python | flake8 (or ast-only fallback) | **pytest** via `run_pytest` |
+| JS/TS, Rust, Go | eslint / tsc / cargo clippy / go vet when installed | read/write + search only |
+
+`language_registry.py` dispatches `run_linter` / `run_tests`.
+
+### TDD planner step kinds
+
+`plan_validator.py` adds `tdd_red`, `tdd_green`, `tdd_refactor`. Code Mode plans for “implement / build / feature” intents should follow: explore → red → green → (refactor) → verify → finalize.
+
+`loop_engine.py` soft-gates `mark_objective_complete` on `tdd_red` / `tdd_green` until recent `run_pytest` output shows failure / pass respectively.
+
+### GUI
+
+- Mode selector: **Code Mode** (`mode_flag = "code"`).
+- Middle pane: tabbed read-only `QPlainTextEdit` per buffer file.
+- Tracker: `render_code_canvas_html()` — file tree, lint icons, pytest status, current `step_kind`.
+- Resume: orphan `active_code_state.json` appears as `[code] {project_name}`.
+
+---
+
+## 18. Extension points and rough edges
 
 | Item | Status (3.3) |
 |------|----------------|
 | `route_tools(objective)` | Implemented, not used in `run_unified_task` (full schema + server guards instead) |
 | Inter-modal automation | Prompt says “in development” |
 | Streamlit (`app.py`) | Legacy 3.1 artifact; not maintained for 3.2 |
-| Task State Tracker | Fixed: `gui_state.resolve_ledger_path` + renderers for autonomous, research, writing |
+| Task State Tracker | `gui_state`: autonomous, research, writing, **code** (`render_code_canvas_html`) |
+| Code Mode | `code_canvas_tools.py`, `language_registry.py`, GUI tabbed canvas |
 | Memory singleton | Fixed: `memory_singleton.aquila_memory` shared by `main` and `agent_tools` |
 | `_index_codebase` | Excluded from strict schema / executable tools |
 | Dependencies | `requirements.txt` at repo root |
@@ -612,7 +648,7 @@ flowchart TD
 
 ---
 
-## 18. Quick reference: key files to read first
+## 19. Quick reference: key files to read first
 
 | Question | Start here |
 |----------|------------|

@@ -9,7 +9,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from PySide6.QtWidgets import QApplication, QMainWindow
 import gui
-from gui_state import render_step_ledger_html, render_writing_draft_html
+from gui_state import (
+    render_step_ledger_html,
+    render_writing_draft_html,
+    render_code_canvas_html,
+    resolve_ledger_path,
+)
 from conftest import load_fixture_ledger
 
 
@@ -42,6 +47,37 @@ def test_render_writing_draft_html():
     html = render_writing_draft_html(state)
     assert "Sample Essay" in html
     assert "Introduction" in html
+
+
+def test_render_code_canvas_html():
+    state = {
+        "project_name": "api",
+        "language_primary": "python",
+        "files": [
+            {
+                "path": "src/main.py",
+                "line_count": 10,
+                "lint_status": "ok",
+                "last_test": "passed",
+                "dirty": False,
+            }
+        ],
+        "test_targets": ["tests/test_api.py"],
+    }
+    html = render_code_canvas_html(state)
+    assert "Code Canvas: api" in html
+    assert "src/main.py" in html
+    assert "test_api.py" in html
+
+
+def test_resolve_ledger_path_code(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    code_dir = tmp_path / "Agent-Code"
+    code_dir.mkdir()
+    buf = code_dir / "active_code_state.json"
+    buf.write_text('{"project_name": "x"}', encoding="utf-8")
+    p = resolve_ledger_path("code", "any_task")
+    assert p.resolve() == buf.resolve()
 
 
 def test_refresh_state_tracker_autonomous(qtbot, qapp, tmp_agent_dirs, write_ledger):

@@ -24,7 +24,7 @@ elif agent_env.exists():
     load_dotenv(dotenv_path=agent_env)
 
 def normalize_workspace_path(file_path: str) -> str:
-    """Fix doubled path segments (e.g. agent/agent/tests -> agent/tests)."""
+    """Fix doubled path segments and coerce absolute paths to workspace-relative."""
     if not file_path:
         return file_path
     p = str(file_path).replace("\\", "/").strip()
@@ -32,6 +32,17 @@ def normalize_workspace_path(file_path: str) -> str:
         p = p.replace("/agent/agent/", "/agent/", 1)
         if p.startswith("agent/agent/"):
             p = "agent/" + p[len("agent/agent/") :]
+    try:
+        path_obj = Path(p)
+        if path_obj.is_absolute():
+            cwd = Path.cwd().resolve()
+            resolved = path_obj.resolve()
+            try:
+                p = resolved.relative_to(cwd).as_posix()
+            except ValueError:
+                p = resolved.as_posix()
+    except OSError:
+        pass
     return p
 
 

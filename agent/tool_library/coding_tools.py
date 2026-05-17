@@ -11,8 +11,15 @@ from tools import AGENT_CORE_DIR, FORBIDDEN_DIRS
 chroma_client = chromadb.PersistentClient(path=str(AGENT_CORE_DIR / "vector_db"))
 sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
 
-def _index_codebase(directory: str):
-    """Hidden helper function to read and embed all .py files in a directory."""
+def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):
+    """Hidden helper function to read and embed source files in a directory."""
+    if extensions is None:
+        try:
+            from language_registry import index_extensions
+
+            extensions = tuple(index_extensions())
+        except ImportError:
+            extensions = (".py",)
     collection = chroma_client.get_or_create_collection(name="codebase", embedding_function=sentence_transformer_ef)
     try:
         chroma_client.delete_collection("codebase")
@@ -25,7 +32,7 @@ def _index_codebase(directory: str):
         # THE FIREWALL: Skip virtual environments!
         dirs[:] = [d for d in dirs if d not in FORBIDDEN_DIRS]
         for file in files:
-            if file.endswith('.py'):
+            if file.endswith(extensions):
                 file_path = os.path.join(root, file)
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()

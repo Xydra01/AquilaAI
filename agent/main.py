@@ -11,7 +11,13 @@ from typing import Dict, List
 from rich.console import Console
 from rich.text import Text
 from memory_singleton import aquila_memory
-from prompts import get_autonomous_prompt, get_research_prompt, get_writing_prompt, get_chat_prompt
+from prompts import (
+    get_autonomous_prompt,
+    get_research_prompt,
+    get_writing_prompt,
+    get_code_prompt,
+    get_chat_prompt,
+)
 
 # Tools imports
 from tools import SURVIVAL_TOOLS
@@ -487,6 +493,7 @@ class Agent:
         os.makedirs("Agent-Creations", exist_ok=True)
         os.makedirs("Agent-Research", exist_ok=True)
         os.makedirs("Agent-Plans", exist_ok=True)
+        os.makedirs("Agent-Code", exist_ok=True)
         self.executor = ToolExecutor()
         self.client = client
         self.memory = aquila_memory 
@@ -505,6 +512,7 @@ class Agent:
         self.master_prompt = get_autonomous_prompt(tool_docs)
         self.RESEARCH_PROMPT = get_research_prompt(tool_docs)
         self.WRITING_PROMPT = get_writing_prompt(tool_docs)
+        self.CODE_PROMPT = get_code_prompt(tool_docs)
         self.action_schema = build_strict_schema(tools)
 
     def run_chat(self, user_input: str, chat_history: list, image_payloads: list = None, stream: bool = True):
@@ -559,6 +567,17 @@ class Agent:
             example_step = (
                 '{"status": "pending", "description": "Draft section 1", '
                 '"step_kind": "write", "max_iterations": 5}'
+            )
+        elif mode == "code":
+            role_desc = "You are Aquila's Code Mode planner (TDD)."
+            objectives = (
+                "For implementation tasks use TDD steps: explore (read/verify) → tdd_red (failing pytest) "
+                "→ tdd_green (minimal code) → optional tdd_refactor → verify (full pytest) → finalize. "
+                "Use step_kind values tdd_red, tdd_green, tdd_refactor, code, verify, finalize."
+            )
+            example_step = (
+                '{"status": "pending", "description": "Write failing test for feature X", '
+                '"step_kind": "tdd_red", "max_iterations": 5}'
             )
         else:
             role_desc = "You are the backend task router."
@@ -643,11 +662,14 @@ class Agent:
 
     def run_unified_task(self, task_name: str, user_request: str, mode: str = "task", ui_callback=None, cancel_check=None, text_chunks: list = None, image_payloads: list = None) -> str:
         if mode == "research":
-            system_prompt = self.RESEARCH_PROMPT 
+            system_prompt = self.RESEARCH_PROMPT
             working_dir = Path("Agent-Research")
         elif mode == "writing":
             system_prompt = self.WRITING_PROMPT
             working_dir = Path("Agent-Drafts")
+        elif mode == "code":
+            system_prompt = self.CODE_PROMPT
+            working_dir = Path("Agent-Code")
         else:
             system_prompt = self.master_prompt
             working_dir = Path("Agent-Tasks")
@@ -658,6 +680,8 @@ class Agent:
             mode_label = "Deep-Dive Research"
         elif mode == "writing":
             mode_label = "Writing Task"
+        elif mode == "code":
+            mode_label = "Code Mode (TDD)"
         else:
             mode_label = "Autonomous Task"
         

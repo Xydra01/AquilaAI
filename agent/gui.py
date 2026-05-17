@@ -10,7 +10,7 @@ import glob
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QTextEdit, QLineEdit, QPushButton, QLabel, QComboBox,
+    QSplitter, QTextEdit, QPlainTextEdit, QLineEdit, QPushButton, QLabel, QComboBox,
     QTabWidget, QInputDialog, QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal
@@ -20,6 +20,7 @@ from gui_state import (
     resolve_ledger_path,
     render_step_ledger_html,
     render_writing_draft_html,
+    render_code_canvas_html,
 )
 
 # Import Aquila's Brain and Tools
@@ -145,7 +146,13 @@ class AquilaOS(QMainWindow):
 
         self.mode_selector = QComboBox()
         self.mode_selector.addItems(
-            ["Chat Mode", "Autonomous Task", "Writing Mode", "Research Mode"]
+            [
+                "Chat Mode",
+                "Autonomous Task",
+                "Code Mode",
+                "Writing Mode",
+                "Research Mode",
+            ]
         )
         left_layout.addWidget(QLabel("Operation Mode:"))
         left_layout.addWidget(self.mode_selector)
@@ -185,9 +192,11 @@ class AquilaOS(QMainWindow):
         self.middle_panel = QWidget()
         middle_layout = QVBoxLayout(self.middle_panel)
         middle_layout.addWidget(QLabel("📝 The Canvas"))
+        self.canvas_tabs = QTabWidget()
         self.canvas_editor = QTextEdit()
         self.canvas_editor.setFont(QFont("Courier New", 11))
-        middle_layout.addWidget(self.canvas_editor)
+        self.canvas_tabs.addTab(self.canvas_editor, "Preview")
+        middle_layout.addWidget(self.canvas_tabs)
 
         self.right_panel = QWidget()
         right_layout = QVBoxLayout(self.right_panel)
@@ -282,6 +291,9 @@ class AquilaOS(QMainWindow):
         draft = Path("Agent-Drafts/active_draft_state.json")
         if draft.exists():
             return "writing"
+        code_buf = Path("Agent-Code/active_code_state.json")
+        if code_buf.exists():
+            return "code"
         return "autonomous"
 
     def resume_task_dialog(self):
@@ -293,6 +305,18 @@ class AquilaOS(QMainWindow):
                     state = json.load(fp)
                     if state.get("status") != "completed":
                         active_tasks.append(os.path.basename(f).replace(".json", ""))
+            except Exception:
+                pass
+
+        code_buf = Path("Agent-Code/active_code_state.json")
+        if code_buf.exists():
+            try:
+                with open(code_buf, "r", encoding="utf-8") as cf:
+                    code_state = json.load(cf)
+                proj = code_state.get("project_name", "code_project")
+                label = f"[code] {proj}"
+                if label not in active_tasks:
+                    active_tasks.append(label)
             except Exception:
                 pass
 
@@ -313,7 +337,11 @@ class AquilaOS(QMainWindow):
         )
 
         if ok and task_name:
-            mode_flag = self._infer_resume_mode(task_name)
+            if task_name.startswith("[code] "):
+                mode_flag = "code"
+                task_name = task_name.replace("[code] ", "", 1)
+            else:
+                mode_flag = self._infer_resume_mode(task_name)
             user_prompt = "Resume execution from the current objective."
 
             user_bubble = (
@@ -369,6 +397,8 @@ class AquilaOS(QMainWindow):
             mode_flag = "research"
         elif mode_selection == "Writing Mode":
             mode_flag = "writing"
+        elif mode_selection == "Code Mode":
+            mode_flag = "code"
         else:
             mode_flag = "autonomous"
 
@@ -463,7 +493,17 @@ class AquilaOS(QMainWindow):
             with open(state_path, "r", encoding="utf-8") as f:
                 state_data = json.load(f)
 
-            if mode == "writing" or (
+            if mode == "code" or state_path.name == "active_code_state.json":
+                task_ledger = None
+                task_ledger_path = Path(f"Agent-Tasks/{self.worker.task_name}.json")
+                if task_ledger_path.exists():
+                    with open(task_ledger_path, "r", encoding="utf-8") as tf:
+                        task_ledger = json.load(tf)
+                self.state_view.setHtml(
+                    render_code_canvas_html(state_data, task_ledger)
+                )
+                self._render_code_canvas_tabs(state_data)
+            elif mode == "writing" or (
                 state_path.name == "active_draft_state.json"
             ):
                 html_state = render_writing_draft_html(state_data)
@@ -480,13 +520,30 @@ class AquilaOS(QMainWindow):
                     f"<div style='font-family: Arial, sans-serif; line-height: 1.6;'>"
                     f"{canvas_html}</div>"
                 )
+                while self.canvas_tabs.count() > 1:
+                    self.canvas_tabs.removeTab(1)
             else:
                 self.state_view.setHtml(render_step_ledger_html(state_data))
+                while self.canvas_tabs.count() > 1:
+                    self.canvas_tabs.removeTab(1)
 
         except Exception:
             self.state_view.setHtml(
                 "<p style='color: #e74c3c;'>Error reading ledger state.</p>"
             )
+
+    def _render_code_canvas_tabs(self, state_data: dict):
+        """Read-only file tabs from the code buffer."""
+        while self.canvas_tabs.count() > 0:
+            self.canvas_tabs.removeTab(0)
+        mono = QFont("Courier New", 10)
+        for f in state_data.get("files", []):
+            path = f.get("path", "file")
+            editor = QPlainTextEdit()
+            editor.setFont(mono)
+            editor.setReadOnly(True)
+            editor.setPlainText(f.get("content", ""))
+            self.canvas_tabs.addTab(editor, Path(path).name)
 
     def task_finished(self, result):
         html_content = markdown.markdown(result, extensions=["fenced_code", "tables"])

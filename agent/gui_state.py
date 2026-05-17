@@ -8,6 +8,9 @@ def resolve_ledger_path(mode: str, task_name: str) -> Path | None:
     if mode == "writing":
         draft = Path("Agent-Drafts/active_draft_state.json")
         return draft if draft.exists() else Path(f"Agent-Tasks/{task_name}.json")
+    if mode == "code":
+        code_buf = Path("Agent-Code/active_code_state.json")
+        return code_buf if code_buf.exists() else Path(f"Agent-Tasks/{task_name}.json")
     if mode == "research":
         return Path(f"Agent-Plans/{task_name}.json")
     if mode in ("autonomous", "task", ""):
@@ -80,3 +83,39 @@ def render_writing_draft_html(state_data: dict) -> str:
         )
     html_state += "</ul>"
     return html_state
+
+
+def render_code_canvas_html(state_data: dict, task_ledger: dict | None = None) -> str:
+    """Render code buffer metadata for the Task State Tracker."""
+    project = state_data.get("project_name", "Code Project")
+    primary = state_data.get("language_primary", "?")
+    html = (
+        f"<h2 style='color: #2ecc71; border-bottom: 1px solid #555; padding-bottom: 5px;'>"
+        f"Code Canvas: {project}</h2>"
+        f"<p style='color: #7f8c8d;'>Primary language: {primary}</p>"
+    )
+    if task_ledger:
+        idx = task_ledger.get("current_step_index", 0)
+        steps = task_ledger.get("steps", [])
+        if idx < len(steps):
+            sk = steps[idx].get("step_kind", "code")
+            html += f"<p><b>Current step kind:</b> {sk}</p>"
+
+    html += "<ul style='list-style-type: none; padding-left: 0;'>"
+    for f in state_data.get("files", []):
+        path = f.get("path", "?")
+        lint = f.get("lint_status", "?")
+        test = f.get("last_test", "?")
+        dirty = " *" if f.get("dirty") else ""
+        icon = "#e74c3c" if lint == "error" else "#f39c12" if lint == "warn" else "#2ecc71"
+        html += (
+            f"<li style='margin-bottom: 8px; padding: 8px; border-left: 4px solid {icon};'>"
+            f"<code>{path}</code>{dirty}<br>"
+            f"<i style='font-size: 0.85em; color: #bdc3c7;'>"
+            f"{f.get('line_count', 0)} lines | lint={lint} | test={test}</i></li>"
+        )
+    html += "</ul>"
+    targets = state_data.get("test_targets", [])
+    if targets:
+        html += f"<p><b>pytest targets:</b> {', '.join(targets)}</p>"
+    return html

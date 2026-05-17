@@ -56,3 +56,18 @@ def test_tune_plan_json_roundtrip():
 
 def test_step_kind_hint_nonempty():
     assert "web_search" in get_step_kind_hint("search")
+
+
+def test_code_mode_tdd_hint_note():
+    plan = {
+        "status": "in_progress",
+        "current_step_index": 0,
+        "steps": [{"description": "Do thing", "max_iterations": 3}],
+    }
+    _, notes = validate_and_tune_plan(plan, "code", "implement a new feature with pytest")
+    assert any("TDD" in n for n in notes)
+
+
+def test_tdd_step_kinds_in_rubric():
+    assert "tdd_red" in BUDGET_RUBRIC
+    assert "run_pytest" in get_step_kind_hint("tdd_red")

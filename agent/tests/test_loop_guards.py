@@ -18,6 +18,7 @@ from main import (
 )
 from tools import normalize_workspace_path
 from tool_library.agent_tools import save_research_note, MAX_SCRATCHPAD_NOTE_BYTES
+from loop_engine import LoopEngine
 
 
 def test_validate_rejects_tool_name_alias():
@@ -117,9 +118,25 @@ def test_save_research_note_truncates_large_payload(monkeypatch):
 
 
 def test_loop_engine_duplicate_warning_at_two():
-    from loop_engine import LoopEngine
-
     sig = '{"arguments": {}, "name": "list_directory"}'
     msg = LoopEngine._duplicate_tool_warning([sig, sig])
     assert msg is not None
     assert "twice" in msg
+
+
+def test_tdd_red_gate_blocks_without_failure():
+    msg = LoopEngine._tdd_advance_gate("tdd_red", [], "Tool 'run_pytest' result:\n✅ pytest: 1 passed")
+    assert msg is not None
+    assert "tdd_red" in msg
+
+
+def test_tdd_red_gate_allows_failure():
+    blob = "Tool 'run_pytest' result:\n❌ pytest: 0 passed, 1 failed"
+    assert LoopEngine._tdd_advance_gate("tdd_red", [], blob) is None
+
+
+def test_tdd_green_gate_requires_pass():
+    fail_blob = "Tool 'run_pytest' result:\n❌ pytest: 1 passed, 2 failed"
+    assert LoopEngine._tdd_advance_gate("tdd_green", [], fail_blob) is not None
+    pass_blob = "Tool 'run_pytest' result:\n✅ pytest: 2 passed, 0 failed"
+    assert LoopEngine._tdd_advance_gate("tdd_green", [], pass_blob) is None
