@@ -41,3 +41,34 @@ def test_image_encoding(tmp_path):
     
     expected_b64 = base64.b64encode(b"fake_image_bytes").decode("utf-8")
     assert images[0] == expected_b64
+
+
+def test_csv_parsing(tmp_path):
+    csv_file = tmp_path / "data.csv"
+    csv_file.write_text("name,value\nfoo,1\nbar,2\n", encoding="utf-8")
+    chunks, images = process_local_attachments([str(csv_file)])
+    assert len(images) == 0
+    assert len(chunks) == 1
+    assert "foo" in chunks[0]
+    assert "name" in chunks[0] and "foo" in chunks[0]
+
+
+def test_html_parsing(tmp_path):
+    html_file = tmp_path / "page.html"
+    html_file.write_text(
+        "<html><body><script>x</script><p>Visible text</p></body></html>",
+        encoding="utf-8",
+    )
+    chunks, images = process_local_attachments([str(html_file)])
+    assert "Visible text" in chunks[0]
+    assert "script" not in chunks[0].lower() or "x" not in chunks[0]
+
+
+def test_oversize_file_skipped(tmp_path):
+    from file_parser import MAX_FILE_BYTES
+
+    big = tmp_path / "huge.txt"
+    big.write_bytes(b"x" * (MAX_FILE_BYTES + 1))
+    chunks, images = process_local_attachments([str(big)])
+    assert len(chunks) == 1
+    assert "exceeds" in chunks[0].lower() or "skipped" in chunks[0].lower()

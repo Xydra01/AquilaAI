@@ -5,7 +5,6 @@ import requests
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from main import OllamaClient
 
 @patch('main.requests.Session.post')
@@ -19,8 +18,7 @@ def test_vram_load_timeout(mock_post):
     client = OllamaClient()
     result = client.chat([{"role": "user", "content": "Hello"}])
     
-    assert "System Timeout: Model took too long to load into VRAM" in result
-
+    assert "System Timeout: Model took too long to load into VRAM" in result["message"]["content"]
 
 @patch('main.requests.Session.post')
 @patch('main.time.time')
@@ -33,16 +31,13 @@ def test_generation_kill_switch(mock_time, mock_post):
     mock_response.iter_lines.return_value = [b'data: {"choices": [{"delta": {"content": "Partial text"}}]}']
     mock_post.return_value = mock_response
     
-    # Mock the passage of time.
-    # main.py calls time.time() 4 times per loop: 
-    # [Start Time, Token Print Time, Start Time Reset, Kill Switch Check Time]
-    # We feed it sequential times, forcing the 4th check to be 200 seconds (triggering the 120s kill switch).
     mock_time.side_effect = [0.0, 1.0, 1.0, 200.0, 200.0, 200.0] 
     
     client = OllamaClient()
+    generator = client.chat([{"role": "user", "content": "Write an infinite loop"}], timeout=120, stream=True)
     
-    result = client.chat([{"role": "user", "content": "Write an infinite loop"}], timeout=120)
+    chunks = list(generator)
+    full_text = "".join([c["message"]["content"] for c in chunks])
     
-    assert "Partial text" in result
- 
-    assert "Generation forcibly severed." in result
+    assert "Partial text" in full_text
+    assert "Generation forcibly severed." in full_text
