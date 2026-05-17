@@ -224,6 +224,20 @@ flowchart LR
 
 **Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`, `get_code_prompt`.
 
+### Mode workspaces (3.4)
+
+The desktop UI switches **dedicated layouts** per mode (`agent/gui_pages/` + `QStackedWidget` in `agent/gui.py`):
+
+| Workspace | Layout |
+|-----------|--------|
+| **Chat** | Single-column conversation |
+| **Autonomous Task** | All-in-one: chat + canvas + execution log (unchanged behavior) |
+| **Research / Writing** | Same 3-pane as Autonomous until dedicated pages ship |
+| **Code** | IDE: file tree, read-only editor tabs, agent rail, lint/pytest strips |
+| **Learn** | Placeholder (classroom UI planned for 4.0) |
+
+**Code project open:** toolbar **Open in-place** (`attach_existing_repo`) or **Import sandbox** (`import_codebase` copy under `Agent-Code/{project}/`). For large repos the agent uses **manifest + search + regions**, not full directory trees in context.
+
 ---
 
 ## How the agent loop works
@@ -345,6 +359,8 @@ Tools are merged from `SURVIVAL_TOOLS` and `tool_library.ALL_TOOLS`. Internal `_
 | `create_buffer_file`, `replace_lines`, `apply_unified_patch`, `replace_symbol` | Incremental edits |
 | `read_file_region`, `sync_project_to_disk` | Targeted read + disk sync |
 | `run_pytest`, `run_linter`, `set_test_targets` | TDD + lint (Python full) |
+| `import_codebase`, `attach_existing_repo` | Manifest import (in-place or sandbox) |
+| `index_codebase_for_search` | Semantic search scoped to project root |
 
 ### Email (`tool_library/email_tools.py`)
 

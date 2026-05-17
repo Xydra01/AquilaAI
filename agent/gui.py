@@ -4,32 +4,44 @@ import threading
 import markdown
 import json
 import os
-import datetime
 import time
 import glob
 from pathlib import Path
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QTextEdit, QPlainTextEdit, QLineEdit, QPushButton, QLabel, QComboBox,
-    QTabWidget, QInputDialog, QFileDialog, QMessageBox,
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QLabel,
+    QComboBox,
+    QStackedWidget,
+    QInputDialog,
+    QFileDialog,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QPalette, QColor, QTextCursor
+from PySide6.QtGui import QFont
+
 from file_parser import process_local_attachments
-from gui_state import (
-    resolve_ledger_path,
-    render_step_ledger_html,
-    render_writing_draft_html,
-    render_code_canvas_html,
-)
+from gui_pages import AutonomousPage, ChatPage, CodeIdePage, StubModePage, BaseModePage
 
 # Import Aquila's Brain and Tools
 from main import global_agent, initiate_sleep_cycle
 from tool_library import agent_tools
 
-# ---------------------------------------------------------
-# 1. BACKGROUND THREADS (Agent & Sleep Cycle)
-# ---------------------------------------------------------
+MODE_FLAGS = {
+    "Chat Mode": "chat",
+    "Autonomous Task": "autonomous",
+    "Code Mode": "code",
+    "Writing Mode": "writing",
+    "Research Mode": "research",
+    "Learn Mode": "learn",
+}
+
+
 class AgentWorker(QThread):
     ledger_signal = Signal(str)
     finished_signal = Signal(str)
@@ -71,7 +83,6 @@ class AgentWorker(QThread):
                     image_payloads=self.attached_images,
                     stream=True,
                 )
-
                 full_text = ""
                 for chunk in generator:
                     if self.cancel_flag:
@@ -79,9 +90,7 @@ class AgentWorker(QThread):
                     token = chunk.get("message", {}).get("content", "")
                     full_text += token
                     self.ledger_signal.emit(token)
-
                 self.finished_signal.emit(full_text)
-
             else:
                 res = global_agent.run_unified_task(
                     self.task_name,
@@ -93,7 +102,6 @@ class AgentWorker(QThread):
                     image_payloads=self.attached_images,
                 )
                 self.finished_signal.emit(f"✅ Task Completed:\n{res}")
-
         except Exception as e:
             self.finished_signal.emit(f"❌ Error: {str(e)}")
 
@@ -109,20 +117,17 @@ class SleepWorker(QThread):
             self.finished_signal.emit(f"❌ Sleep Cycle Error: {str(e)}")
 
 
-# ---------------------------------------------------------
-# 2. THE MAIN WINDOW
-# ---------------------------------------------------------
 class AquilaOS(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🦅 Aquila OS 3.2 - Desktop Canvas")
+        self.setWindowTitle("🦅 Aquila OS 3.4 - Mode Workspaces")
         self.resize(1400, 800)
         self.dark_mode = False
         self._chat_streaming = False
-
         self.attached_chunks = []
         self.attached_images = []
         self._chat_history_messages = []
+        self.worker = None
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -138,106 +143,80 @@ class AquilaOS(QMainWindow):
         top_bar.addWidget(self.sleep_btn)
         main_layout.addLayout(top_bar)
 
-        self.splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.splitter)
-
-        self.left_panel = QWidget()
-        left_layout = QVBoxLayout(self.left_panel)
-
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Workspace:"))
         self.mode_selector = QComboBox()
-        self.mode_selector.addItems(
-            [
-                "Chat Mode",
-                "Autonomous Task",
-                "Code Mode",
-                "Writing Mode",
-                "Research Mode",
-            ]
+        self.mode_selector.addItems(list(MODE_FLAGS.keys()))
+        self.mode_selector.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self.mode_selector, stretch=1)
+        main_layout.addLayout(mode_row)
+
+        self.page_stack = QStackedWidget()
+        main_layout.addWidget(self.page_stack, stretch=1)
+
+        self.autonomous_page = AutonomousPage(self)
+        self.chat_page = ChatPage(self)
+        self.code_page = CodeIdePage(self)
+        self.learn_stub = StubModePage(
+            self,
+            "Learn Workspace",
+            "A classroom-style layout (courses, assignments, progress) is planned for Aquila 4.0.",
+            "learn",
+            "Learn Mode",
         )
-        left_layout.addWidget(QLabel("Operation Mode:"))
-        left_layout.addWidget(self.mode_selector)
 
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
-        self.chat_history.append("<b>System:</b> Aquila OS 3.2 Online. Memory modules active.")
-        left_layout.addWidget(self.chat_history)
+        self._page_by_mode_label = {
+            "Chat Mode": self.chat_page,
+            "Autonomous Task": self.autonomous_page,
+            "Code Mode": self.code_page,
+            "Writing Mode": self.autonomous_page,
+            "Research Mode": self.autonomous_page,
+            "Learn Mode": self.learn_stub,
+        }
+        for page in {self.chat_page, self.autonomous_page, self.code_page, self.learn_stub}:
+            self.page_stack.addWidget(page)
 
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Assign a task or say hello...")
-        self.chat_input.returnPressed.connect(self.execute_task)
-        left_layout.addWidget(self.chat_input)
-
-        btn_layout = QHBoxLayout()
-        self.attach_button = QPushButton("📎 Attach Files")
-        self.attach_button.clicked.connect(self.open_attachment_dialog)
-        btn_layout.addWidget(self.attach_button)
-
-        self.run_btn = QPushButton("▶️ Run")
-        self.run_btn.clicked.connect(self.execute_task)
-        self.resume_btn = QPushButton("📂 Resume Task")
-        self.resume_btn.clicked.connect(self.resume_task_dialog)
-        self.stop_btn = QPushButton("🛑 Stop")
-        self.stop_btn.clicked.connect(self.stop_task)
-        self.stop_btn.setDisabled(True)
-
-        self.clear_chat_btn = QPushButton("🧹 Clear Chat View")
-        self.clear_chat_btn.clicked.connect(self.clear_chat_display)
-
-        btn_layout.addWidget(self.run_btn)
-        btn_layout.addWidget(self.resume_btn)
-        btn_layout.addWidget(self.stop_btn)
-        btn_layout.addWidget(self.clear_chat_btn)
-        left_layout.addLayout(btn_layout)
-
-        self.middle_panel = QWidget()
-        middle_layout = QVBoxLayout(self.middle_panel)
-        middle_layout.addWidget(QLabel("📝 The Canvas"))
-        self.canvas_tabs = QTabWidget()
-        self.canvas_editor = QTextEdit()
-        self.canvas_editor.setFont(QFont("Courier New", 11))
-        self.canvas_tabs.addTab(self.canvas_editor, "Preview")
-        middle_layout.addWidget(self.canvas_tabs)
-
-        self.right_panel = QWidget()
-        right_layout = QVBoxLayout(self.right_panel)
-
-        self.tab_widget = QTabWidget()
-        self.ledger_view = QTextEdit()
-        self.ledger_view.setReadOnly(True)
-        self.ledger_view.setFont(QFont("Consolas", 10))
-        self.tab_widget.addTab(self.ledger_view, "Execution Log")
-
-        self.state_view = QTextEdit()
-        self.state_view.setReadOnly(True)
-        self.state_view.setFont(QFont("Consolas", 10))
-        self.tab_widget.addTab(self.state_view, "Task State Tracker")
-
-        right_layout.addWidget(self.tab_widget)
-
-        self.splitter.addWidget(self.left_panel)
-        self.splitter.addWidget(self.middle_panel)
-        self.splitter.addWidget(self.right_panel)
-        self.splitter.setSizes([300, 600, 500])
-        self.worker = None
-
+        self._on_mode_changed(0)
+        self.chat_page.chat_history.append(
+            "<b>System:</b> Aquila OS 3.4 Online. Select a workspace above."
+        )
+        self.autonomous_page.chat_history.append(
+            "<b>System:</b> Autonomous Task — all-in-one canvas."
+        )
         self.toggle_theme()
+
+    def _on_mode_changed(self, _index: int) -> None:
+        label = self.mode_selector.currentText()
+        page = self._page_by_mode_label.get(label, self.autonomous_page)
+        for i in range(self.page_stack.count()):
+            if self.page_stack.widget(i) is page:
+                self.page_stack.setCurrentIndex(i)
+                if hasattr(page, "on_activate"):
+                    page.on_activate()
+                break
+
+    def current_page(self) -> BaseModePage:
+        w = self.page_stack.currentWidget()
+        return w if isinstance(w, BaseModePage) else self.autonomous_page
+
+    def current_mode_flag(self) -> str:
+        return MODE_FLAGS.get(self.mode_selector.currentText(), "autonomous")
 
     def toggle_theme(self):
         self.dark_mode = not self.dark_mode
         if self.dark_mode:
             self.setStyleSheet("""
                 QWidget { background-color: #1e1e1e; color: #d4d4d4; }
-                QTextEdit, QLineEdit { background-color: #252526; border: 1px solid #3e3e42; }
+                QTextEdit, QLineEdit, QPlainTextEdit, QTreeWidget { background-color: #252526;
+                    border: 1px solid #3e3e42; }
                 QPushButton { background-color: #333333; border: 1px solid #3e3e42; padding: 5px; }
                 QPushButton:hover { background-color: #3e3e42; }
                 QTabWidget::pane { border: 1px solid #3e3e42; }
                 QTabBar::tab { background: #252526; padding: 5px 10px; }
                 QTabBar::tab:selected { background: #3e3e42; }
             """)
-            self.ledger_view.setStyleSheet("color: #4CAF50;")
         else:
             self.setStyleSheet("")
-            self.ledger_view.setStyleSheet("color: #006400;")
 
     def open_attachment_dialog(self):
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -248,27 +227,25 @@ class AquilaOS(QMainWindow):
             "PDFs (*.pdf);;Documents (*.txt *.py *.md *.json *.csv *.html *.htm *.docx);;"
             "Spreadsheets (*.csv *.xlsx)",
         )
-
         if file_paths:
             self.attached_chunks, self.attached_images = process_local_attachments(file_paths)
-
             msg = f"Successfully attached and parsed {len(file_paths)} file(s).\n"
             msg += (
                 f"Resulted in {len(self.attached_chunks)} text chunk(s) and "
                 f"{len(self.attached_images)} image(s)."
             )
             QMessageBox.information(self, "Attachments Processed", msg)
-            self.attach_button.setText(f"📎 {len(file_paths)} Attached")
+            page = self.current_page()
+            if hasattr(page, "attach_button"):
+                page.attach_button.setText(f"📎 {len(file_paths)}")
 
     def trigger_sleep_cycle(self):
-        self.chat_history.append(
+        page = self.current_page()
+        page.append_chat_html(
             "<div style='margin-bottom: 15px; color: #9b59b6;'>"
-            "<b>System:</b> 🌙 Initiating Sleep Cycle. Consolidating memories...</div>"
+            "<b>System:</b> 🌙 Initiating Sleep Cycle...</div>"
         )
         self.sleep_btn.setDisabled(True)
-        self.run_btn.setDisabled(True)
-        self.resume_btn.setDisabled(True)
-
         self.sleep_worker = SleepWorker()
         self.sleep_worker.finished_signal.connect(self.sleep_finished)
         self.sleep_worker.start()
@@ -280,21 +257,25 @@ class AquilaOS(QMainWindow):
             f"<b style='color: #9b59b6;'>🧠 System (Sleep Cycle):</b><br>"
             f"<div style='line-height: 1.5;'>{html_content}</div></div>"
         )
-        self.chat_history.append(bubble)
+        self.current_page().append_chat_html(bubble)
         self.sleep_btn.setDisabled(False)
-        self.run_btn.setDisabled(False)
-        self.resume_btn.setDisabled(False)
 
     def _infer_resume_mode(self, task_name: str) -> str:
         if os.path.exists(f"Agent-Plans/{task_name}.json"):
             return "research"
-        draft = Path("Agent-Drafts/active_draft_state.json")
-        if draft.exists():
+        if Path("Agent-Drafts/active_draft_state.json").exists():
             return "writing"
-        code_buf = Path("Agent-Code/active_code_state.json")
-        if code_buf.exists():
+        if Path("Agent-Code/active_code_state.json").exists():
             return "code"
         return "autonomous"
+
+    def _select_mode_for_flag(self, mode_flag: str) -> None:
+        for label, flag in MODE_FLAGS.items():
+            if flag == mode_flag:
+                idx = self.mode_selector.findText(label)
+                if idx >= 0:
+                    self.mode_selector.setCurrentIndex(idx)
+                return
 
     def resume_task_dialog(self):
         task_files = glob.glob("Agent-Tasks/*.json") + glob.glob("Agent-Plans/*.json")
@@ -307,119 +288,76 @@ class AquilaOS(QMainWindow):
                         active_tasks.append(os.path.basename(f).replace(".json", ""))
             except Exception:
                 pass
-
         code_buf = Path("Agent-Code/active_code_state.json")
         if code_buf.exists():
             try:
                 with open(code_buf, "r", encoding="utf-8") as cf:
                     code_state = json.load(cf)
-                proj = code_state.get("project_name", "code_project")
-                label = f"[code] {proj}"
+                label = f"[code] {code_state.get('project_name', 'code_project')}"
                 if label not in active_tasks:
                     active_tasks.append(label)
             except Exception:
                 pass
-
         if not active_tasks:
-            self.chat_history.append(
-                "<div style='margin-bottom: 15px; color: #7f8c8d;'>"
-                "<b>System:</b> No active tasks found to resume.</div>"
+            self.current_page().append_chat_html(
+                "<div style='color: #7f8c8d;'><b>System:</b> No active tasks to resume.</div>"
             )
             return
-
         task_name, ok = QInputDialog.getItem(
-            self,
-            "Resume Task",
-            "Select an incomplete task to resume:",
-            active_tasks,
-            0,
-            False,
+            self, "Resume Task", "Select task:", active_tasks, 0, False
         )
-
-        if ok and task_name:
-            if task_name.startswith("[code] "):
-                mode_flag = "code"
-                task_name = task_name.replace("[code] ", "", 1)
-            else:
-                mode_flag = self._infer_resume_mode(task_name)
-            user_prompt = "Resume execution from the current objective."
-
-            user_bubble = (
-                f"<div style='margin-top: 15px; margin-bottom: 10px; padding: 10px; "
-                f"border-left: 4px solid #e74c3c;'>"
-                f"<b style='color: #e74c3c;'>👤 User (Resume Task):</b><br>"
-                f"<span style='font-size: 1.05em;'>Resuming: {task_name}</span></div>"
-            )
-            self.chat_history.append(user_bubble)
-
-            self.run_btn.setDisabled(True)
-            self.resume_btn.setDisabled(True)
-            self.stop_btn.setDisabled(False)
-            self.ledger_view.clear()
-            self._chat_streaming = False
-
-            self.worker = AgentWorker(task_name, user_prompt, mode_flag)
-            self.worker.ledger_signal.connect(self.update_ledger_ui)
-            self.worker.ask_user_signal.connect(self.prompt_user_input)
-            self.worker.finished_signal.connect(self.task_finished)
-            self.worker.start()
+        if not ok or not task_name:
+            return
+        if task_name.startswith("[code] "):
+            mode_flag = "code"
+            task_name = task_name.replace("[code] ", "", 1)
+        else:
+            mode_flag = self._infer_resume_mode(task_name)
+        self._select_mode_for_flag(mode_flag)
+        page = self.current_page()
+        page.append_chat_html(
+            f"<b>User (Resume):</b> Resuming {task_name}"
+        )
+        page.set_run_buttons_running(True)
+        page.update_ledger("", clear=True)
+        self._chat_streaming = False
+        self.worker = AgentWorker(task_name, "Resume from current objective.", mode_flag)
+        self._wire_worker(self.worker, page)
 
     def stop_task(self):
         if self.worker and self.worker.isRunning():
             self.worker.cancel_flag = True
-            self.ledger_view.append("\n\n🛑 ABORT SIGNAL SENT. Waiting for agent to safely halt...\n")
-            self.stop_btn.setDisabled(True)
+            self.current_page().update_ledger("\n🛑 Abort signal sent...\n")
+            self.current_page().set_run_buttons_running(False)
 
     def clear_chat_display(self):
-        """Clear visible chat bubbles without wiping in-memory conversation history."""
-        self.chat_history.clear()
-        self.chat_history.append(
-            "<b>System:</b> Chat view cleared. Conversation memory is still active for the next message."
+        page = self.current_page()
+        page.clear_chat_display()
+        page.append_chat_html(
+            "<b>System:</b> Chat view cleared; memory preserved for next message."
         )
 
     def prompt_user_input(self, question):
         text, ok = QInputDialog.getMultiLineText(self, "Aquila Requires Input", question)
-        if ok and text:
-            self.worker.user_reply = text
-        else:
-            self.worker.user_reply = "User declined to answer or cancelled."
+        self.worker.user_reply = text if ok and text else "User declined to answer."
         self.worker.reply_event.set()
 
     def execute_task(self):
-        user_prompt = self.chat_input.text().strip()
+        page = self.current_page()
+        user_prompt = page.get_chat_input_text()
         if not user_prompt:
             return
-
+        mode_flag = self.current_mode_flag()
         mode_selection = self.mode_selector.currentText()
-        if mode_selection == "Chat Mode":
-            mode_flag = "chat"
-        elif mode_selection == "Research Mode":
-            mode_flag = "research"
-        elif mode_selection == "Writing Mode":
-            mode_flag = "writing"
-        elif mode_selection == "Code Mode":
-            mode_flag = "code"
-        else:
-            mode_flag = "autonomous"
-
         clean_prefix = re.sub(r"[^a-zA-Z0-9]", "", "_".join(user_prompt.split()[:3]).lower())
         task_name = f"{clean_prefix}_{int(time.time())}"
-
-        user_bubble = (
-            f"<div style='margin-top: 15px; margin-bottom: 10px; padding: 10px; "
-            f"border-left: 4px solid #e74c3c;'>"
-            f"<b style='color: #e74c3c;'>👤 User ({mode_selection}):</b><br>"
-            f"<span style='font-size: 1.05em;'>{user_prompt}</span></div>"
+        page.append_chat_html(
+            f"<b>User ({mode_selection}):</b> {user_prompt}"
         )
-        self.chat_history.append(user_bubble)
-        self.chat_input.clear()
-
-        self.run_btn.setDisabled(True)
-        self.resume_btn.setDisabled(True)
-        self.stop_btn.setDisabled(False)
-        self.ledger_view.clear()
+        page.clear_chat_input()
+        page.set_run_buttons_running(True)
+        page.update_ledger("", clear=True)
         self._chat_streaming = mode_flag == "chat"
-
         self.worker = AgentWorker(
             task_name,
             user_prompt,
@@ -428,139 +366,48 @@ class AquilaOS(QMainWindow):
             self.attached_images,
             chat_history=self._chat_history_messages.copy(),
         )
-
         self.attached_chunks = []
         self.attached_images = []
-        self.attach_button.setText("📎 Attach Files")
+        if hasattr(page, "attach_button"):
+            page.attach_button.setText("📎 Attach" if mode_flag == "chat" else "📎")
+        self._wire_worker(self.worker, page)
 
-        if mode_flag == "chat":
-            self.chat_history.append(
-                "<div style='margin-bottom: 20px; padding: 10px; border-left: 4px solid #3498db;'>"
-                "<b style='color: #3498db;'>🦅 Aquila:</b><br>"
-                "<span id='chat-stream-body'></span></div>"
-            )
-            self.worker.ledger_signal.connect(self.stream_chat_token)
-            self.worker.finished_signal.connect(self.chat_finished)
+    def _wire_worker(self, worker: AgentWorker, page: BaseModePage) -> None:
+        page.bind_worker(worker)
+        worker.ask_user_signal.connect(self.prompt_user_input)
+        if self._chat_streaming:
+            page.append_chat_html("<b>🦅 Aquila:</b> ")
+            worker.ledger_signal.connect(page.stream_chat_token)
+            worker.finished_signal.connect(self.chat_finished)
         else:
-            self.worker.ledger_signal.connect(self.update_ledger_ui)
-            self.worker.finished_signal.connect(self.task_finished)
+            worker.ledger_signal.connect(self.update_ledger_ui)
+            worker.finished_signal.connect(self.task_finished)
+        worker.start()
 
-        self.worker.ask_user_signal.connect(self.prompt_user_input)
-        self.worker.start()
+    def update_ledger_ui(self, text: str) -> None:
+        page = self.current_page()
+        page.update_ledger(text, clear=True)
+        if self.worker:
+            page.bind_worker(self.worker)
+            page.refresh_state()
 
-    def stream_chat_token(self, token):
-        cursor = self.chat_history.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertText(token)
-        self.chat_history.setTextCursor(cursor)
-
-    def chat_finished(self, result):
-        """Re-enable UI after chat streaming without duplicating the response bubble."""
+    def chat_finished(self, result: str) -> None:
         self._chat_streaming = False
-        if result and self.worker is not None:
+        if result and self.worker:
             self._chat_history_messages.append(
                 {"role": "user", "content": self.worker.prompt}
             )
             self._chat_history_messages.append({"role": "assistant", "content": result})
-        self.run_btn.setDisabled(False)
-        self.resume_btn.setDisabled(False)
-        self.stop_btn.setDisabled(True)
-        self.chat_input.setFocus()
+        self.current_page().set_run_buttons_running(False)
 
-    def update_ledger_ui(self, text):
-        self.ledger_view.clear()
-        self.ledger_view.append(text)
-
-        if not self.worker:
-            return
-
-        self._refresh_state_tracker()
-
-    def _refresh_state_tracker(self):
-        if not self.worker:
-            return
-
-        mode = self.worker.mode.lower()
-        state_path = resolve_ledger_path(mode, self.worker.task_name)
-
-        if not state_path or not state_path.exists():
-            self.state_view.setHtml(
-                "<p style='color: #7f8c8d;'>No active ledger file yet.</p>"
-            )
-            return
-
-        try:
-            with open(state_path, "r", encoding="utf-8") as f:
-                state_data = json.load(f)
-
-            if mode == "code" or state_path.name == "active_code_state.json":
-                task_ledger = None
-                task_ledger_path = Path(f"Agent-Tasks/{self.worker.task_name}.json")
-                if task_ledger_path.exists():
-                    with open(task_ledger_path, "r", encoding="utf-8") as tf:
-                        task_ledger = json.load(tf)
-                self.state_view.setHtml(
-                    render_code_canvas_html(state_data, task_ledger)
-                )
-                self._render_code_canvas_tabs(state_data)
-            elif mode == "writing" or (
-                state_path.name == "active_draft_state.json"
-            ):
-                html_state = render_writing_draft_html(state_data)
-                self.state_view.setHtml(html_state)
-
-                title = state_data.get("title", "Draft")
-                canvas_text = f"# {title}\n\n"
-                for sec in state_data.get("sections", []):
-                    canvas_text += f"## {sec.get('header', '')}\n{sec.get('content', '')}\n\n"
-                canvas_html = markdown.markdown(
-                    canvas_text, extensions=["fenced_code", "tables"]
-                )
-                self.canvas_editor.setHtml(
-                    f"<div style='font-family: Arial, sans-serif; line-height: 1.6;'>"
-                    f"{canvas_html}</div>"
-                )
-                while self.canvas_tabs.count() > 1:
-                    self.canvas_tabs.removeTab(1)
-            else:
-                self.state_view.setHtml(render_step_ledger_html(state_data))
-                while self.canvas_tabs.count() > 1:
-                    self.canvas_tabs.removeTab(1)
-
-        except Exception:
-            self.state_view.setHtml(
-                "<p style='color: #e74c3c;'>Error reading ledger state.</p>"
-            )
-
-    def _render_code_canvas_tabs(self, state_data: dict):
-        """Read-only file tabs from the code buffer."""
-        while self.canvas_tabs.count() > 0:
-            self.canvas_tabs.removeTab(0)
-        mono = QFont("Courier New", 10)
-        for f in state_data.get("files", []):
-            path = f.get("path", "file")
-            editor = QPlainTextEdit()
-            editor.setFont(mono)
-            editor.setReadOnly(True)
-            editor.setPlainText(f.get("content", ""))
-            self.canvas_tabs.addTab(editor, Path(path).name)
-
-    def task_finished(self, result):
+    def task_finished(self, result: str) -> None:
         html_content = markdown.markdown(result, extensions=["fenced_code", "tables"])
-        agent_bubble = (
-            f"<div style='margin-bottom: 20px; padding: 10px; border-left: 4px solid #3498db;'>"
-            f"<b style='color: #3498db;'>🦅 Aquila:</b><br>"
-            f"<div style='line-height: 1.5;'>{html_content}</div></div>"
+        self.current_page().append_chat_html(
+            f"<b>🦅 Aquila:</b><br>{html_content}"
         )
-        self.chat_history.append(agent_bubble)
-
-        self.run_btn.setDisabled(False)
-        self.resume_btn.setDisabled(False)
-        self.stop_btn.setDisabled(True)
-        self.chat_input.setFocus()
-
+        self.current_page().set_run_buttons_running(False)
         if self.worker and self.worker.mode.lower() != "chat":
-            self._refresh_state_tracker()
+            self.current_page().refresh_state()
 
 
 if __name__ == "__main__":

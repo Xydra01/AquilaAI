@@ -6,7 +6,7 @@ import inspect
 from chromadb.utils import embedding_functions
 
 # Firewall Import
-from tools import AGENT_CORE_DIR, FORBIDDEN_DIRS
+from tools import AGENT_CORE_DIR, should_skip_dir
 
 chroma_client = chromadb.PersistentClient(path=str(AGENT_CORE_DIR / "vector_db"))
 sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
@@ -30,7 +30,7 @@ def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):
     chunk_id = 0
     for root, dirs, files in os.walk(directory):
         # THE FIREWALL: Skip virtual environments!
-        dirs[:] = [d for d in dirs if d not in FORBIDDEN_DIRS]
+        dirs[:] = [d for d in dirs if not should_skip_dir(d)]
         for file in files:
             if file.endswith(extensions):
                 file_path = os.path.join(root, file)

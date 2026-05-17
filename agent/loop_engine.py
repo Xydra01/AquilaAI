@@ -219,12 +219,18 @@ class LoopEngine:
                             parse_retries = 0
                         continue
                     parse_retries = 0
+                    reflect_note = (
+                        "Tool Outputs:\n✅ Reflection recorded. Now output tool calls "
+                        "for your objective (act turn)."
+                    )
+                    if parsed_response.get("tools"):
+                        reflect_note += (
+                            "\n⚠️ OS: Tools in a reflect turn are ignored. "
+                            "Call them on the next act turn."
+                        )
                     conversation_history.append({
                         "role": "user",
-                        "content": (
-                            "Tool Outputs:\n✅ Reflection recorded. Now output tool calls "
-                            "for your objective (act turn)."
-                        ),
+                        "content": reflect_note,
                     })
                     turn_phase = "act"
                     pending_reflect = False

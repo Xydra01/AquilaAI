@@ -49,19 +49,17 @@ def test_ui_button_states_on_finish(qtbot, qapp):
         pytest.skip("Main window class not found in gui.py")
         
     window = MainWindowClass()
-    qtbot.addWidget(window)  # Registers the window with pytest-qt for safe lifecycle management
-    
-    # Force the buttons into an "active task" state manually
-    window.run_btn.setDisabled(True)
-    window.stop_btn.setDisabled(False)
-    
-    # Trigger the task_finished slot
+    qtbot.addWidget(window)
+    window.mode_selector.setCurrentText("Autonomous Task")
+    page = window.autonomous_page
+
+    page.run_btn.setDisabled(True)
+    page.stop_btn.setDisabled(False)
     window.task_finished("✅ Done!")
-    
-    # Verify the UI correctly reset the buttons for the next task
-    assert window.run_btn.isEnabled() == True
-    assert window.resume_btn.isEnabled() == True
-    assert window.stop_btn.isEnabled() == False
+
+    assert page.run_btn.isEnabled() is True
+    assert page.resume_btn.isEnabled() is True
+    assert page.stop_btn.isEnabled() is False
 
 def test_chat_history_appends_result(qtbot, qapp):
     """TDD Goal: Ensure that when a task finishes, the result is appended to the chat UI."""
@@ -70,12 +68,11 @@ def test_chat_history_appends_result(qtbot, qapp):
         
     window = MainWindowClass()
     qtbot.addWidget(window)
-    
-    # Trigger the task finish with a mock result
+    window.mode_selector.setCurrentText("Autonomous Task")
+
     window.task_finished("This is a test result.")
-    
-    # Read the raw HTML output of the chat history QTextEdit
-    chat_html = window.chat_history.toHtml()
+
+    chat_html = window.autonomous_page.chat_history.toHtml()
     
     # Verify the agent's response was formatted and injected
     assert "This is a test result" in chat_html
@@ -133,15 +130,14 @@ def test_stream_chat_token_ui_update(qtbot, qapp):
         
     window = MainWindowClass()
     qtbot.addWidget(window)
-    
-    window.chat_history.clear()
-    
-    # Simulate a token streaming in. This will trigger the AttributeError if cursor.End is used.
+    window.mode_selector.setCurrentText("Chat Mode")
+    page = window.chat_page
+    page.chat_history.clear()
+
     try:
-        window.stream_chat_token("Hello")
-        window.stream_chat_token(" World")
+        page.stream_chat_token("Hello")
+        page.stream_chat_token(" World")
     except AttributeError as e:
         pytest.fail(f"stream_chat_token raised an AttributeError: {e}")
-        
-    # Verify text was cleanly appended to the UI
-    assert "Hello World" in window.chat_history.toPlainText()
+
+    assert "Hello World" in page.chat_history.toPlainText()

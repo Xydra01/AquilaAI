@@ -1,21 +1,26 @@
 """
 Code Canvas toolkit — structured project buffer (mirrors writing_tools pattern).
 """
+import ast
 import difflib
 import inspect
 import json
 import os
 import re
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
-from language_registry import get_language, run_linter
-from tools import normalize_workspace_path, read_file_lines
+from language_registry import get_language, index_extensions, run_linter
+from tools import is_ignored_code_path, normalize_workspace_path, read_file_lines, should_skip_dir
 
 CODE_DIR = Path("Agent-Code")
 CODE_DIR.mkdir(exist_ok=True)
 ACTIVE_CODE_FILE = CODE_DIR / "active_code_state.json"
 MAX_REGION_LINES = 150
 MAX_NEW_FILE_LINES = 80
+MAX_OUTLINE_FILES = 200
+MAX_IMPORT_FILES = 5000
 
 
 def _slugify(name: str) -> str:
@@ -64,27 +69,117 @@ def _find_file(state: dict, path: str) -> dict | None:
     return None
 
 
-def _upsert_file(state: dict, path: str, content: str, dirty: bool = True) -> dict:
+def _ensure_file_content(state: dict, entry: dict) -> str:
+    content = entry.get("content") or ""
+    if content or not entry.get("indexed_only"):
+        return content
+    disk = _disk_path(state, entry["path"])
+    if disk.is_file():
+        try:
+            content = disk.read_text(encoding="utf-8", errors="replace")
+            entry["content"] = content
+            entry["line_count"] = len(content.splitlines())
+        except Exception:
+            pass
+    return entry.get("content") or ""
+
+
+def _upsert_file(
+    state: dict,
+    path: str,
+    content: str,
+    dirty: bool = True,
+    *,
+    indexed_only: bool = False,
+) -> dict:
     norm = _relative_to_root(state, path)
     spec = get_language(norm)
     lang = spec.name if spec else "unknown"
     entry = _find_file(state, norm)
     if entry:
         entry["content"] = content
-        entry["line_count"] = len(content.splitlines())
+        entry["line_count"] = len(content.splitlines()) if content else 0
         entry["language"] = lang
         entry["dirty"] = dirty
+        if indexed_only:
+            entry["indexed_only"] = True
     else:
         state.setdefault("files", []).append({
             "path": norm,
             "language": lang,
             "content": content,
-            "line_count": len(content.splitlines()),
+            "line_count": len(content.splitlines()) if content else 0,
             "lint_status": "unknown",
             "last_test": "not_run",
             "dirty": dirty,
+            "indexed_only": indexed_only,
         })
     return state
+
+
+def _walk_source_files(root: Path, extensions: set[str]) -> list[Path]:
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not should_skip_dir(d)]
+        for name in filenames:
+            p = Path(dirpath) / name
+            rel = p.relative_to(root)
+            if is_ignored_code_path(str(rel.as_posix())):
+                continue
+            if name.endswith(tuple(extensions)):
+                found.append(p)
+            if len(found) >= MAX_IMPORT_FILES:
+                return found
+    return found
+
+
+def _detect_dependency_hints(src: Path) -> dict:
+    """Record venv + manifest paths without indexing site-packages."""
+    hints: dict[str, str] = {}
+    for vname in (".venv", "venv", "env"):
+        vp = src / vname
+        if vp.is_dir():
+            hints["venv_dir"] = vname
+            break
+    if (src / "requirements.txt").is_file():
+        hints["requirements_txt"] = "requirements.txt"
+    if (src / "pyproject.toml").is_file():
+        hints["pyproject_toml"] = "pyproject.toml"
+    if (src / "package.json").is_file():
+        hints["package_json"] = "package.json"
+    return hints
+
+
+def _prune_ignored_files(state: dict) -> int:
+    files = state.get("files", [])
+    kept = [f for f in files if not is_ignored_code_path(f.get("path", ""))]
+    removed = len(files) - len(kept)
+    state["files"] = kept
+    return removed
+
+
+def prune_ignored_buffer_files() -> str:
+    """Remove .venv, node_modules, etc. from the code buffer manifest."""
+    state = _load_state()
+    if not state:
+        return "❌ Error: No active code project."
+    removed = _prune_ignored_files(state)
+    _save_state(state)
+    if removed:
+        return f"✅ Pruned {removed} ignored paths (venv/cache/build dirs) from buffer."
+    return "✅ No ignored paths in buffer."
+
+
+def _python_symbols(content: str) -> list[str]:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append(node.name)
+    return names[:12]
 
 
 def init_code_project(project_name: str, root: str = "", language_primary: str = "python") -> str:
@@ -102,6 +197,7 @@ def init_code_project(project_name: str, root: str = "", language_primary: str =
         "project_name": project_name,
         "root": norm_root,
         "language_primary": language_primary,
+        "workspace_mode": "sandbox",
         "files": [],
         "test_targets": [],
         "notes": [],
@@ -115,24 +211,158 @@ def init_code_project(project_name: str, root: str = "", language_primary: str =
     )
 
 
+def import_codebase(
+    source_path: str,
+    project_name: str = "",
+    workspace_mode: str = "sandbox",
+    load_content: str = "false",
+) -> str:
+    """Import a directory manifest into the code buffer (sandbox copy or in-place)."""
+    src = Path(normalize_workspace_path(source_path))
+    if not src.is_dir():
+        return f"❌ Error: '{source_path}' is not a directory."
+    slug = _slugify(project_name or src.name)
+    mode = (workspace_mode or "sandbox").lower()
+    load_all = str(load_content).lower() in ("true", "1", "yes")
+
+    if mode == "in_place":
+        norm_root = normalize_workspace_path(str(src))
+    else:
+        norm_root = f"Agent-Code/{slug}"
+        dest = Path(norm_root)
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+
+    extensions = index_extensions()
+    files = _walk_source_files(src, extensions)
+    dep_hints = _detect_dependency_hints(src)
+    state = {
+        "project_name": project_name or src.name,
+        "root": norm_root,
+        "language_primary": "python",
+        "workspace_mode": mode,
+        "indexed_at": datetime.now(timezone.utc).isoformat(),
+        "dependency_hints": dep_hints,
+        "files": [],
+        "test_targets": [],
+        "notes": [],
+    }
+
+    for fp in files:
+        if mode == "sandbox":
+            rel = fp.relative_to(src)
+            target = Path(norm_root) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(fp, target)
+            buf_path = str(rel.as_posix())
+            read_path = target
+        else:
+            rel = fp.relative_to(src)
+            buf_path = str(rel.as_posix())
+            read_path = fp
+
+        content = ""
+        if load_all and read_path.stat().st_size < 120_000:
+            try:
+                content = read_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                content = ""
+        line_count = len(content.splitlines()) if content else sum(
+            1 for _ in open(read_path, encoding="utf-8", errors="replace")
+        )
+        spec = get_language(buf_path)
+        state["files"].append({
+            "path": buf_path,
+            "language": spec.name if spec else "unknown",
+            "content": content,
+            "line_count": line_count,
+            "lint_status": "unknown",
+            "last_test": "not_run",
+            "dirty": False,
+            "indexed_only": not load_all,
+        })
+
+    removed = _prune_ignored_files(state)
+    _save_state(state)
+    msg = (
+        f"✅ Imported {len(state['files'])} source files ({mode}) under {norm_root}/. "
+        "Use read_code_outline or index_codebase_for_search; read_file_region for edits."
+    )
+    if dep_hints.get("venv_dir"):
+        msg += (
+            f"\n📦 Detected {dep_hints['venv_dir']}/ (not indexed). "
+            "Use requirements.txt / imports for dependencies; pip install uses the active env."
+        )
+    if dep_hints.get("requirements_txt"):
+        msg += f"\n📄 See {dep_hints['requirements_txt']} for Python dependencies."
+    if removed:
+        msg += f"\n(pruned {removed} paths under ignored dirs)"
+    return msg
+
+
+def attach_existing_repo(source_path: str, project_name: str = "") -> str:
+    """Attach an existing repo in-place (no copy)."""
+    return import_codebase(
+        source_path,
+        project_name,
+        workspace_mode="in_place",
+        load_content="false",
+    )
+
+
+def index_codebase_for_search(query: str, directory: str = "") -> str:
+    """Semantic search scoped to the active project root."""
+    from tool_library.coding_tools import semantic_code_search
+
+    state = _load_state()
+    root = directory.strip() or (_project_root(state) if state else ".")
+    return semantic_code_search(query, root)
+
+
 def read_code_outline() -> str:
     """List files in the buffer with line counts (low context cost)."""
     state = _load_state()
     if not state:
         return "❌ Error: No active code project. Use init_code_project first."
-    lines = [f"PROJECT: {state.get('project_name', '?')} | root: {state.get('root', '.')}"]
-    files = state.get("files", [])
+    mode = state.get("workspace_mode", "sandbox")
+    lines = [
+        f"PROJECT: {state.get('project_name', '?')} | root: {state.get('root', '.')} | mode: {mode}",
+    ]
+    files = [f for f in state.get("files", []) if not is_ignored_code_path(f.get("path", ""))]
+    dep = state.get("dependency_hints", {})
+    if dep.get("venv_dir"):
+        lines.append(
+            f"DEPS: {dep['venv_dir']}/ present (not indexed). "
+            "Use requirements.txt / pyproject.toml + imports."
+        )
     if not files:
-        return lines[0] + "\n(no files in buffer yet)"
-    for f in files:
+        return lines[0] + "\n(no source files in buffer yet)"
+    overflow = 0
+    for i, f in enumerate(files):
+        if i >= MAX_OUTLINE_FILES:
+            overflow = len(files) - MAX_OUTLINE_FILES
+            break
         dirty = " [dirty]" if f.get("dirty") else ""
+        idx = " [indexed]" if f.get("indexed_only") else ""
+        sym = ""
+        if f.get("language") == "python":
+            content = _ensure_file_content(state, f)
+            if content:
+                syms = _python_symbols(content)
+                if syms:
+                    sym = " | symbols: " + ", ".join(syms)
         lines.append(
             f"  - {f['path']} ({f.get('line_count', 0)} lines, "
-            f"lint={f.get('lint_status', '?')}, test={f.get('last_test', '?')}){dirty}"
+            f"lint={f.get('lint_status', '?')}, test={f.get('last_test', '?')})"
+            f"{dirty}{idx}{sym}"
         )
+    if overflow:
+        lines.append(f"  ... and {overflow} more files (use semantic_code_search to narrow)")
     targets = state.get("test_targets", [])
     if targets:
         lines.append("TEST TARGETS: " + ", ".join(targets))
+    _save_state(state)
     return "\n".join(lines)
 
 
@@ -146,7 +376,8 @@ def read_file_region(file_path: str, start_line: int, end_line: int) -> str:
         end_line = start_line + MAX_REGION_LINES - 1
     entry = _find_file(state, norm) if state else None
     if entry:
-        lines = entry["content"].splitlines()
+        text = _ensure_file_content(state, entry)
+        lines = text.splitlines()
         chunk = lines[start_line - 1 : end_line]
         return (
             f"--- {norm} lines {start_line}-{end_line} ---\n"
@@ -358,9 +589,12 @@ def sync_project_to_disk() -> str:
     root = _project_root(state)
     Path(root).mkdir(parents=True, exist_ok=True)
     for entry in state.get("files", []):
+        if entry.get("indexed_only") and not entry.get("dirty") and not entry.get("content"):
+            continue
         disk = _disk_path(state, entry["path"])
         disk.parent.mkdir(parents=True, exist_ok=True)
-        disk.write_text(entry["content"], encoding="utf-8")
+        content = _ensure_file_content(state, entry)
+        disk.write_text(content, encoding="utf-8")
         entry["dirty"] = False
         lint = run_linter(str(disk), entry["content"])
         entry["lint_status"] = lint.status
@@ -446,4 +680,17 @@ CODE_CANVAS_TOOLS = {
     "sync_project_to_disk": {"func": sync_project_to_disk, "description": inspect.getdoc(sync_project_to_disk)},
     "run_pytest": {"func": run_pytest, "description": inspect.getdoc(run_pytest)},
     "run_linter": {"func": run_linter_tool, "description": inspect.getdoc(run_linter_tool)},
+    "import_codebase": {"func": import_codebase, "description": inspect.getdoc(import_codebase)},
+    "attach_existing_repo": {
+        "func": attach_existing_repo,
+        "description": inspect.getdoc(attach_existing_repo),
+    },
+    "index_codebase_for_search": {
+        "func": index_codebase_for_search,
+        "description": inspect.getdoc(index_codebase_for_search),
+    },
+    "prune_ignored_buffer_files": {
+        "func": prune_ignored_buffer_files,
+        "description": inspect.getdoc(prune_ignored_buffer_files),
+    },
 }

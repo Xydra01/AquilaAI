@@ -622,7 +622,34 @@ Authoritative edits in Code Mode go through **code canvas tools** (`init_code_pr
 
 ---
 
-## 18. Extension points and rough edges
+## 18. Mode-specific GUI shells (3.4)
+
+```mermaid
+flowchart TB
+    Main[AquilaOS QMainWindow]
+    Stack[QStackedWidget]
+    Main --> Stack
+    Stack --> ChatPage[ChatPage]
+    Stack --> AutoPage[AutonomousPage]
+    Stack --> CodeIDE[CodeIdePage]
+    Stack --> LearnStub[Learn stub]
+```
+
+| Module | Role |
+|--------|------|
+| [`agent/gui.py`](agent/gui.py) | Mode selector, shared `AgentWorker`, routes signals to active page |
+| [`agent/gui_pages/`](agent/gui_pages/) | Per-mode layouts (`BaseModePage` hooks) |
+| [`agent/gui_state.py`](agent/gui_state.py) | Ledger HTML renderers (unchanged) |
+
+**Code IDE** (`code_ide_page.py`): QFileDialog open/import, file tree from buffer, editor tabs, execution log in right rail. Project tools: `import_codebase`, `attach_existing_repo`, `index_codebase_for_search` in [`code_canvas_tools.py`](agent/tool_library/code_canvas_tools.py).
+
+**Context policy for large repos:** buffer stores paths + metadata (`indexed_only`); content loaded on demand. Agent prompt forbids deep `get_directory_tree` on repo root.
+
+**Future:** Writing (doc editor), Learn (LMS-style) — stubs only in 3.4.
+
+---
+
+## 19. Extension points and rough edges
 
 | Item | Status (3.3) |
 |------|----------------|
@@ -630,7 +657,8 @@ Authoritative edits in Code Mode go through **code canvas tools** (`init_code_pr
 | Inter-modal automation | Prompt says “in development” |
 | Streamlit (`app.py`) | Legacy 3.1 artifact; not maintained for 3.2 |
 | Task State Tracker | `gui_state`: autonomous, research, writing, **code** (`render_code_canvas_html`) |
-| Code Mode | `code_canvas_tools.py`, `language_registry.py`, GUI tabbed canvas |
+| Code Mode | `code_canvas_tools.py`, `language_registry.py`, `gui_pages/code_ide_page.py` |
+| Mode workspaces | `gui_pages/` + `QStackedWidget` in `gui.py` (3.4) |
 | Memory singleton | Fixed: `memory_singleton.aquila_memory` shared by `main` and `agent_tools` |
 | `_index_codebase` | Excluded from strict schema / executable tools |
 | Dependencies | `requirements.txt` at repo root |
@@ -648,7 +676,7 @@ Authoritative edits in Code Mode go through **code canvas tools** (`init_code_pr
 
 ---
 
-## 19. Quick reference: key files to read first
+## 20. Quick reference: key files to read first
 
 | Question | Start here |
 |----------|------------|

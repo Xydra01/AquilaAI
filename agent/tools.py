@@ -9,7 +9,46 @@ from dotenv import load_dotenv
 """Security firewall"""
 FORBIDDEN_FILES = ['.env', 'state.json', '.gitignore', 'chroma.sqlite3']
 FORBIDDEN_EXTS = ['.pem', '.key', '.log', '.db', '.sqlite3']
-FORBIDDEN_DIRS = ['Agent-Logs', 'vector_db', '__pycache__', '.git']
+FORBIDDEN_DIRS = [
+    'Agent-Logs',
+    'vector_db',
+    '__pycache__',
+    '.git',
+    '.venv',
+    'venv',
+    'node_modules',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.ruff_cache',
+    '.tox',
+    '.nox',
+    'dist',
+    'build',
+    '.eggs',
+    'htmlcov',
+    'site-packages',
+    'ai-agent-env',
+    '.cursor',
+    '.idea',
+    '.vscode',
+]
+
+
+def should_skip_dir(dirname: str) -> bool:
+    """Skip dependency/build/cache dirs when walking a codebase (not Aquila internals only)."""
+    if dirname in FORBIDDEN_DIRS:
+        return True
+    if dirname.endswith('.egg-info'):
+        return True
+    return False
+
+
+def is_ignored_code_path(path: str) -> bool:
+    """True if a project-relative path lies under an ignored directory."""
+    if not path:
+        return False
+    parts = Path(str(path).replace('\\', '/')).parts
+    return any(should_skip_dir(p) for p in parts)
 
 """env and root path loading"""
 AGENT_ROOT_DIR = Path.cwd().resolve()
@@ -52,7 +91,7 @@ def is_safe_path(path_obj: Path) -> bool:
         return False
     if path_obj.suffix in FORBIDDEN_EXTS:
         return False
-    if any(part in FORBIDDEN_DIRS for part in path_obj.parts):
+    if any(should_skip_dir(part) for part in path_obj.parts):
         return False
     return True
 
@@ -152,7 +191,7 @@ def list_directory(path="."):
             return f"Error: Directory '{target}' does not exist."
         items = []
         for item in target.iterdir():
-            if item.name in FORBIDDEN_DIRS:
+            if should_skip_dir(item.name):
                 continue
             if item.is_dir():
                 items.append(f"[DIR]  {item.name}/")
