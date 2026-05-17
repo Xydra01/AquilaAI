@@ -1,9 +1,7 @@
 # Tools that help Aquila function and complete tasks
 import inspect
-from memory import DualMemorySystem
 from rich.console import Console
-
-aquila_memory = DualMemorySystem()
+from memory_singleton import aquila_memory
 
 # --- NEW: QT THREADING BRIDGE ---
 USER_INPUT_CALLBACK = None
