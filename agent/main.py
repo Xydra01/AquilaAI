@@ -133,12 +133,16 @@ class DualLogger:
                 f.write(clean_text + "\n")
                 
     def log_iteration(self, iteration: int, content: str):
-        if not self.log_filename: return
+        if not self.log_filename:
+            return
+        os.makedirs(os.path.dirname(self.log_filename) or ".", exist_ok=True)
         with open(self.log_filename, "a", encoding="utf-8") as f:
             f.write(f"\n--- Iteration {iteration} ---\n{content}\n")
 
     def log_tool_execution(self, tool_name: str, args: dict, result: str):
-        if not self.log_filename: return
+        if not self.log_filename:
+            return
+        os.makedirs(os.path.dirname(self.log_filename) or ".", exist_ok=True)
         with open(self.log_filename, "a", encoding="utf-8") as f:
             f.write(f"\n[🛠️ TOOL EXECUTED: {tool_name}]\nARGS: {args}\nRESULT:\n{result}\n")
 

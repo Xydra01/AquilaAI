@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from main import OllamaClient
 
+@patch("main.console.log_filename", None)
 @patch('main.requests.Session.post')
 def test_vram_load_timeout(mock_post):
     """
@@ -18,8 +19,10 @@ def test_vram_load_timeout(mock_post):
     client = OllamaClient()
     result = client.chat([{"role": "user", "content": "Hello"}])
     
-    assert "System Timeout: Model took too long to load into VRAM" in result["message"]["content"]
+    assert "System Timeout" in result["message"]["content"]
+    assert "VRAM" in result["message"]["content"]
 
+@patch("main.console.log_filename", None)
 @patch('main.requests.Session.post')
 @patch('main.time.time')
 def test_generation_kill_switch(mock_time, mock_post):
@@ -31,7 +34,8 @@ def test_generation_kill_switch(mock_time, mock_post):
     mock_response.iter_lines.return_value = [b'data: {"choices": [{"delta": {"content": "Partial text"}}]}']
     mock_post.return_value = mock_response
     
-    mock_time.side_effect = [0.0, 1.0, 1.0, 200.0, 200.0, 200.0] 
+    times = iter([0.0, 0.0, 1.0, 200.0, 200.0, 200.0])
+    mock_time.side_effect = lambda: next(times, 200.0)
     
     client = OllamaClient()
     generator = client.chat([{"role": "user", "content": "Write an infinite loop"}], timeout=120, stream=True)

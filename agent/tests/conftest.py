@@ -18,6 +18,18 @@ def fixtures_dir():
     return FIXTURES_DIR
 
 
+@pytest.fixture(autouse=True)
+def reset_dual_logger():
+    """Prevent cross-test log path bleed (tmp dirs deleted while console still references them)."""
+    import main as main_mod
+
+    main_mod.console.log_filename = None
+    main_mod.console.current_task = None
+    yield
+    main_mod.console.log_filename = None
+    main_mod.console.current_task = None
+
+
 @pytest.fixture
 def tmp_agent_dirs(tmp_path, monkeypatch):
     """Isolated Agent-* working directories for filesystem tests."""

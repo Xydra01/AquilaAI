@@ -67,12 +67,14 @@ class LoopEngine:
         step_entry_injected = False
         grace_used_this_step = False
         tools_succeeded_this_step: set[str] = set()
+        final_step_stalls = 0
 
         while step_count < max_steps:
             if cancel_check and cancel_check():
                 return "🛑 Task was manually aborted by the user."
 
             try:
+                has_finish = False
                 state = read_json_state(task_file)
                 if state["status"] == "completed":
                     return (
@@ -256,12 +258,17 @@ class LoopEngine:
                 parse_retries = 0
 
                 pending_final_report = parsed_response.get("final_report") or ""
-                if pending_final_report:
-                    save_task_deliverable(task_name, self.mode, pending_final_report)
 
                 tool_calls = parsed_response.get("tools", [])
                 if not isinstance(tool_calls, list):
                     tool_calls = []
+
+                tool_calls, pending_final_report = self._normalize_tool_calls(
+                    tool_calls, pending_final_report
+                )
+
+                if pending_final_report:
+                    save_task_deliverable(task_name, self.mode, pending_final_report)
 
                 schema_ok, schema_err = validate_tool_calls(tool_calls)
                 if not schema_ok:
@@ -421,12 +428,38 @@ class LoopEngine:
                     turn_phase = "reflect"
                     pending_reflect = True
 
+                if current_idx == len(state["steps"]) - 1 and not has_finish:
+                    final_step_stalls += 1
+                    if final_step_stalls >= 8:
+                        complete_ledger_state(
+                            task_file, "OS forced completion (final step stall limit)"
+                        )
+                        return (
+                            "⚠️ OS forced task completion: too many retries on the final step."
+                        )
+
                 step_count += 1
 
             except Exception as e:
                 return f"OS Error: {str(e)}"
 
         return "⚠️ OS halted: Maximum iterations reached."
+
+    @staticmethod
+    def _normalize_tool_calls(
+        tool_calls: list, pending_final_report: str
+    ) -> tuple[list, str]:
+        """Hoist final_report from finish_task args (legacy shape) before arg validation."""
+        report = pending_final_report or ""
+        for tc in tool_calls:
+            if not isinstance(tc, dict) or tc.get("name") != "finish_task":
+                continue
+            args = tc.get("arguments")
+            if not isinstance(args, dict):
+                continue
+            if "final_report" in args:
+                report = args.pop("final_report") or report
+        return tool_calls, report
 
     def _build_step_entry_messages(self, task_name: str, step_kind: str) -> list[dict]:
         try:
@@ -493,7 +526,8 @@ class LoopEngine:
                 "role": "user",
                 "content": (
                     "Tool Outputs:\n⚠️ OS OVERRIDE: Parse failures exceeded. "
-                    "Use finish_task immediately."
+                    "Put final_report at the top level of your JSON (not inside finish_task) "
+                    "and call finish_task with only message_to_user."
                 ),
             })
             return False
