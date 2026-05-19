@@ -486,6 +486,31 @@ class LoopEngine:
             f"STEP_KIND: {step_kind}",
             f"OS HINT: {hint}",
         ]
+        if self.mode == "code":
+            try:
+                from tool_library.code_canvas_tools import get_active_project_scope
+
+                scope = get_active_project_scope()
+                if scope:
+                    parts.insert(
+                        1,
+                        f"CODE_PROJECT_ROOT: {scope['root']} "
+                        f"(project={scope['project_name']}, {scope['workspace_mode']})",
+                    )
+                    parts.insert(
+                        2,
+                        "SCOPE: Work ONLY inside CODE_PROJECT_ROOT. Use read_code_outline, "
+                        "read_file_region, index_codebase_for_search — NOT list_directory on "
+                        "the parent workspace or get_directory_tree on agent-projects.",
+                    )
+                else:
+                    parts.insert(
+                        1,
+                        "CODE_PROJECT_ROOT: (none) — call init_code_project or "
+                        "attach_existing_repo before file edits.",
+                    )
+            except ImportError:
+                pass
         if notes and "No research notes found" not in notes:
             parts.append(f"--- SCRATCHPAD (prior steps) ---\n{notes}\n--- END SCRATCHPAD ---")
         return [{"role": "user", "content": "\n".join(parts)}]

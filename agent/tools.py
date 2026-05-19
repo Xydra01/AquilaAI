@@ -62,6 +62,34 @@ if root_env.exists():
 elif agent_env.exists():
     load_dotenv(dotenv_path=agent_env)
 
+def get_code_project_root() -> Path | None:
+    """Active Code Mode project directory, if any."""
+    try:
+        from tool_library.code_canvas_tools import get_active_project_scope
+
+        scope = get_active_project_scope()
+        if scope:
+            return Path(scope["root"]).resolve()
+    except Exception:
+        pass
+    return None
+
+
+def resolve_tool_path(file_path: str, *, for_write: bool = False) -> Path:
+    """
+    Resolve a path for filesystem tools. When a code project is open, relative paths
+    are under CODE_PROJECT_ROOT (may be outside process cwd for in-place repos).
+    """
+    norm = normalize_workspace_path(file_path or ".")
+    p = Path(norm)
+    if p.is_absolute():
+        return p.resolve()
+    code_root = get_code_project_root()
+    if code_root:
+        return (code_root / norm).resolve()
+    return (Path.cwd() / norm).resolve()
+
+
 def normalize_workspace_path(file_path: str) -> str:
     """Fix doubled path segments and coerce absolute paths to workspace-relative."""
     if not file_path:
@@ -105,7 +133,20 @@ def check_syntax(code_string: str):
     
 def write_file(file_path: str, content: str) -> str:
     """Creates a new file or completely overwrites an existing one."""
-    file_path = normalize_workspace_path(file_path)
+    code_root = get_code_project_root()
+    if code_root:
+        target = resolve_tool_path(file_path, for_write=True)
+        try:
+            target.relative_to(code_root)
+        except ValueError:
+            return (
+                f"❌ CODE MODE: Cannot write outside the open project ({code_root}). "
+                "Use create_buffer_file for source/docs, then sync_project_to_disk — "
+                "or write_project_markdown for ARCHITECTURE.md / README updates."
+            )
+        file_path = str(target)
+    else:
+        file_path = normalize_workspace_path(file_path)
     if not is_safe_path(Path(file_path)):
         return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
     content = content.strip()
@@ -159,8 +200,8 @@ def write_file(file_path: str, content: str) -> str:
 
 def read_file(file_path: str) -> str:
     """Reads the contents of a file, capping it for context safety."""
-    file_path = normalize_workspace_path(file_path)
-    path_obj = Path(file_path).expanduser()
+    path_obj = resolve_tool_path(file_path)
+    file_path = str(path_obj)
     
     if not is_safe_path(path_obj):
         return f"❌ SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden by the system admin. Do not attempt to read this file again."
@@ -186,7 +227,7 @@ def read_file(file_path: str) -> str:
 def list_directory(path="."):
     """Lists all files and folders in a specific directory."""
     try:
-        target = Path(path).expanduser().resolve()
+        target = resolve_tool_path(path or ".")
         if not target.exists():
             return f"Error: Directory '{target}' does not exist."
         items = []
@@ -245,7 +286,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
 def read_file_lines(file_path: str, start_line: int, end_line: int):
     """Reads specific lines from a file."""
     try:
-        path_obj = Path(file_path).expanduser()
+        path_obj = resolve_tool_path(file_path)
         if not is_safe_path(path_obj):
             return f"SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden. Do not attempt to read this file again."
         if not path_obj.exists():

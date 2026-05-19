@@ -145,6 +145,31 @@ Verify:
 curl http://127.0.0.1:11434/api/tags
 ```
 
+### 4b. Optional: TurboQuant (32k–96k on NVIDIA)
+
+TurboQuant compresses the KV cache so longer context fits on the same GPU. Full guide: **[docs/ollama-turboquant.md](docs/ollama-turboquant.md)**.
+
+```powershell
+# Once: build portable Ollama from PR #15505
+.\scripts\install-ollama-turboquant-pr.ps1
+
+# Terminal 1 — TurboQuant on port 11435 (keeps tray Ollama on 11434 free)
+.\scripts\ollama-serve-turboquant-port.ps1
+
+# Terminal 2 — create models and run Aquila
+.\scripts\ollama-create-tq-models.ps1
+# .env: OLLAMA_BASE_URL=http://127.0.0.1:11435  OLLAMA_MODEL=aquila-tq-32k|64k|96k
+python agent/gui.py
+```
+
+| Model | Context | Typical use |
+|-------|---------|-------------|
+| `aquila-tq-32k` | 32k | Light tasks, lowest VRAM |
+| `aquila-tq-64k` | 64k | Default extended |
+| `aquila-tq-96k` | 96k | Max context if VRAM allows |
+
+Baseline `aquila` on port 11434 remains the default when TurboQuant env vars are unset.
+
 ### 5. Start SearXNG (web search)
 
 ```bash
@@ -274,7 +299,12 @@ agent-projects/
 │   ├── tool_library/      # Extended tools
 │   └── tests/             # pytest suite
 ├── requirements.txt
-├── Modelfile              # Ollama aquila model
+├── Modelfile              # Ollama aquila model (32k)
+├── Modelfile.tq-32k       # TurboQuant 32k (light)
+├── Modelfile.tq-64k       # TurboQuant 64k
+├── Modelfile.tq-96k       # TurboQuant 96k (stretch)
+├── scripts/               # Ollama TQ install, serve, model create
+├── tools/                 # Local Ollama binaries (gitignored — see tools/README.md)
 ├── docker-compose.yml     # SearXNG
 ├── start.sh
 ├── README.md              # This file
@@ -396,7 +426,10 @@ Supported formats include `.pdf`, `.docx`, `.csv`, `.html`, images (`.png`, `.jp
 
 | Item | Location | Notes |
 |------|----------|-------|
-| Ollama URL / model | `agent/main.py` → `OllamaClient` | Default `http://127.0.0.1:11434`, model `aquila` |
+| Ollama URL | `.env` → `OLLAMA_BASE_URL` | Default `http://127.0.0.1:11434` |
+| Ollama model | `.env` → `OLLAMA_MODEL` | Default `aquila`; use `aquila-tq-64k` with TurboQuant |
+| Ollama context override | `.env` → `OLLAMA_NUM_CTX` | Optional; e.g. `65536` without recreating model |
+| TurboQuant serve | `scripts/ollama-serve-turboquant.ps1` | Start Ollama before Aquila; see [docs/ollama-turboquant.md](docs/ollama-turboquant.md) |
 | SearXNG | `docker-compose.yml`, `searxng-settings.yml` | Port 8080 |
 | SMTP | `.env` (from `.env.EXAMPLE`) | Email tool only |
 | Pytest | `agent/pytest.ini` | `live` marker for Ollama integration tests |
@@ -413,10 +446,18 @@ cd agent
 pytest tests/ -q --ignore=tests/test_live_ollama.py --ignore=tests/test_live_prompts.py
 ```
 
-Include live Ollama tests (requires running `aquila` on port 11434):
+Include live Ollama tests (requires running Ollama; model from `OLLAMA_MODEL`, default `aquila`):
 
 ```bash
 pytest tests/ -m live -v
+# TurboQuant / 64k smoke (set OLLAMA_MODEL=aquila-tq-64k first):
+pytest tests/test_live_context_smoke.py -m live -v
+```
+
+Context benchmark (manual VRAM check):
+
+```bash
+python scripts/benchmark_context.py
 ```
 
 **Coverage highlights:**

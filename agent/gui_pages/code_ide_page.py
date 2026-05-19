@@ -213,8 +213,20 @@ class CodeIdePage(BaseModePage):
         if self._worker:
             task_path = Path(f"Agent-Tasks/{self._worker.task_name}.json")
             if task_path.exists():
-                with open(task_path, "r", encoding="utf-8") as tf:
-                    task_ledger = json.load(tf)
+                try:
+                    raw = task_path.read_text(encoding="utf-8").strip()
+                    if raw:
+                        task_ledger = json.loads(raw)
+                except json.JSONDecodeError:
+                    task_ledger = {
+                        "status": "in_progress",
+                        "steps": [
+                            {
+                                "status": "in_progress",
+                                "description": "Task ledger file is temporarily unreadable (retry refresh)",
+                            }
+                        ],
+                    }
 
         self.state_view.setHtml(render_code_canvas_html(state_data, task_ledger))
         self._populate_file_tree(state_data)

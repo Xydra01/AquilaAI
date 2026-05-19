@@ -47,8 +47,19 @@ def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):
         collection.add(documents=documents, metadatas=metadatas, ids=ids)
     return collection
 
-def semantic_code_search(query: str, directory: str = "./") -> str:
+def semantic_code_search(query: str, directory: str = "") -> str:
     """Searches the codebase for specific logic by meaning."""
+    if not directory or directory in (".", "./"):
+        try:
+            from tool_library.code_canvas_tools import get_active_project_scope
+
+            scope = get_active_project_scope()
+            if scope:
+                directory = scope["root"]
+            else:
+                directory = "."
+        except ImportError:
+            directory = directory or "."
     try:
         collection = _index_codebase(directory)
         results = collection.query(query_texts=[query], n_results=2)

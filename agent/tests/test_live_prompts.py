@@ -13,9 +13,13 @@ from prompts import get_chat_prompt
 pytestmark = pytest.mark.live
 
 
+def _ollama_base_url() -> str:
+    return os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+
 def _ollama_available() -> bool:
     try:
-        return requests.get("http://127.0.0.1:11434/api/tags", timeout=3).status_code == 200
+        return requests.get(f"{_ollama_base_url()}/api/tags", timeout=3).status_code == 200
     except Exception:
         return False
 
@@ -23,7 +27,9 @@ def _ollama_available() -> bool:
 @pytest.fixture(scope="module", autouse=True)
 def require_ollama():
     if not _ollama_available():
-        pytest.skip("Ollama not reachable at http://127.0.0.1:11434")
+        pytest.skip(
+            f"Ollama not reachable at {_ollama_base_url()} — start scripts/ollama-serve-turboquant-port.ps1"
+        )
 
 
 def test_live_chat_mode_natural_language():

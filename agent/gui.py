@@ -120,7 +120,7 @@ class SleepWorker(QThread):
 class AquilaOS(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🦅 Aquila OS 3.4 - Mode Workspaces")
+        self.setWindowTitle("🦅 Aquila OS 3.3 - Mode Workspaces")
         self.resize(1400, 800)
         self.dark_mode = False
         self._chat_streaming = False
@@ -178,7 +178,7 @@ class AquilaOS(QMainWindow):
 
         self._on_mode_changed(0)
         self.chat_page.chat_history.append(
-            "<b>System:</b> Aquila OS 3.4 Online. Select a workspace above."
+            "<b>System:</b> Aquila OS 3.3 Online. Select a workspace above."
         )
         self.autonomous_page.chat_history.append(
             "<b>System:</b> Autonomous Task — all-in-one canvas."

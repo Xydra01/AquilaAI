@@ -71,7 +71,7 @@ flowchart TB
 
 ### Services
 
-1. **Ollama** — `http://127.0.0.1:11434`, OpenAI-compatible `/v1/chat/completions`, model name hardcoded as `"aquila"`.
+1. **Ollama** — `http://127.0.0.1:11434`, OpenAI-compatible `/v1/chat/completions`, model from `OLLAMA_MODEL` (default `aquila`).
 2. **SearXNG** — `docker compose up -d` exposes `http://localhost:8080/search` for `web_search`.
 3. **Optional SMTP** — `.env` at repo root or `agent/.env` for `send_email_tool`.
 
@@ -161,10 +161,25 @@ This is sent to Ollama as `response_format.type = "json_schema"` with `strict: T
 
 **Note:** `DualMemorySystem.route_tools()` can semantically subset tools, but **the production loop always passes the full schema** — semantic routing is implemented but not wired in.
 
-### 5.2 `OllamaClient`
+### 5.2 `OllamaClient` and inference stack
+
+**Configuration** (optional `.env`):
+
+| Variable | Default | Role |
+|----------|---------|------|
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | API base |
+| `OLLAMA_MODEL` | `aquila` | Model name (`aquila-tq-32k` / `aquila-tq-64k` / `aquila-tq-96k` with TurboQuant) |
+| `OLLAMA_NUM_CTX` | _(unset)_ | If set, sends `options.num_ctx` on each request |
+
+**Modelfiles** at repo root: `Modelfile` (32k baseline), `Modelfile.tq-64k`, `Modelfile.tq-96k`. Context is normally defined in the Modelfile; `OLLAMA_NUM_CTX` overrides at runtime for experiments.
+
+**TurboQuant** (optional): Ollama server started via `scripts/ollama-serve-turboquant.ps1` sets `OLLAMA_KV_CACHE_TYPE=tq3` (and related flags) to compress the KV cache so longer `num_ctx` fits in VRAM. See **[docs/ollama-turboquant.md](docs/ollama-turboquant.md)**. Aquila does not start Ollama; it only calls the API.
+
+**Client behavior:**
 
 - POST `{base_url}/v1/chat/completions`
-- Payload: `model`, `messages`, `temperature`, `stream`, `frequency_penalty` / `presence_penalty` (0.2)
+- Payload: `model`, `messages`, `temperature`, `stream`, `frequency_penalty` / `presence_penalty` (0.2), optional `options.num_ctx`
+- On init: warns if `OLLAMA_MODEL` is missing from `/api/tags`
 - **Streaming:** SSE `data:` lines; yields `{"message": {"content": token}}`
 - **Kill switch:** If no chunk progress for `timeout` seconds (default 120) during streaming, closes response and yields severed note
 - **Non-streaming:** Returns full `{"message": {"content": ...}}`

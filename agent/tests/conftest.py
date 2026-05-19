@@ -7,8 +7,19 @@ from unittest.mock import MagicMock
 import pytest
 
 AGENT_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = AGENT_DIR.parent
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(AGENT_DIR))
+
+
+def pytest_configure(config):
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(REPO_ROOT / ".env")
+        load_dotenv(AGENT_DIR / ".env")
+    except ImportError:
+        pass
 
 
 

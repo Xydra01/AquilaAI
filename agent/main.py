@@ -158,11 +158,39 @@ import time
 
 class OllamaClient:
     def __init__(self):
-        self.base_url = "http://127.0.0.1:11434"
-        self.model_name = "aquila"
+        self.base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
+        self.model_name = os.getenv("OLLAMA_MODEL", "aquila").strip()
+        self.num_ctx = self._parse_num_ctx(os.getenv("OLLAMA_NUM_CTX"))
         self.session = requests.Session()
-        print(f"✅ Connected to Ollama (Targeting: {self.model_name})")
-    
+        ctx_note = f", num_ctx={self.num_ctx}" if self.num_ctx else ""
+        print(f"✅ Connected to Ollama (Targeting: {self.model_name}{ctx_note})")
+        self._log_model_availability()
+
+    @staticmethod
+    def _parse_num_ctx(raw: str | None) -> int | None:
+        if raw is None or not str(raw).strip():
+            return None
+        try:
+            value = int(str(raw).strip())
+            return value if value > 0 else None
+        except ValueError:
+            return None
+
+    def _log_model_availability(self) -> None:
+        try:
+            url = f"{self.base_url.rstrip('/')}/api/tags"
+            response = self.session.get(url, timeout=3)
+            if response.status_code != 200:
+                return
+            names = [m.get("name", "") for m in response.json().get("models", [])]
+            if not any(self.model_name in name for name in names):
+                print(
+                    f"⚠️ Model '{self.model_name}' not found in Ollama. "
+                    f"Run: ollama create {self.model_name} -f Modelfile"
+                )
+        except Exception:
+            pass
+
     def chat(self, messages: list, temperature: float = 0.6, timeout: int = 120, format: dict = None, stream: bool = False):
         clean_url = self.base_url.strip()
         
@@ -174,6 +202,8 @@ class OllamaClient:
             "frequency_penalty": 0.2, 
             "presence_penalty": 0.2
         }
+        if self.num_ctx is not None:
+            payload["options"] = {"num_ctx": self.num_ctx}
         
         # FIXED: Use the correct response_format schema for the /v1 endpoint!
         if format: 
@@ -545,6 +575,23 @@ class Agent:
         from plan_validator import BUDGET_RUBRIC, STEP_KINDS
 
         workspace_root = os.getcwd()
+        code_scope_note = ""
+        if mode == "code":
+            from tool_library.code_canvas_tools import get_active_project_scope
+
+            scope = get_active_project_scope()
+            if scope:
+                workspace_root = scope["root"]
+                code_scope_note = (
+                    f"\nActive code project '{scope['project_name']}' at {scope['root']}. "
+                    "ALL steps must use Code Canvas tools and paths under this root only. "
+                    "Do NOT explore the parent workspace with list_directory/get_directory_tree."
+                )
+            else:
+                code_scope_note = (
+                    "\nNo code project buffer yet — first step should init_code_project "
+                    "or attach_existing_repo before editing files."
+                )
         rubric_lines = "\n".join(
             f"  - {kind}: min={lo}, default={default}, max={hi}"
             for kind, (lo, default, hi) in BUDGET_RUBRIC.items()
@@ -594,6 +641,7 @@ class Agent:
         prompt = f"""
         {role_desc}
         WORKSPACE_ROOT (all paths relative to): {workspace_root}
+        {code_scope_note}
         The user needs: {user_request}
         {attachment_block}
         Create a strict JSON state object to manage this workflow.

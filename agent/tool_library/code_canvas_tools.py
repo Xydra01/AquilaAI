@@ -56,6 +56,18 @@ def _load_state() -> dict:
         return json.load(f)
 
 
+def get_active_project_scope() -> dict | None:
+    """Return active Code Mode project root for planner/loop/tool scoping."""
+    state = _load_state()
+    if not state or not state.get("root"):
+        return None
+    return {
+        "project_name": state.get("project_name", "project"),
+        "root": _project_root(state),
+        "workspace_mode": state.get("workspace_mode", "sandbox"),
+    }
+
+
 def _save_state(state: dict) -> None:
     with open(ACTIVE_CODE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
@@ -580,6 +592,36 @@ def set_test_targets(targets: str) -> str:
     return f"✅ Test targets: {state['test_targets']}"
 
 
+def write_project_markdown(file_path: str, content: str) -> str:
+    """
+    Write a documentation file (ARCHITECTURE.md, README.md, etc.) directly under the
+    open project root. Use this in Code Mode instead of write_file for repo docs.
+    """
+    state = _load_state()
+    if not state:
+        return "❌ Error: No active code project."
+    norm = _relative_to_root(state, file_path)
+    lower = norm.lower()
+    if not lower.endswith((".md", ".markdown", ".txt", ".rst")):
+        return "❌ Only documentation paths allowed (e.g. ARCHITECTURE.md, docs/guide.md)."
+    root = Path(_project_root(state)).resolve()
+    target = (root / norm).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return f"❌ Path escapes project root: {norm}"
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n", "", text)
+        if text.endswith("```"):
+            text = text[:-3].strip()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text + "\n", encoding="utf-8")
+    _upsert_file(state, norm, text, dirty=False)
+    _save_state(state)
+    return f"✅ Wrote documentation to {target.as_posix()}"
+
+
 def sync_project_to_disk() -> str:
     """Write all buffer files under project root to disk and run linters."""
     state = _load_state()
@@ -677,6 +719,10 @@ CODE_CANVAS_TOOLS = {
     "replace_symbol": {"func": replace_symbol, "description": inspect.getdoc(replace_symbol)},
     "delete_buffer_file": {"func": delete_buffer_file, "description": inspect.getdoc(delete_buffer_file)},
     "set_test_targets": {"func": set_test_targets, "description": inspect.getdoc(set_test_targets)},
+    "write_project_markdown": {
+        "func": write_project_markdown,
+        "description": inspect.getdoc(write_project_markdown),
+    },
     "sync_project_to_disk": {"func": sync_project_to_disk, "description": inspect.getdoc(sync_project_to_disk)},
     "run_pytest": {"func": run_pytest, "description": inspect.getdoc(run_pytest)},
     "run_linter": {"func": run_linter_tool, "description": inspect.getdoc(run_linter_tool)},
