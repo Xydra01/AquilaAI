@@ -119,7 +119,7 @@ def test_write_file_blocked_outside_project(code_workspace, tmp_path):
     assert "CODE MODE" in blocked
     ok = write_file("ARCHITECTURE.md", "# Doc\n")
     assert "Successfully" in ok
-    assert (proj / "ARCHITECTURE.md").read_text(encoding="utf-8") == "# Doc\n"
+    assert (proj / "ARCHITECTURE.md").read_text(encoding="utf-8") == "# Doc"
 
 
 def test_write_project_markdown(code_workspace, tmp_path):

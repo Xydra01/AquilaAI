@@ -22,26 +22,30 @@ def test_vram_load_timeout(mock_post):
     assert "System Timeout" in result["message"]["content"]
     assert "VRAM" in result["message"]["content"]
 
-@patch("main.console.log_filename", None)
-@patch('main.requests.Session.post')
-@patch('main.time.time')
-def test_generation_kill_switch(mock_time, mock_post):
+def test_generation_kill_switch():
     """
-    TDD Goal: If token generation takes longer than the timeout limit (default 120s), 
+    TDD Goal: If token generation takes longer than the timeout limit (default 120s),
     the OS must manually sever the connection and return the partial content.
     """
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = [b'data: {"choices": [{"delta": {"content": "Partial text"}}]}']
-    mock_post.return_value = mock_response
-    
+
     times = iter([0.0, 0.0, 1.0, 200.0, 200.0, 200.0])
-    mock_time.side_effect = lambda: next(times, 200.0)
-    
-    client = OllamaClient()
-    generator = client.chat([{"role": "user", "content": "Write an infinite loop"}], timeout=120, stream=True)
-    
-    chunks = list(generator)
-    full_text = "".join([c["message"]["content"] for c in chunks])
-    
+
+    with patch("main.console.log_filename", None), patch("main.console.print"), patch(
+        "main.time.time", side_effect=lambda: next(times, 200.0)
+    ), patch("main.requests.Session.post", return_value=mock_response), patch.object(
+        OllamaClient, "_log_model_availability"
+    ):
+        client = OllamaClient()
+        generator = client.chat(
+            [{"role": "user", "content": "Write an infinite loop"}],
+            timeout=120,
+            stream=True,
+        )
+
+        chunks = list(generator)
+        full_text = "".join([c["message"]["content"] for c in chunks])
+
     assert "Partial text" in full_text
     assert "Generation forcibly severed." in full_text

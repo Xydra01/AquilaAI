@@ -220,6 +220,7 @@ class OllamaClient:
             
         try:
             start_time = time.time()
+            generation_start = None
             first_token_received = False
             full_content = ""
             
@@ -231,13 +232,13 @@ class OllamaClient:
             if stream:
                 console.print("[green]✅ Connected! Waiting for GPU to compute first token...[/green]")
                 def chunk_generator():
-                    nonlocal first_token_received, start_time, full_content
+                    nonlocal first_token_received, start_time, generation_start, full_content
                     for line in response.iter_lines():
                         if line:
                             if not first_token_received:
                                 console.print(f"[bold cyan]⚡ FIRST TOKEN RECEIVED in {time.time() - start_time:.2f} seconds![/bold cyan]")
                                 first_token_received = True
-                                start_time = time.time() 
+                                generation_start = time.time()
 
                             decoded_line = line.decode('utf-8')
                             if decoded_line.startswith("data: "):
@@ -254,7 +255,7 @@ class OllamaClient:
                                         yield {"message": {"content": token}}
                                 except Exception: pass
 
-                        if time.time() - start_time > timeout:
+                        if generation_start is not None and time.time() - generation_start > timeout:
                             sys.stdout.write("\n")
                             console.print(f"\n[bold red]⚠️ KILL SWITCH ACTIVATED: Model hit the {timeout}s limit.[/bold red]")
                             response.close() 

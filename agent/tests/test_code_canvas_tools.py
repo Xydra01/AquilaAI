@@ -57,7 +57,7 @@ def test_read_code_outline_empty(code_workspace):
     code_canvas_tools.init_code_project("outline", ".", "python")
     outline = code_canvas_tools.read_code_outline()
     assert "PROJECT: outline" in outline
-    assert "no files" in outline.lower()
+    assert "no source files" in outline.lower()
 
 
 def test_apply_unified_patch(code_workspace):
