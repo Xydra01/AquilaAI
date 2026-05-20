@@ -175,6 +175,16 @@ This is sent to Ollama as `response_format.type = "json_schema"` with `strict: T
 
 **TurboQuant** (optional): Ollama server started via `scripts/ollama-serve-turboquant.ps1` sets `OLLAMA_KV_CACHE_TYPE=tq3` (and related flags) to compress the KV cache so longer `num_ctx` fits in VRAM. See **[docs/ollama-turboquant.md](docs/ollama-turboquant.md)**. Aquila does not start Ollama; it only calls the API.
 
+### Context budget and web enrichment (3.3)
+
+| Module | Role |
+|--------|------|
+| `agent/context_budget.py` | Detects effective `num_ctx` from `OLLAMA_NUM_CTX` / model name; maps to tiers (`compact` → `max`) and limits (auto-scrape count, scrape char cap, scratchpad bytes, file preview, tree cap). |
+| `agent/web_enrichment.py` | After `web_search` in `LoopEngine`, ranks URLs (`.edu`/`.gov` preferred), auto-scrapes top N (1/2/3 by tier), registers sources in `SourceRegistry`. |
+| Research deliverables | `save_task_deliverable` appends OS-generated **References** from `SourceRegistry` for `mode=research`. |
+
+Env: `AQUILA_AUTO_SCRAPE`, `AQUILA_CONTEXT_TIER` (see `.env.EXAMPLE`).
+
 **Client behavior:**
 
 - POST `{base_url}/v1/chat/completions`
@@ -346,7 +356,7 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 | `write_file` | Create/overwrite; strip markdown fences; block Agent-Tasks; lint `.py` |
 | `replace_in_file` | Exact substring replace; syntax check hint |
 | `list_directory` | `[DIR]` / `[FILE]` listing |
-| `get_directory_tree` | ASCII tree, depth limit, 5000 char cap |
+| `get_directory_tree` | ASCII tree, depth limit; char cap from context tier |
 | `search_tool_library` | Keyword search over `ALL_TOOLS` metadata |
 | `mark_objective_complete` | Handled in Agent (not ToolExecutor) |
 | `finish_task` | Handled in Agent |
@@ -355,8 +365,8 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 
 | Tool | Behavior |
 |------|----------|
-| `web_search` | SearXNG JSON API; engines google,bing,duckduckgo,wikipedia |
-| `read_webpage` | cloudscraper + BeautifulSoup → markdownify; PDF via PyMuPDF; 15k truncate |
+| `web_search` | SearXNG JSON API; engines google,bing,duckduckgo,wikipedia; OS auto-scrapes top URL(s) after each call in task loop |
+| `read_webpage` | cloudscraper + BeautifulSoup → markdownify; PDF via PyMuPDF; truncate cap from context tier |
 
 ### 8.3 Coding (`coding_tools.py`)
 
@@ -374,7 +384,7 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 | `query_past_experience` | Chroma episodic search |
 | `ask_user` | Blocks on `USER_INPUT_CALLBACK` (GUI sets this) |
 | `store_fact` | SQLite fact |
-| `save_research_note` | Scratchpad row |
+| `save_research_note` | Scratchpad row; byte cap from context tier |
 | `read_all_research_notes` | Compile scratchpad for task |
 
 ### 8.5 OS (`os_tools.py`)

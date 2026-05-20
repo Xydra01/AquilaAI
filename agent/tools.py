@@ -5,6 +5,7 @@ import difflib
 import inspect
 import re
 from dotenv import load_dotenv
+from context_budget import get_context_profile
 
 """Security firewall"""
 FORBIDDEN_FILES = ['.env', 'state.json', '.gitignore', 'chroma.sqlite3']
@@ -212,9 +213,10 @@ def read_file(file_path: str) -> str:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-            
-        if len(content) > 1500:
-            preview = content[:1500]
+
+        preview_limit = get_context_profile().read_file_preview_chars
+        if len(content) > preview_limit:
+            preview = content[:preview_limit]
             return (f"{preview}\n\n"
                     f"... [FILE TRUNCATED DUE TO LENGTH ({len(content)} chars)]\n"
                     f"⚠️ WARNING: File is too large. Use `search_tool_library` to find tools like `search_in_file` or `read_file_lines` to read the rest safely.")
@@ -372,11 +374,12 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
         return f"❌ Error: Directory '{target_path}' does not exist."
     
     tree_str = f"Directory Tree for: {target_path.name}/\n"
-    
+    tree_cap = get_context_profile().tree_char_cap
+
     def walk_dir(current_path, current_depth, prefix=""):
         nonlocal tree_str
-        
-        if len(tree_str) > 5000:
+
+        if len(tree_str) > tree_cap:
             return
             
         if current_depth > max_depth:
@@ -392,7 +395,7 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
         items = [item for item in items if not (item.is_dir() and item.name in ignore_dirs)]
         
         for i, item in enumerate(items):
-            if len(tree_str) > 5000:
+            if len(tree_str) > tree_cap:
                 tree_str += f"{prefix}└── ... [TRUNCATED DUE TO MASSIVE SIZE]\n"
                 break
                 
@@ -409,8 +412,8 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
     walk_dir(target_path, 1)
     
    
-    if len(tree_str) > 5000:
-        tree_str = tree_str[:5000] + "\n\n... [TREE TRUNCATED FOR SAFETY. DO NOT USE LARGE MAX_DEPTH HERE]"
+    if len(tree_str) > tree_cap:
+        tree_str = tree_str[:tree_cap] + "\n\n... [TREE TRUNCATED FOR SAFETY. DO NOT USE LARGE MAX_DEPTH HERE]"
         
     return tree_str
 

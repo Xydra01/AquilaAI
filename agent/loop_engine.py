@@ -9,6 +9,12 @@ import re
 
 from memory_singleton import aquila_memory
 from plan_validator import get_step_kind_hint
+from context_budget import get_context_profile
+from web_enrichment import (
+    SourceRegistry,
+    enrich_search_result,
+    register_read_webpage_source,
+)
 
 from main import (
     MAX_TOOLS_PER_TURN,
@@ -69,6 +75,8 @@ class LoopEngine:
         grace_used_this_step = False
         tools_succeeded_this_step: set[str] = set()
         final_step_stalls = 0
+        scrape_seen_urls: set[str] = set()
+        source_registry = SourceRegistry() if self.mode == "research" else None
 
         while step_count < max_steps:
             if cancel_check and cancel_check():
@@ -153,6 +161,15 @@ class LoopEngine:
                 if not attachments_injected and text_chunks:
                     user_msg += format_attachment_context(text_chunks)
                     attachments_injected = True
+
+                if (
+                    self.mode == "research"
+                    and source_registry is not None
+                    and current_idx == len(state["steps"]) - 1
+                ):
+                    source_summary = source_registry.summary_for_prompt()
+                    if source_summary:
+                        user_msg += f"\n\n{source_summary}"
 
                 message_dict = self._format_user_message(user_msg, image_payloads)
                 active_memory = (
@@ -275,7 +292,9 @@ class LoopEngine:
                 )
 
                 if pending_final_report:
-                    save_task_deliverable(task_name, self.mode, pending_final_report)
+                    save_task_deliverable(
+                        task_name, self.mode, pending_final_report, source_registry
+                    )
 
                 schema_ok, schema_err = validate_tool_calls(tool_calls)
                 if not schema_ok:
@@ -355,6 +374,22 @@ class LoopEngine:
                         ran_non_meta_tool = True
                         execution_results = self.executor.execute([tc])
                         result = execution_results[0] if execution_results else "No output."
+                        if tool_name == "web_search":
+                            result = enrich_search_result(
+                                result,
+                                scrape_seen_urls,
+                                source_registry,
+                                get_context_profile(),
+                                step_index=current_idx,
+                                console=self.console,
+                            )
+                        elif tool_name == "read_webpage":
+                            register_read_webpage_source(
+                                source_registry,
+                                (tc.get("arguments") or {}).get("url", ""),
+                                result,
+                                step_index=current_idx,
+                            )
                         if result and "❌ Error" not in result:
                             tools_succeeded_this_step.add(tool_name)
 
@@ -384,7 +419,7 @@ class LoopEngine:
 
                 if has_finish:
                     saved = save_task_deliverable(
-                        task_name, self.mode, pending_final_report
+                        task_name, self.mode, pending_final_report, source_registry
                     )
                     complete_ledger_state(task_file, finish_msg)
                     aquila_memory.store_experience(task_name, finish_msg)

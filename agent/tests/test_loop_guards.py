@@ -102,8 +102,10 @@ def test_normalize_workspace_path_collapses_doubled_agent():
 
 
 def test_save_research_note_truncates_large_payload(monkeypatch):
+    from context_budget import set_runtime_context
     from tool_library import agent_tools as at
 
+    set_runtime_context("aquila", 8192)
     saved = {}
 
     def fake_save(task_name, note):

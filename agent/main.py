@@ -11,6 +11,7 @@ from typing import Dict, List
 from rich.console import Console
 from rich.text import Text
 from memory_singleton import aquila_memory
+from context_budget import set_runtime_context
 from prompts import (
     get_autonomous_prompt,
     get_research_prompt,
@@ -162,6 +163,7 @@ class OllamaClient:
         self.model_name = os.getenv("OLLAMA_MODEL", "aquila").strip()
         self.num_ctx = self._parse_num_ctx(os.getenv("OLLAMA_NUM_CTX"))
         self.session = requests.Session()
+        set_runtime_context(self.model_name, self.num_ctx)
         ctx_note = f", num_ctx={self.num_ctx}" if self.num_ctx else ""
         print(f"✅ Connected to Ollama (Targeting: {self.model_name}{ctx_note})")
         self._log_model_availability()
@@ -506,15 +508,29 @@ def complete_ledger_state(task_file: str, summary: str = "Task finished successf
         json.dump(state, f, indent=4)
 
 
-def save_task_deliverable(task_name: str, mode: str, report_text: str) -> str | None:
+def save_task_deliverable(
+    task_name: str,
+    mode: str,
+    report_text: str,
+    sources=None,
+) -> str | None:
     """Write final_report markdown to Agent-Research or Agent-Creations. Returns path or None."""
+    from web_enrichment import append_bibliography_to_report
+
     if not report_text or not str(report_text).strip():
+        if mode != "research" or sources is None:
+            return None
+        report_text = ""
+
+    final_text = append_bibliography_to_report(report_text, sources, mode=mode)
+    if not final_text.strip():
         return None
+
     save_dir = "Agent-Research" if mode == "research" else "Agent-Creations"
     os.makedirs(save_dir, exist_ok=True)
     out_path = os.path.join(save_dir, f"{task_name}.md")
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(report_text)
+        f.write(final_text)
     return out_path
 
 class Agent:
