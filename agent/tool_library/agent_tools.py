@@ -2,6 +2,7 @@
 import inspect
 from rich.console import Console
 from memory_singleton import aquila_memory
+from context_budget import get_context_profile
 
 # --- NEW: QT THREADING BRIDGE ---
 USER_INPUT_CALLBACK = None
@@ -32,12 +33,32 @@ def store_fact(topic: str, fact: str) -> str:
     """
     return aquila_memory.store_fact(topic, fact)
 
+MAX_SCRATCHPAD_NOTE_BYTES = 8 * 1024
+
+
+def _scratchpad_byte_limit() -> int:
+    return max(MAX_SCRATCHPAD_NOTE_BYTES, get_context_profile().scratchpad_bytes)
+
+
 def save_research_note(task_name: str, gathered_data: str) -> str:
     """
     CRITICAL RESEARCH TOOL: Use this to save facts, URLs, outlines, and data you find.
     Instead of trying to hold information in your head, save it to your SQLite scratchpad.
     """
-    return aquila_memory.save_scratchpad_note(task_name, gathered_data)
+    data = gathered_data or ""
+    truncated = False
+    limit = _scratchpad_byte_limit()
+    encoded = data.encode("utf-8")
+    if len(encoded) > limit:
+        data = encoded[:limit].decode("utf-8", errors="ignore")
+        truncated = True
+    result = aquila_memory.save_scratchpad_note(task_name, data)
+    if truncated:
+        return (
+            f"{result}\n⚠️ OS NOTE: gathered_data was truncated to {limit} "
+            "bytes to prevent JSON parse failures. Save smaller chunks."
+        )
+    return result
 
 def read_all_research_notes(task_name: str) -> str:
     """

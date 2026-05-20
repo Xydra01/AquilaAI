@@ -1,4 +1,4 @@
-"""Live integration tests — require Ollama at localhost:11434 with model 'aquila'."""
+"""Live integration tests — require Ollama; model from OLLAMA_MODEL (default aquila)."""
 import json
 import sys
 import os
@@ -13,9 +13,13 @@ from main import OllamaClient, AQUILA_ACTION_SCHEMA, parse_agent_response
 pytestmark = pytest.mark.live
 
 
+def _ollama_base_url() -> str:
+    return os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+
 def _ollama_available() -> bool:
     try:
-        r = requests.get("http://127.0.0.1:11434/api/tags", timeout=3)
+        r = requests.get(f"{_ollama_base_url()}/api/tags", timeout=3)
         return r.status_code == 200
     except Exception:
         return False
@@ -24,7 +28,9 @@ def _ollama_available() -> bool:
 @pytest.fixture(scope="module", autouse=True)
 def require_ollama():
     if not _ollama_available():
-        pytest.skip("Ollama not reachable at http://127.0.0.1:11434 — start Ollama to run live tests")
+        pytest.skip(
+            f"Ollama not reachable at {_ollama_base_url()} — start scripts/ollama-serve-turboquant-port.ps1"
+        )
 
 
 def test_live_non_streaming_shape():

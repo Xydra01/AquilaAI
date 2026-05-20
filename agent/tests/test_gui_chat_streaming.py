@@ -34,14 +34,16 @@ def test_chat_finished_does_not_duplicate_bubble(qtbot, qapp):
         pytest.skip("Main window not found")
     window = MainWindowClass()
     qtbot.addWidget(window)
-    window.chat_history.clear()
-    window.chat_history.append("<b>🦅 Aquila:</b><br>Hello from stream")
-    before_count = window.chat_history.toHtml().count("Aquila:")
+    window.mode_selector.setCurrentText("Chat Mode")
+    page = window.chat_page
+    page.chat_history.clear()
+    page.chat_history.append("<b>🦅 Aquila:</b><br>Hello from stream")
+    before_count = page.chat_history.toHtml().count("Aquila:")
     window.worker = gui.AgentWorker("chat", "Hello", "chat")
     window.chat_finished("Hello from stream")
-    after_html = window.chat_history.toHtml()
+    after_html = page.chat_history.toHtml()
     assert after_html.count("Aquila:") == before_count
-    assert window.run_btn.isEnabled()
+    assert page.run_btn.isEnabled()
 
 
 def test_execute_task_chat_uses_chat_finished(qtbot, qapp, monkeypatch):
@@ -49,20 +51,22 @@ def test_execute_task_chat_uses_chat_finished(qtbot, qapp, monkeypatch):
         pytest.skip("Main window not found")
     window = MainWindowClass()
     qtbot.addWidget(window)
-    window.chat_input.setText("Hi")
     window.mode_selector.setCurrentText("Chat Mode")
+    page = window.chat_page
+    page.chat_input.setText("Hi")
 
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
 
     def fake_run_chat(**kwargs):
         def gen():
             yield {"message": {"content": "Hey"}}
+
         return gen()
 
     with patch("gui.global_agent.run_chat", side_effect=fake_run_chat):
         window.execute_task()
-        qtbot.waitUntil(lambda: window.run_btn.isEnabled(), timeout=3000)
+        qtbot.waitUntil(lambda: page.run_btn.isEnabled(), timeout=3000)
 
-    html = window.chat_history.toHtml()
+    html = page.chat_history.toHtml()
     assert "Hey" in html
     assert html.count("🦅 Aquila") <= 2

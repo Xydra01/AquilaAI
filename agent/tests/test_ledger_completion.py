@@ -49,8 +49,8 @@ def test_finish_task_saves_report_from_arguments(tmp_agent_dirs, write_ledger, m
     )
 
     suffix = (
-        'Done.", "tools": [{"name": "finish_task", "arguments": {'
-        '"message_to_user": "Done", "final_report": "# My Report\\n\\nFindings here."}}]}'
+        'Done.", "final_report": "# My Report\\n\\nFindings here.", '
+        '"tools": [{"name": "finish_task", "arguments": {"message_to_user": "Done"}}]}'
     )
 
     def fake_chat(*args, **kwargs):

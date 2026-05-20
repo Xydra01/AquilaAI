@@ -71,7 +71,7 @@ flowchart TB
 
 ### Services
 
-1. **Ollama** — `http://127.0.0.1:11434`, OpenAI-compatible `/v1/chat/completions`, model name hardcoded as `"aquila"`.
+1. **Ollama** — `http://127.0.0.1:11434`, OpenAI-compatible `/v1/chat/completions`, model from `OLLAMA_MODEL` (default `aquila`).
 2. **SearXNG** — `docker compose up -d` exposes `http://localhost:8080/search` for `web_search`.
 3. **Optional SMTP** — `.env` at repo root or `agent/.env` for `send_email_tool`.
 
@@ -161,10 +161,35 @@ This is sent to Ollama as `response_format.type = "json_schema"` with `strict: T
 
 **Note:** `DualMemorySystem.route_tools()` can semantically subset tools, but **the production loop always passes the full schema** — semantic routing is implemented but not wired in.
 
-### 5.2 `OllamaClient`
+### 5.2 `OllamaClient` and inference stack
+
+**Configuration** (optional `.env`):
+
+| Variable | Default | Role |
+|----------|---------|------|
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | API base |
+| `OLLAMA_MODEL` | `aquila` | Model name (`aquila-tq-32k` / `aquila-tq-64k` / `aquila-tq-96k` with TurboQuant) |
+| `OLLAMA_NUM_CTX` | _(unset)_ | If set, sends `options.num_ctx` on each request |
+
+**Modelfiles** at repo root: `Modelfile` (32k baseline), `Modelfile.tq-64k`, `Modelfile.tq-96k`. Context is normally defined in the Modelfile; `OLLAMA_NUM_CTX` overrides at runtime for experiments.
+
+**TurboQuant** (optional): Ollama server started via `scripts/ollama-serve-turboquant.ps1` sets `OLLAMA_KV_CACHE_TYPE=tq3` (and related flags) to compress the KV cache so longer `num_ctx` fits in VRAM. See **[docs/ollama-turboquant.md](docs/ollama-turboquant.md)**. Aquila does not start Ollama; it only calls the API.
+
+### Context budget and web enrichment (3.3)
+
+| Module | Role |
+|--------|------|
+| `agent/context_budget.py` | Detects effective `num_ctx` from `OLLAMA_NUM_CTX` / model name; maps to tiers (`compact` → `max`) and limits (auto-scrape count, scrape char cap, scratchpad bytes, file preview, tree cap). |
+| `agent/web_enrichment.py` | After `web_search` in `LoopEngine`, ranks URLs (`.edu`/`.gov` preferred), auto-scrapes top N (1/2/3 by tier), registers sources in `SourceRegistry`. |
+| Research deliverables | `save_task_deliverable` appends OS-generated **References** from `SourceRegistry` for `mode=research`. |
+
+Env: `AQUILA_AUTO_SCRAPE`, `AQUILA_CONTEXT_TIER` (see `.env.EXAMPLE`).
+
+**Client behavior:**
 
 - POST `{base_url}/v1/chat/completions`
-- Payload: `model`, `messages`, `temperature`, `stream`, `frequency_penalty` / `presence_penalty` (0.2)
+- Payload: `model`, `messages`, `temperature`, `stream`, `frequency_penalty` / `presence_penalty` (0.2), optional `options.num_ctx`
+- On init: warns if `OLLAMA_MODEL` is missing from `/api/tags`
 - **Streaming:** SSE `data:` lines; yields `{"message": {"content": token}}`
 - **Kill switch:** If no chunk progress for `timeout` seconds (default 120) during streaming, closes response and yields severed note
 - **Non-streaming:** Returns full `{"message": {"content": ...}}`
@@ -331,7 +356,7 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 | `write_file` | Create/overwrite; strip markdown fences; block Agent-Tasks; lint `.py` |
 | `replace_in_file` | Exact substring replace; syntax check hint |
 | `list_directory` | `[DIR]` / `[FILE]` listing |
-| `get_directory_tree` | ASCII tree, depth limit, 5000 char cap |
+| `get_directory_tree` | ASCII tree, depth limit; char cap from context tier |
 | `search_tool_library` | Keyword search over `ALL_TOOLS` metadata |
 | `mark_objective_complete` | Handled in Agent (not ToolExecutor) |
 | `finish_task` | Handled in Agent |
@@ -340,8 +365,8 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 
 | Tool | Behavior |
 |------|----------|
-| `web_search` | SearXNG JSON API; engines google,bing,duckduckgo,wikipedia |
-| `read_webpage` | cloudscraper + BeautifulSoup → markdownify; PDF via PyMuPDF; 15k truncate |
+| `web_search` | SearXNG JSON API; engines google,bing,duckduckgo,wikipedia; OS auto-scrapes top URL(s) after each call in task loop |
+| `read_webpage` | cloudscraper + BeautifulSoup → markdownify; PDF via PyMuPDF; truncate cap from context tier |
 
 ### 8.3 Coding (`coding_tools.py`)
 
@@ -359,7 +384,7 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 | `query_past_experience` | Chroma episodic search |
 | `ask_user` | Blocks on `USER_INPUT_CALLBACK` (GUI sets this) |
 | `store_fact` | SQLite fact |
-| `save_research_note` | Scratchpad row |
+| `save_research_note` | Scratchpad row; byte cap from context tier |
 | `read_all_research_notes` | Compile scratchpad for task |
 
 ### 8.5 OS (`os_tools.py`)
@@ -557,21 +582,117 @@ SleepWorker → initiate_sleep_cycle
 
 ---
 
-## 16. Extension points and rough edges
+## 16. Aquila OS 3.3 — Loop and planner
 
-| Item | Status (3.2) |
+### Planner (`plan_validator.py`)
+
+- Each step includes `step_kind` (`search`, `read`, `code`, `verify`, `synthesize`, `write`, `finalize`) and `max_iterations` tuned via **BUDGET_RUBRIC** (min/default/max per kind).
+- `validate_and_tune_plan()` runs after `generate_plan()`; caps at 8 steps and total budget 60.
+
+### Execution loop (`loop_engine.py`)
+
+```mermaid
+flowchart TD
+    stepEntry[OS step entry: scratchpad + cwd + hints]
+    actTurn[Act turn: strict tool schema]
+    tools[Execute tools]
+    reflectTurn[Reflect turn: reasoning only]
+    stepEntry --> actTurn
+    actTurn --> tools
+    tools --> reflectTurn
+    reflectTurn --> actTurn
+```
+
+- **Reflect/act:** After non-meta tools run, next turn is reflect-only (`REFLECT_SCHEMA`); then act again.
+- **Budget:** Parse/schema failures pop the assistant message (do not burn `step_attempts`). Grace +2 iterations once per step if tools succeeded.
+- **Step entry:** Scratchpad notes, `WORKSPACE_ROOT`, and `step_kind` hints injected without an LLM call.
+- **Hardening:** `validate_tool_arguments()`, `save_research_note` 8KB cap, `normalize_workspace_path()` for doubled `agent/agent` paths.
+
+`Agent.run_unified_task` delegates to `LoopEngine.run()`.
+
+---
+
+## 17. Aquila OS 3.3 — Code Canvas
+
+### Dual ledger (same pattern as Writing 3.2)
+
+| Ledger | Path | Role |
+|--------|------|------|
+| Execution | `Agent-Tasks/{task}.json` | Planner steps, `step_kind`, budgets |
+| Code buffer | `Agent-Code/active_code_state.json` | In-memory project: files, lint/test status, dirty flags |
+
+Authoritative edits in Code Mode go through **code canvas tools** (`init_code_project`, `replace_lines`, `apply_unified_patch`, `sync_project_to_disk`). Autonomous Task keeps generic `write_file`.
+
+### Language support (v1)
+
+| Language | Lint | Tests |
+|----------|------|-------|
+| Python | flake8 (or ast-only fallback) | **pytest** via `run_pytest` |
+| JS/TS, Rust, Go | eslint / tsc / cargo clippy / go vet when installed | read/write + search only |
+
+`language_registry.py` dispatches `run_linter` / `run_tests`.
+
+### TDD planner step kinds
+
+`plan_validator.py` adds `tdd_red`, `tdd_green`, `tdd_refactor`. Code Mode plans for “implement / build / feature” intents should follow: explore → red → green → (refactor) → verify → finalize.
+
+`loop_engine.py` soft-gates `mark_objective_complete` on `tdd_red` / `tdd_green` until recent `run_pytest` output shows failure / pass respectively.
+
+### GUI
+
+- Mode selector: **Code Mode** (`mode_flag = "code"`).
+- Middle pane: tabbed read-only `QPlainTextEdit` per buffer file.
+- Tracker: `render_code_canvas_html()` — file tree, lint icons, pytest status, current `step_kind`.
+- Resume: orphan `active_code_state.json` appears as `[code] {project_name}`.
+
+---
+
+## 18. Mode-specific GUI shells (3.4)
+
+```mermaid
+flowchart TB
+    Main[AquilaOS QMainWindow]
+    Stack[QStackedWidget]
+    Main --> Stack
+    Stack --> ChatPage[ChatPage]
+    Stack --> AutoPage[AutonomousPage]
+    Stack --> CodeIDE[CodeIdePage]
+    Stack --> LearnStub[Learn stub]
+```
+
+| Module | Role |
+|--------|------|
+| [`agent/gui.py`](agent/gui.py) | Mode selector, shared `AgentWorker`, routes signals to active page |
+| [`agent/gui_pages/`](agent/gui_pages/) | Per-mode layouts (`BaseModePage` hooks) |
+| [`agent/gui_state.py`](agent/gui_state.py) | Ledger HTML renderers (unchanged) |
+
+**Code IDE** (`code_ide_page.py`): QFileDialog open/import, file tree from buffer, editor tabs, execution log in right rail. Project tools: `import_codebase`, `attach_existing_repo`, `index_codebase_for_search` in [`code_canvas_tools.py`](agent/tool_library/code_canvas_tools.py).
+
+**Context policy for large repos:** buffer stores paths + metadata (`indexed_only`); content loaded on demand. Agent prompt forbids deep `get_directory_tree` on repo root.
+
+**Future:** Writing (doc editor), Learn (LMS-style) — stubs only in 3.4.
+
+---
+
+## 19. Extension points and rough edges
+
+| Item | Status (3.3) |
 |------|----------------|
 | `route_tools(objective)` | Implemented, not used in `run_unified_task` (full schema + server guards instead) |
 | Inter-modal automation | Prompt says “in development” |
 | Streamlit (`app.py`) | Legacy 3.1 artifact; not maintained for 3.2 |
-| Task State Tracker | Fixed: `gui_state.resolve_ledger_path` + renderers for autonomous, research, writing |
+| Task State Tracker | `gui_state`: autonomous, research, writing, **code** (`render_code_canvas_html`) |
+| Code Mode | `code_canvas_tools.py`, `language_registry.py`, `gui_pages/code_ide_page.py` |
+| Mode workspaces | `gui_pages/` + `QStackedWidget` in `gui.py` (3.4) |
 | Memory singleton | Fixed: `memory_singleton.aquila_memory` shared by `main` and `agent_tools` |
 | `_index_codebase` | Excluded from strict schema / executable tools |
 | Dependencies | `requirements.txt` at repo root |
 | Chat double-bubble | Fixed: `chat_finished` vs `task_finished` in `gui.py` |
 | Attachment injection | Fixed: `text_chunks` injected in planner + first loop turn |
-| Loop guards | Max 6 tools/turn, parse recovery, forced advance on stall |
-| Tests | 98+ tests (unit + live Ollama) in `agent/tests/`; run `pytest` from `agent/` |
+| Loop engine | `loop_engine.py`: reflect/act, grace budget, step entry ritual |
+| Planner tuning | `plan_validator.py` after `generate_plan` |
+| Loop guards | Max 6 tools/turn, parse pop (no budget burn), smart override before force advance |
+| Tests | 100+ tests (unit + live Ollama) in `agent/tests/`; run `pytest` from `agent/` |
 | Ledger on `finish_task` | `complete_ledger_state()` marks all steps + status completed |
 | Research deliverables | `save_task_deliverable()` → `Agent-Research/{task}.md` (top-level or `finish_task` args) |
 | Sleep cycle | Consolidates `Agent-Tasks/` and `Agent-Plans/` |
@@ -580,11 +701,12 @@ SleepWorker → initiate_sleep_cycle
 
 ---
 
-## 17. Quick reference: key files to read first
+## 20. Quick reference: key files to read first
 
 | Question | Start here |
 |----------|------------|
-| How does the agent loop work? | `agent/main.py` — `run_unified_task`, `generate_plan` |
+| How does the agent loop work? | `agent/loop_engine.py`, `agent/main.py` — `run_unified_task`, `generate_plan` |
+| Planner budgets? | `agent/plan_validator.py` |
 | How are tools registered? | `agent/tools.py`, `agent/tool_library/__init__.py` |
 | How is memory stored? | `agent/memory.py` |
 | What does the model see? | `agent/prompts.py` |

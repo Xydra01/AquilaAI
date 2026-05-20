@@ -5,11 +5,51 @@ import difflib
 import inspect
 import re
 from dotenv import load_dotenv
+from context_budget import get_context_profile
 
 """Security firewall"""
 FORBIDDEN_FILES = ['.env', 'state.json', '.gitignore', 'chroma.sqlite3']
 FORBIDDEN_EXTS = ['.pem', '.key', '.log', '.db', '.sqlite3']
-FORBIDDEN_DIRS = ['Agent-Logs', 'vector_db', '__pycache__', '.git']
+FORBIDDEN_DIRS = [
+    'Agent-Logs',
+    'vector_db',
+    '__pycache__',
+    '.git',
+    '.venv',
+    'venv',
+    'node_modules',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.ruff_cache',
+    '.tox',
+    '.nox',
+    'dist',
+    'build',
+    '.eggs',
+    'htmlcov',
+    'site-packages',
+    'ai-agent-env',
+    '.cursor',
+    '.idea',
+    '.vscode',
+]
+
+
+def should_skip_dir(dirname: str) -> bool:
+    """Skip dependency/build/cache dirs when walking a codebase (not Aquila internals only)."""
+    if dirname in FORBIDDEN_DIRS:
+        return True
+    if dirname.endswith('.egg-info'):
+        return True
+    return False
+
+
+def is_ignored_code_path(path: str) -> bool:
+    """True if a project-relative path lies under an ignored directory."""
+    if not path:
+        return False
+    parts = Path(str(path).replace('\\', '/')).parts
+    return any(should_skip_dir(p) for p in parts)
 
 """env and root path loading"""
 AGENT_ROOT_DIR = Path.cwd().resolve()
@@ -23,13 +63,64 @@ if root_env.exists():
 elif agent_env.exists():
     load_dotenv(dotenv_path=agent_env)
 
+def get_code_project_root() -> Path | None:
+    """Active Code Mode project directory, if any."""
+    try:
+        from tool_library.code_canvas_tools import get_active_project_scope
+
+        scope = get_active_project_scope()
+        if scope:
+            return Path(scope["root"]).resolve()
+    except Exception:
+        pass
+    return None
+
+
+def resolve_tool_path(file_path: str, *, for_write: bool = False) -> Path:
+    """
+    Resolve a path for filesystem tools. When a code project is open, relative paths
+    are under CODE_PROJECT_ROOT (may be outside process cwd for in-place repos).
+    """
+    norm = normalize_workspace_path(file_path or ".")
+    p = Path(norm)
+    if p.is_absolute():
+        return p.resolve()
+    code_root = get_code_project_root()
+    if code_root:
+        return (code_root / norm).resolve()
+    return (Path.cwd() / norm).resolve()
+
+
+def normalize_workspace_path(file_path: str) -> str:
+    """Fix doubled path segments and coerce absolute paths to workspace-relative."""
+    if not file_path:
+        return file_path
+    p = str(file_path).replace("\\", "/").strip()
+    while "/agent/agent/" in p or p.startswith("agent/agent/"):
+        p = p.replace("/agent/agent/", "/agent/", 1)
+        if p.startswith("agent/agent/"):
+            p = "agent/" + p[len("agent/agent/") :]
+    try:
+        path_obj = Path(p)
+        if path_obj.is_absolute():
+            cwd = Path.cwd().resolve()
+            resolved = path_obj.resolve()
+            try:
+                p = resolved.relative_to(cwd).as_posix()
+            except ValueError:
+                p = resolved.as_posix()
+    except OSError:
+        pass
+    return p
+
+
 def is_safe_path(path_obj: Path) -> bool:
     """Checks if a file is safe for the LLM to read."""
     if path_obj.name in FORBIDDEN_FILES:
         return False
     if path_obj.suffix in FORBIDDEN_EXTS:
         return False
-    if any(part in FORBIDDEN_DIRS for part in path_obj.parts):
+    if any(should_skip_dir(part) for part in path_obj.parts):
         return False
     return True
 
@@ -43,6 +134,20 @@ def check_syntax(code_string: str):
     
 def write_file(file_path: str, content: str) -> str:
     """Creates a new file or completely overwrites an existing one."""
+    code_root = get_code_project_root()
+    if code_root:
+        target = resolve_tool_path(file_path, for_write=True)
+        try:
+            target.relative_to(code_root)
+        except ValueError:
+            return (
+                f"❌ CODE MODE: Cannot write outside the open project ({code_root}). "
+                "Use create_buffer_file for source/docs, then sync_project_to_disk — "
+                "or write_project_markdown for ARCHITECTURE.md / README updates."
+            )
+        file_path = str(target)
+    else:
+        file_path = normalize_workspace_path(file_path)
     if not is_safe_path(Path(file_path)):
         return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
     content = content.strip()
@@ -96,7 +201,8 @@ def write_file(file_path: str, content: str) -> str:
 
 def read_file(file_path: str) -> str:
     """Reads the contents of a file, capping it for context safety."""
-    path_obj = Path(file_path).expanduser()
+    path_obj = resolve_tool_path(file_path)
+    file_path = str(path_obj)
     
     if not is_safe_path(path_obj):
         return f"❌ SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden by the system admin. Do not attempt to read this file again."
@@ -107,9 +213,10 @@ def read_file(file_path: str) -> str:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-            
-        if len(content) > 1500:
-            preview = content[:1500]
+
+        preview_limit = get_context_profile().read_file_preview_chars
+        if len(content) > preview_limit:
+            preview = content[:preview_limit]
             return (f"{preview}\n\n"
                     f"... [FILE TRUNCATED DUE TO LENGTH ({len(content)} chars)]\n"
                     f"⚠️ WARNING: File is too large. Use `search_tool_library` to find tools like `search_in_file` or `read_file_lines` to read the rest safely.")
@@ -122,12 +229,12 @@ def read_file(file_path: str) -> str:
 def list_directory(path="."):
     """Lists all files and folders in a specific directory."""
     try:
-        target = Path(path).expanduser().resolve()
+        target = resolve_tool_path(path or ".")
         if not target.exists():
             return f"Error: Directory '{target}' does not exist."
         items = []
         for item in target.iterdir():
-            if item.name in FORBIDDEN_DIRS:
+            if should_skip_dir(item.name):
                 continue
             if item.is_dir():
                 items.append(f"[DIR]  {item.name}/")
@@ -139,6 +246,7 @@ def list_directory(path="."):
 
 def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> str:
     """Replaces exact target text with replacement text in a file."""
+    file_path = normalize_workspace_path(file_path)
     if not is_safe_path(Path(file_path)):
         return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
 
@@ -180,7 +288,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
 def read_file_lines(file_path: str, start_line: int, end_line: int):
     """Reads specific lines from a file."""
     try:
-        path_obj = Path(file_path).expanduser()
+        path_obj = resolve_tool_path(file_path)
         if not is_safe_path(path_obj):
             return f"SECURITY BLOCK: Access to '{path_obj.name}' is strictly forbidden. Do not attempt to read this file again."
         if not path_obj.exists():
@@ -266,11 +374,12 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
         return f"❌ Error: Directory '{target_path}' does not exist."
     
     tree_str = f"Directory Tree for: {target_path.name}/\n"
-    
+    tree_cap = get_context_profile().tree_char_cap
+
     def walk_dir(current_path, current_depth, prefix=""):
         nonlocal tree_str
-        
-        if len(tree_str) > 5000:
+
+        if len(tree_str) > tree_cap:
             return
             
         if current_depth > max_depth:
@@ -286,7 +395,7 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
         items = [item for item in items if not (item.is_dir() and item.name in ignore_dirs)]
         
         for i, item in enumerate(items):
-            if len(tree_str) > 5000:
+            if len(tree_str) > tree_cap:
                 tree_str += f"{prefix}└── ... [TRUNCATED DUE TO MASSIVE SIZE]\n"
                 break
                 
@@ -303,8 +412,8 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
     walk_dir(target_path, 1)
     
    
-    if len(tree_str) > 5000:
-        tree_str = tree_str[:5000] + "\n\n... [TREE TRUNCATED FOR SAFETY. DO NOT USE LARGE MAX_DEPTH HERE]"
+    if len(tree_str) > tree_cap:
+        tree_str = tree_str[:tree_cap] + "\n\n... [TREE TRUNCATED FOR SAFETY. DO NOT USE LARGE MAX_DEPTH HERE]"
         
     return tree_str
 

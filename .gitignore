@@ -17,3 +17,15 @@ Agent-Creations/
 Agent-Plans/
 Agent-Research/
 Agent-Tasks/
+Agent-Code/
+
+# Ollama TurboQuant — local binaries & build trees (see tools/README.md)
+tools/ollama-turboquant/
+tools/ollama-pr15505/
+tools/ollama-pr15505-src/
+tools/ollama-v0.30.0-rc17/
+tools/ollama-tq/
+tools/*.log
+
+# Cursor plans (local)
+.cursor/

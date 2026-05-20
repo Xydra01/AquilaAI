@@ -1,8 +1,8 @@
-# Aquila OS 3.2
+# Aquila OS 3.3
 
 **Aquila OS** is a **local-first autonomous AI agent** that runs on your machine, talks to **[Ollama](https://ollama.com)** with a custom fine-tuned workflow model (`aquila`), and executes real work through **strict JSON tool-calling** — file I/O, web research, coding, email, and long-form writing — without sending your data to a cloud LLM.
 
-Version **3.2** is a stabilization and quality release on top of 3.1: a **PySide6 desktop GUI** replaces Streamlit as the primary interface, the **agent loop** is hardened for reliable tool calls, **Writing Mode** ships end-to-end, attachments work in all modes, and a **pytest suite** (~30 modules, 98+ tests) covers core behavior.
+Version **3.3** adds **Code Mode** (TDD canvas, project-scoped writes), optional **TurboQuant** models up to **96k context**, **context-budget-aware** web enrichment (auto-scrape + research bibliographies), and a hardened **reflect/act loop** (`loop_engine.py`). The **PySide6** desktop GUI remains the primary interface; a **pytest suite** (~35 modules, 160+ tests) covers core behavior.
 
 For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
@@ -11,7 +11,7 @@ For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.
 ## Table of contents
 
 1. [What Aquila does](#what-aquila-does)
-2. [What's new in 3.2](#whats-new-in-32)
+2. [What's new in 3.3](#whats-new-in-33)
 3. [System requirements](#system-requirements)
 4. [Installation](#installation)
 5. [Quick start](#quick-start)
@@ -25,7 +25,7 @@ For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.
 13. [Testing](#testing)
 14. [Security model](#security-model)
 15. [Troubleshooting](#troubleshooting)
-16. [Known limitations and 3.3 direction](#known-limitations-and-33-direction)
+16. [Known limitations and 3.4 direction](#known-limitations-and-34-direction)
 17. [Development notes](#development-notes)
 
 ---
@@ -47,36 +47,30 @@ The model (`aquila`, based on **Qwen 3.5 9B** with 32k context) must output **on
 
 ---
 
-## What's new in 3.2
+## What's new in 3.3
 
-Compared to **Aquila 3.1** (Streamlit-first, research-complete):
+Compared to **Aquila 3.2** (PySide6 stabilization, Writing Mode):
 
 ### User-facing
 
-- **PySide6 desktop UI** — dark theme, tabbed ledger tracker, streaming chat, cancel button, resume in-progress ledgers, **Clear Chat View** (display only; history preserved for the model).
-- **Writing Mode** — `init_document`, `write_section`, `read_outline`, `compile_final_document`; drafts under `Agent-Drafts/`.
-- **Attachments** — images (vision in chat/research), PDF, DOCX, CSV, HTML, and many text/code formats via `agent/file_parser.py` (5 MB cap per file).
-- **Task State Tracker** — live HTML for autonomous, research (`Agent-Plans/`), and writing steps.
+- **Code Mode** — dedicated IDE workspace (`gui_pages/code_ide_page.py`): import or attach a repo, file tree, TDD step validation, pytest/flake8 rail.
+- **Mode workspaces** — `QStackedWidget` layouts for Chat, Autonomous, Research/Writing, Code (Learn remains a stub for 4.0).
+- **TurboQuant models** — `aquila-tq-32k`, `aquila-tq-64k`, `aquila-tq-96k` on a separate Ollama port (see [docs/ollama-turboquant.md](docs/ollama-turboquant.md)).
+- **Research bibliographies** — visited/scraped URLs appended to deliverables when research mode completes.
 
 ### Agent core
 
-- **Dynamic strict JSON schema** — `build_strict_schema()` generates per-tool `anyOf` branches from function signatures; Ollama `format` + `stream=False` on tool turns (streaming broke schema compliance).
-- **Loop guards** — max 6 tools per turn, parse/schema retry, duplicate-tool warning, programmatic advance on stall, `complete_ledger_state()` on `finish_task`.
-- **Deliverables** — `save_task_deliverable()` writes `Agent-Research/{task}.md` or `Agent-Creations/{task}.md`; research `final_report` at top level of JSON response.
-- **Attachment injection** — `text_chunks` injected into planner and first loop turn.
-- **Shared memory singleton** — `memory_singleton.aquila_memory` used by `main` and `agent_tools` (fixes split-brain scratchpad).
-- **Sleep cycle** — consolidates completed tasks from both `Agent-Tasks/` and `Agent-Plans/`.
+- **`loop_engine.py`** — reflect/act loop with grace budget, step entry ritual, final-step stall detection.
+- **`context_budget.py`** — tiered limits (`compact` / `standard` / `extended` / `max`) for scrape count, scrape size, scratchpad, `read_file`, directory tree depth — scaled from `OLLAMA_NUM_CTX`.
+- **`web_enrichment.py`** — tiered auto-scrape after `web_search`, URL scoring, `SourceRegistry` for bibliography markdown.
+- **Code project scope** — `write_file` / reads constrained to `CODE_PROJECT_ROOT` when a code project is open; sandbox vs in-place workspace modes.
+- **`plan_validator.py`** — budget-aware plan validation before execution.
 
-### Engineering
+### Carried from 3.2
 
-- **`requirements.txt`** at repo root.
-- **`agent/pytest.ini`** + **`agent/tests/conftest.py`** + 30 test modules (unit + optional live Ollama).
-- **`ARCHITECTURE.md`** — full system documentation.
-
-### Intentionally unchanged / legacy
-
-- **`agent/app.py`** (Streamlit) — legacy 3.1 UI; **not maintained** for 3.2. Use `gui.py`.
-- **`route_tools()`** — semantic tool routing exists but is **not wired** into the loop; full tool schema is always sent.
+- **PySide6 desktop UI**, **Writing Mode**, **attachments**, **Task State Tracker**, strict JSON tool loop, shared memory singleton, sleep cycle.
+- **`agent/app.py`** (Streamlit) — legacy 3.1 UI; not maintained. Use `gui.py`.
+- **`route_tools()`** — exists but **not wired** into the loop (planned for 3.4).
 
 ---
 
@@ -145,6 +139,31 @@ Verify:
 curl http://127.0.0.1:11434/api/tags
 ```
 
+### 4b. Optional: TurboQuant (32k–96k on NVIDIA)
+
+TurboQuant compresses the KV cache so longer context fits on the same GPU. Full guide: **[docs/ollama-turboquant.md](docs/ollama-turboquant.md)**.
+
+```powershell
+# Once: build portable Ollama from PR #15505
+.\scripts\install-ollama-turboquant-pr.ps1
+
+# Terminal 1 — TurboQuant on port 11435 (keeps tray Ollama on 11434 free)
+.\scripts\ollama-serve-turboquant-port.ps1
+
+# Terminal 2 — create models and run Aquila
+.\scripts\ollama-create-tq-models.ps1
+# .env: OLLAMA_BASE_URL=http://127.0.0.1:11435  OLLAMA_MODEL=aquila-tq-32k|64k|96k
+python agent/gui.py
+```
+
+| Model | Context | Typical use |
+|-------|---------|-------------|
+| `aquila-tq-32k` | 32k | Light tasks, lowest VRAM |
+| `aquila-tq-64k` | 64k | Default extended |
+| `aquila-tq-96k` | 96k | Max context if VRAM allows |
+
+Baseline `aquila` on port 11434 remains the default when TurboQuant env vars are unset.
+
 ### 5. Start SearXNG (web search)
 
 ```bash
@@ -199,11 +218,14 @@ flowchart LR
         Task[Autonomous Task]
         Research[Research Mode]
         Writing[Writing Mode]
+        Code[Code Mode]
     end
     Chat -->|no ledger| Ollama[Ollama aquila]
     Task --> LedgerTasks[Agent-Tasks JSON]
     Research --> LedgerPlans[Agent-Plans JSON]
     Writing --> LedgerTasks
+    Code --> LedgerTasks
+    Code --> CodeBuf[Agent-Code buffer]
     LedgerTasks --> Loop[run_unified_task]
     LedgerPlans --> Loop
     Loop --> Ollama
@@ -215,8 +237,25 @@ flowchart LR
 | **Autonomous** | `Agent-Tasks/{task_name}.json` | `Agent-Creations/` (if `final_report`) | `finish_task` |
 | **Research** | `Agent-Plans/{task_name}.json` | `Agent-Research/{task_name}.md` | `finish_task` + `final_report` |
 | **Writing** | `Agent-Tasks/{task_name}.json` | `Agent-Drafts/` via `compile_final_document` | `finish_task` + brief summary in `final_report` |
+| **Code** | `Agent-Tasks/{task_name}.json` + `Agent-Code/active_code_state.json` | Workspace via `sync_project_to_disk` | `finish_task` after TDD verify |
 
-**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`.
+**Code Mode (3.3):** Python-first TDD with `run_pytest` / `run_linter`; patch-first editing (`replace_lines`, `apply_unified_patch`). JS/TS/Rust/Go: read/write + basic lint when CLIs are installed. Required: `pytest`, `flake8` (recommended).
+
+**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`, `get_code_prompt`.
+
+### Mode workspaces (3.4)
+
+The desktop UI switches **dedicated layouts** per mode (`agent/gui_pages/` + `QStackedWidget` in `agent/gui.py`):
+
+| Workspace | Layout |
+|-----------|--------|
+| **Chat** | Single-column conversation |
+| **Autonomous Task** | All-in-one: chat + canvas + execution log (unchanged behavior) |
+| **Research / Writing** | Same 3-pane as Autonomous until dedicated pages ship |
+| **Code** | IDE: file tree, read-only editor tabs, agent rail, lint/pytest strips |
+| **Learn** | Placeholder (classroom UI planned for 4.0) |
+
+**Code project open:** toolbar **Open in-place** (`attach_existing_repo`) or **Import sandbox** (`import_codebase` copy under `Agent-Code/{project}/`). For large repos the agent uses **manifest + search + regions**, not full directory trees in context.
 
 ---
 
@@ -254,7 +293,12 @@ agent-projects/
 │   ├── tool_library/      # Extended tools
 │   └── tests/             # pytest suite
 ├── requirements.txt
-├── Modelfile              # Ollama aquila model
+├── Modelfile              # Ollama aquila model (32k)
+├── Modelfile.tq-32k       # TurboQuant 32k (light)
+├── Modelfile.tq-64k       # TurboQuant 64k
+├── Modelfile.tq-96k       # TurboQuant 96k (stretch)
+├── scripts/               # Ollama TQ install, serve, model create
+├── tools/                 # Local Ollama binaries (gitignored — see tools/README.md)
 ├── docker-compose.yml     # SearXNG
 ├── start.sh
 ├── README.md              # This file
@@ -270,6 +314,7 @@ agent-projects/
 | `Agent-Research/` | Research markdown deliverables |
 | `Agent-Creations/` | Task markdown deliverables |
 | `Agent-Drafts/` | Writing-mode draft state + compiled docs |
+| `Agent-Code/` | Code Mode buffer (`active_code_state.json`) + synced workspace files |
 | `Agent-Logs/` | Per-run execution logs |
 | `Agent-Memory/` | SQLite `fact_graph.db` |
 | `agent/vector_db/` | ChromaDB persistence |
@@ -330,6 +375,17 @@ Tools are merged from `SURVIVAL_TOOLS` and `tool_library.ALL_TOOLS`. Internal `_
 | `init_document`, `write_section`, `read_outline` | Draft buffer |
 | `compile_final_document` | Flush to `Agent-Drafts/` |
 
+### Code canvas (`tool_library/code_canvas_tools.py`)
+
+| Tool | Purpose |
+|------|---------|
+| `init_code_project`, `read_code_outline` | Code buffer in `Agent-Code/` |
+| `create_buffer_file`, `replace_lines`, `apply_unified_patch`, `replace_symbol` | Incremental edits |
+| `read_file_region`, `sync_project_to_disk` | Targeted read + disk sync |
+| `run_pytest`, `run_linter`, `set_test_targets` | TDD + lint (Python full) |
+| `import_codebase`, `attach_existing_repo` | Manifest import (in-place or sandbox) |
+| `index_codebase_for_search` | Semantic search scoped to project root |
+
 ### Email (`tool_library/email_tools.py`)
 
 | Tool | Purpose |
@@ -364,7 +420,10 @@ Supported formats include `.pdf`, `.docx`, `.csv`, `.html`, images (`.png`, `.jp
 
 | Item | Location | Notes |
 |------|----------|-------|
-| Ollama URL / model | `agent/main.py` → `OllamaClient` | Default `http://127.0.0.1:11434`, model `aquila` |
+| Ollama URL | `.env` → `OLLAMA_BASE_URL` | Default `http://127.0.0.1:11434` |
+| Ollama model | `.env` → `OLLAMA_MODEL` | Default `aquila`; use `aquila-tq-64k` with TurboQuant |
+| Ollama context override | `.env` → `OLLAMA_NUM_CTX` | Optional; e.g. `65536` without recreating model |
+| TurboQuant serve | `scripts/ollama-serve-turboquant.ps1` | Start Ollama before Aquila; see [docs/ollama-turboquant.md](docs/ollama-turboquant.md) |
 | SearXNG | `docker-compose.yml`, `searxng-settings.yml` | Port 8080 |
 | SMTP | `.env` (from `.env.EXAMPLE`) | Email tool only |
 | Pytest | `agent/pytest.ini` | `live` marker for Ollama integration tests |
@@ -381,10 +440,18 @@ cd agent
 pytest tests/ -q --ignore=tests/test_live_ollama.py --ignore=tests/test_live_prompts.py
 ```
 
-Include live Ollama tests (requires running `aquila` on port 11434):
+Include live Ollama tests (requires running Ollama; model from `OLLAMA_MODEL`, default `aquila`):
 
 ```bash
 pytest tests/ -m live -v
+# TurboQuant / 64k smoke (set OLLAMA_MODEL=aquila-tq-64k first):
+pytest tests/test_live_context_smoke.py -m live -v
+```
+
+Context benchmark (manual VRAM check):
+
+```bash
+python scripts/benchmark_context.py
 ```
 
 **Coverage highlights:**
@@ -431,17 +498,16 @@ Defense in depth for a tool-using agent:
 
 ---
 
-## Known limitations and 3.3 direction
+## Known limitations and 3.4 direction
 
-Documented in [ARCHITECTURE.md §16](ARCHITECTURE.md):
+Documented in [ARCHITECTURE.md](ARCHITECTURE.md):
 
-- Planner `max_iterations` defaults are often too low for complex steps; OS may force-advance before work is done.
-- No **reflect/act** turn split yet (planned for 3.3).
-- `route_tools()` not used — full tool list every turn.
+- `route_tools()` not used — full tool list every turn (3.4: per-step tool routing).
 - Streamlit UI not maintained.
-- Some integration paths are sensitive to **cwd** and duplicate tool calls under budget pressure.
-
-**3.3 (planned):** budget-aware planner, loop engine refactor, reflect/act turns, smarter iteration accounting, step-entry scratchpad injection.
+- Code Mode canvas is **read-only** in the GUI (agent edits via tools; user edit-back and diff accept/reject deferred to 3.4).
+- Non-Python test runners (Jest, `cargo test`, `go test`) not wired in v1.
+- **Multi-instance** workspaces, rolling context summary, and explore sub-steps are **3.4** (not in 3.3).
+- Learn mode classroom UI is **4.0**.
 
 ---
 
@@ -451,7 +517,7 @@ Documented in [ARCHITECTURE.md §16](ARCHITECTURE.md):
 
 - **Primary UI:** `agent/gui.py` — not `app.py`.
 - **Do not normalize** bad tool calls (e.g. `tool_name` → `name`); fix via schema + non-streaming.
-- **Commits:** User-led; this README documents release state on branch `Aquila-3.2`.
+- **Commits:** User-led; this README documents release state on branch `Aquila-3.3`.
 - **Logs:** `Agent-Logs/{task}_{timestamp}.log` for full iteration + tool traces.
 
 ### Useful commands
@@ -467,7 +533,8 @@ python -c "from main import initiate_sleep_cycle; print(initiate_sleep_cycle())"
 ### Branch / release
 
 - **3.1:** `Aquila-3.1` — Streamlit, research mode complete.
-- **3.2:** `Aquila-3.2` — PySide6, writing mode, tests, loop hardening (this document).
+- **3.2:** `Aquila-3.2` — PySide6, writing mode, tests, loop hardening.
+- **3.3:** `Aquila-3.3` — Code Mode, TurboQuant, context budget, web enrichment (this document).
 
 ---
 

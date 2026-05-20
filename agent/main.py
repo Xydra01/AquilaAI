@@ -11,7 +11,14 @@ from typing import Dict, List
 from rich.console import Console
 from rich.text import Text
 from memory_singleton import aquila_memory
-from prompts import get_autonomous_prompt, get_research_prompt, get_writing_prompt, get_chat_prompt
+from context_budget import set_runtime_context
+from prompts import (
+    get_autonomous_prompt,
+    get_research_prompt,
+    get_writing_prompt,
+    get_code_prompt,
+    get_chat_prompt,
+)
 
 # Tools imports
 from tools import SURVIVAL_TOOLS
@@ -133,12 +140,16 @@ class DualLogger:
                 f.write(clean_text + "\n")
                 
     def log_iteration(self, iteration: int, content: str):
-        if not self.log_filename: return
+        if not self.log_filename:
+            return
+        os.makedirs(os.path.dirname(self.log_filename) or ".", exist_ok=True)
         with open(self.log_filename, "a", encoding="utf-8") as f:
             f.write(f"\n--- Iteration {iteration} ---\n{content}\n")
 
     def log_tool_execution(self, tool_name: str, args: dict, result: str):
-        if not self.log_filename: return
+        if not self.log_filename:
+            return
+        os.makedirs(os.path.dirname(self.log_filename) or ".", exist_ok=True)
         with open(self.log_filename, "a", encoding="utf-8") as f:
             f.write(f"\n[🛠️ TOOL EXECUTED: {tool_name}]\nARGS: {args}\nRESULT:\n{result}\n")
 
@@ -148,11 +159,40 @@ import time
 
 class OllamaClient:
     def __init__(self):
-        self.base_url = "http://127.0.0.1:11434"
-        self.model_name = "aquila"
+        self.base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
+        self.model_name = os.getenv("OLLAMA_MODEL", "aquila").strip()
+        self.num_ctx = self._parse_num_ctx(os.getenv("OLLAMA_NUM_CTX"))
         self.session = requests.Session()
-        print(f"✅ Connected to Ollama (Targeting: {self.model_name})")
-    
+        set_runtime_context(self.model_name, self.num_ctx)
+        ctx_note = f", num_ctx={self.num_ctx}" if self.num_ctx else ""
+        print(f"✅ Connected to Ollama (Targeting: {self.model_name}{ctx_note})")
+        self._log_model_availability()
+
+    @staticmethod
+    def _parse_num_ctx(raw: str | None) -> int | None:
+        if raw is None or not str(raw).strip():
+            return None
+        try:
+            value = int(str(raw).strip())
+            return value if value > 0 else None
+        except ValueError:
+            return None
+
+    def _log_model_availability(self) -> None:
+        try:
+            url = f"{self.base_url.rstrip('/')}/api/tags"
+            response = self.session.get(url, timeout=3)
+            if response.status_code != 200:
+                return
+            names = [m.get("name", "") for m in response.json().get("models", [])]
+            if not any(self.model_name in name for name in names):
+                print(
+                    f"⚠️ Model '{self.model_name}' not found in Ollama. "
+                    f"Run: ollama create {self.model_name} -f Modelfile"
+                )
+        except Exception:
+            pass
+
     def chat(self, messages: list, temperature: float = 0.6, timeout: int = 120, format: dict = None, stream: bool = False):
         clean_url = self.base_url.strip()
         
@@ -164,6 +204,8 @@ class OllamaClient:
             "frequency_penalty": 0.2, 
             "presence_penalty": 0.2
         }
+        if self.num_ctx is not None:
+            payload["options"] = {"num_ctx": self.num_ctx}
         
         # FIXED: Use the correct response_format schema for the /v1 endpoint!
         if format: 
@@ -178,6 +220,7 @@ class OllamaClient:
             
         try:
             start_time = time.time()
+            generation_start = None
             first_token_received = False
             full_content = ""
             
@@ -189,13 +232,13 @@ class OllamaClient:
             if stream:
                 console.print("[green]✅ Connected! Waiting for GPU to compute first token...[/green]")
                 def chunk_generator():
-                    nonlocal first_token_received, start_time, full_content
+                    nonlocal first_token_received, start_time, generation_start, full_content
                     for line in response.iter_lines():
                         if line:
                             if not first_token_received:
                                 console.print(f"[bold cyan]⚡ FIRST TOKEN RECEIVED in {time.time() - start_time:.2f} seconds![/bold cyan]")
                                 first_token_received = True
-                                start_time = time.time() 
+                                generation_start = time.time()
 
                             decoded_line = line.decode('utf-8')
                             if decoded_line.startswith("data: "):
@@ -212,7 +255,7 @@ class OllamaClient:
                                         yield {"message": {"content": token}}
                                 except Exception: pass
 
-                        if time.time() - start_time > timeout:
+                        if generation_start is not None and time.time() - generation_start > timeout:
                             sys.stdout.write("\n")
                             console.print(f"\n[bold red]⚠️ KILL SWITCH ACTIVATED: Model hit the {timeout}s limit.[/bold red]")
                             response.close() 
@@ -326,6 +369,58 @@ def validate_tool_calls(tool_calls: list) -> tuple[bool, str]:
     return True, ""
 
 
+def _tool_argument_properties(tool_name: str) -> dict | None:
+    """Return properties dict for a tool's arguments from the strict schema."""
+    tools = get_executable_tools()
+    if tool_name not in tools:
+        return None
+    func = tools[tool_name]["func"]
+    sig = inspect.signature(func)
+    props = {}
+    for param_name, param in sig.parameters.items():
+        if param.kind in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL):
+            continue
+        props[param_name] = {"type": "string"}
+    return props
+
+
+def validate_tool_arguments(tool_calls: list) -> tuple[bool, str]:
+    """Reject unknown keys inside each tool's arguments object."""
+    for i, tc in enumerate(tool_calls):
+        if not isinstance(tc, dict):
+            continue
+        name = tc.get("name")
+        args = tc.get("arguments")
+        if not name or not isinstance(args, dict):
+            continue
+        allowed = _tool_argument_properties(name)
+        if allowed is None:
+            continue
+        extra = set(args.keys()) - set(allowed.keys())
+        if extra:
+            return (
+                False,
+                f"tools[{i}] ({name}) illegal argument keys {sorted(extra)}. "
+                f"Allowed: {sorted(allowed.keys())}.",
+            )
+    return True, ""
+
+
+REFLECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {
+            "type": "string",
+            "description": "Brief reflection on tool results and next steps. No tools this turn.",
+        },
+    },
+    "required": ["reasoning"],
+    "additionalProperties": False,
+}
+
+META_TOOL_NAMES = frozenset({"mark_objective_complete", "finish_task"})
+
+
 class ToolExecutor:
     def _coerce_arguments(self, func, arguments: dict) -> dict:
         """Coerce string LLM arguments to int where the signature expects int."""
@@ -414,15 +509,29 @@ def complete_ledger_state(task_file: str, summary: str = "Task finished successf
         json.dump(state, f, indent=4)
 
 
-def save_task_deliverable(task_name: str, mode: str, report_text: str) -> str | None:
+def save_task_deliverable(
+    task_name: str,
+    mode: str,
+    report_text: str,
+    sources=None,
+) -> str | None:
     """Write final_report markdown to Agent-Research or Agent-Creations. Returns path or None."""
+    from web_enrichment import append_bibliography_to_report
+
     if not report_text or not str(report_text).strip():
+        if mode != "research" or sources is None:
+            return None
+        report_text = ""
+
+    final_text = append_bibliography_to_report(report_text, sources, mode=mode)
+    if not final_text.strip():
         return None
+
     save_dir = "Agent-Research" if mode == "research" else "Agent-Creations"
     os.makedirs(save_dir, exist_ok=True)
     out_path = os.path.join(save_dir, f"{task_name}.md")
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(report_text)
+        f.write(final_text)
     return out_path
 
 class Agent:
@@ -431,6 +540,7 @@ class Agent:
         os.makedirs("Agent-Creations", exist_ok=True)
         os.makedirs("Agent-Research", exist_ok=True)
         os.makedirs("Agent-Plans", exist_ok=True)
+        os.makedirs("Agent-Code", exist_ok=True)
         self.executor = ToolExecutor()
         self.client = client
         self.memory = aquila_memory 
@@ -449,6 +559,7 @@ class Agent:
         self.master_prompt = get_autonomous_prompt(tool_docs)
         self.RESEARCH_PROMPT = get_research_prompt(tool_docs)
         self.WRITING_PROMPT = get_writing_prompt(tool_docs)
+        self.CODE_PROMPT = get_code_prompt(tool_docs)
         self.action_schema = build_strict_schema(tools)
 
     def run_chat(self, user_input: str, chat_history: list, image_payloads: list = None, stream: bool = True):
@@ -478,28 +589,95 @@ class Agent:
         return self.client.chat(messages, temperature=0.6, stream=stream)
 
     def generate_plan(self, topic_name: str, user_request: str, mode: str, text_chunks: list = None, image_payloads: list = None) -> str:
+        from plan_validator import BUDGET_RUBRIC, STEP_KINDS
+
+        workspace_root = os.getcwd()
+        code_scope_note = ""
+        if mode == "code":
+            from tool_library.code_canvas_tools import get_active_project_scope
+
+            scope = get_active_project_scope()
+            if scope:
+                workspace_root = scope["root"]
+                code_scope_note = (
+                    f"\nActive code project '{scope['project_name']}' at {scope['root']}. "
+                    "ALL steps must use Code Canvas tools and paths under this root only. "
+                    "Do NOT explore the parent workspace with list_directory/get_directory_tree."
+                )
+            else:
+                code_scope_note = (
+                    "\nNo code project buffer yet — first step should init_code_project "
+                    "or attach_existing_repo before editing files."
+                )
+        rubric_lines = "\n".join(
+            f"  - {kind}: min={lo}, default={default}, max={hi}"
+            for kind, (lo, default, hi) in BUDGET_RUBRIC.items()
+        )
+        kinds_list = ", ".join(STEP_KINDS)
+
         if mode == "research":
             role_desc = "You are Aquila's Lead Researcher."
-            objectives = "Focus on formulating searches, extracting technical data, and cross-referencing."
-            example_steps = """{"status": "pending", "description": "Search...", "max_iterations": 3}"""
+            objectives = (
+                "Decompose into focused steps: search → read sources → save notes → "
+                "synthesize → final report. Do NOT combine search+read+synthesis in one step."
+            )
+            example_step = (
+                '{"status": "pending", "description": "Search for ...", '
+                '"step_kind": "search", "max_iterations": 4}'
+            )
+        elif mode == "writing":
+            role_desc = "You are Aquila's Writing Mode planner."
+            objectives = "Outline, draft sections, then compile. One major writing action per step."
+            example_step = (
+                '{"status": "pending", "description": "Draft section 1", '
+                '"step_kind": "write", "max_iterations": 5}'
+            )
+        elif mode == "code":
+            role_desc = "You are Aquila's Code Mode planner (TDD)."
+            objectives = (
+                "For implementation tasks use TDD steps: explore (read/verify) → tdd_red (failing pytest) "
+                "→ tdd_green (minimal code) → optional tdd_refactor → verify (full pytest) → finalize. "
+                "Use step_kind values tdd_red, tdd_green, tdd_refactor, code, verify, finalize."
+            )
+            example_step = (
+                '{"status": "pending", "description": "Write failing test for feature X", '
+                '"step_kind": "tdd_red", "max_iterations": 5}'
+            )
         else:
             role_desc = "You are the backend task router."
-            objectives = "Break the request down into a sequence of specific, executable coding or filing steps."
-            example_steps = """{"status": "pending", "description": "Create files...", "max_iterations": 2}"""
+            objectives = (
+                "Break the request into small executable steps (code, verify, file ops). "
+                "Never assign only 2 iterations to multi-file grep or multi-file read tasks."
+            )
+            example_step = (
+                '{"status": "pending", "description": "Implement ...", '
+                '"step_kind": "code", "max_iterations": 6}'
+            )
 
         attachment_block = format_attachment_context(text_chunks)
         prompt = f"""
         {role_desc}
+        WORKSPACE_ROOT (all paths relative to): {workspace_root}
+        {code_scope_note}
         The user needs: {user_request}
         {attachment_block}
         Create a strict JSON state object to manage this workflow.
         {objectives}
-        CRITICAL: For every step, assign a "max_iterations" integer. 
+
+        Each step MUST include:
+        - "description" (string)
+        - "step_kind" (one of: {kinds_list})
+        - "max_iterations" (integer; use rubric below — do NOT default everything to 2–3)
+        - "status": "pending"
+
+        Iteration budget rubric:
+{rubric_lines}
+
         Output ONLY valid JSON matching this structure:
         {{
             "status": "in_progress",
             "current_step_index": 0,
-            "steps": [ {example_steps} ]
+            "steps": [ {example_step} ]
         }}
         """
         
@@ -533,8 +711,15 @@ class Agent:
             clean_json = response.replace(f"{bt}json", "").replace(bt, "").strip()
             
             try:
-                json.loads(clean_json)
-                return clean_json 
+                plan_dict = json.loads(clean_json)
+                from plan_validator import validate_and_tune_plan
+
+                tuned, tune_notes = validate_and_tune_plan(plan_dict, mode, user_request)
+                if tune_notes:
+                    console.print("[cyan]📋 Plan tuning:[/cyan]")
+                    for note in tune_notes:
+                        console.print(f"  • {note}")
+                return json.dumps(tuned, indent=2)
             except json.JSONDecodeError:
                 continue
                 
@@ -542,18 +727,28 @@ class Agent:
 
     def run_unified_task(self, task_name: str, user_request: str, mode: str = "task", ui_callback=None, cancel_check=None, text_chunks: list = None, image_payloads: list = None) -> str:
         if mode == "research":
-            system_prompt = self.RESEARCH_PROMPT 
+            system_prompt = self.RESEARCH_PROMPT
             working_dir = Path("Agent-Research")
         elif mode == "writing":
             system_prompt = self.WRITING_PROMPT
             working_dir = Path("Agent-Drafts")
+        elif mode == "code":
+            system_prompt = self.CODE_PROMPT
+            working_dir = Path("Agent-Code")
         else:
             system_prompt = self.master_prompt
             working_dir = Path("Agent-Tasks")
 
         working_dir.mkdir(exist_ok=True)
         console.set_task(task_name)
-        mode_label = "Deep-Dive Research" if mode == "research" else "Autonomous Task"
+        if mode == "research":
+            mode_label = "Deep-Dive Research"
+        elif mode == "writing":
+            mode_label = "Writing Task"
+        elif mode == "code":
+            mode_label = "Code Mode (TDD)"
+        else:
+            mode_label = "Autonomous Task"
         
         plan_dir = "Agent-Plans" if mode == "research" else "Agent-Tasks"
         task_file = os.path.join(plan_dir, f"{task_name}.json")
@@ -566,267 +761,27 @@ class Agent:
             with open(task_file, "w", encoding="utf-8") as f:
                 f.write(plan_json)
 
-        conversation_history = []
-        step_count = 0
-        max_steps = 50
-        attachments_injected = False
-        parse_failures = 0
-        recent_tool_signatures: list[str] = []
+        from loop_engine import LoopEngine
 
-        while step_count < max_steps:
-            if cancel_check and cancel_check():
-                return "🛑 Task was manually aborted by the user."
-            try:
-                state = read_json_state(task_file)
-                if state["status"] == "completed":
-                    return f"✅ {mode_label} completed successfully. Check the directory for final outputs."
-                    
-                current_idx = state["current_step_index"]
-                if current_idx >= len(state["steps"]):
-                    return "✅ All steps are completed."
-                    
-                current_objective = state["steps"][current_idx]["description"]
-                max_step_iterations = state["steps"][current_idx].get("max_iterations", 4)
-                
-                step_attempts = sum(1 for msg in conversation_history if msg["role"] == "assistant")
-                user_msg = f"**Ultimate Topic/Goal:** {user_request}\n\n**YOUR CURRENT OBJECTIVE (Step {current_idx + 1} of {len(state['steps'])}):**\n> {current_objective}"
-
-                if step_attempts >= max_step_iterations:
-                    if current_idx == len(state['steps']) - 1:
-                        user_msg += f"\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Output final report into `final_report` and use `finish_task`."
-                    else:
-                        user_msg += f"\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Use `save_research_note` then use `mark_objective_complete` to move on."
-                else:
-                    user_msg += f"\n\nExecute tools to complete objective. Once fully complete, use `mark_objective_complete`.\n(Iteration {step_attempts + 1}/{max_step_iterations})"
-
-                if not attachments_injected and text_chunks:
-                    user_msg += format_attachment_context(text_chunks)
-                    attachments_injected = True
-
-                # FIXED: Properly format the user message with image payloads if present
-                if image_payloads:
-                    content_list = [{"type": "text", "text": user_msg}]
-                    for img_b64 in image_payloads:
-                        prefix = "data:image/jpeg;base64,"
-                        clean_b64 = img_b64.split(",", 1)[-1] if "," in img_b64 else img_b64
-                        content_list.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"{prefix}{clean_b64}"}
-                        })
-                    message_dict = {"role": "user", "content": content_list}
-                else:
-                    message_dict = {"role": "user", "content": user_msg}
-
-                active_memory = [{"role": "system", "content": system_prompt}] + conversation_history + [message_dict]
-                
-                bt = chr(96) * 3
-                prefill_text = f"{bt}json\n" + '{\n  "reasoning": "'
-                active_memory.append({"role": "assistant", "content": prefill_text})
-                
-                if ui_callback:
-                    ui_callback(f"{ledger_text}\n\n⏳ [Aquila is processing Iteration {step_count + 1}...]")
-
-                # Strict JSON schema is reliable with non-streaming on Ollama /v1.
-                # Streaming can emit schema-invalid keys (e.g. tool_name instead of name).
-                result_dict = self.client.chat(
-                    active_memory,
-                    temperature=0.2,
-                    format=self.action_schema,
-                    stream=False,
-                )
-                raw_response = ""
-                if isinstance(result_dict, dict):
-                    raw_response = result_dict.get("message", {}).get("content", "") or ""
-
-                if raw_response.startswith("*(API Error") or raw_response.startswith("*(System Note"):
-                    response_text = raw_response 
-                else:
-                    response_text = prefill_text + raw_response
-                
-                console.log_iteration(step_count + 1, response_text)
-                ledger_text += f"\n\n--- Iteration {step_count + 1} ---\n{response_text}\n"
-                
-                if ui_callback: ui_callback(ledger_text)
-
-                conversation_history.append({"role": "assistant", "content": response_text})
-
-                parsed_response = parse_agent_response(response_text)
-                parse_ok = bool(parsed_response) and isinstance(
-                    parsed_response.get("tools"), list
-                )
-
-                if not parse_ok:
-                    parse_failures += 1
-                    retry_msg = (
-                        "Tool Outputs:\n❌ OS PARSE ERROR: Your last response was not valid JSON "
-                        "with a 'tools' array. Output ONLY a single JSON object matching the schema."
-                    )
-                    conversation_history.append({"role": "user", "content": retry_msg})
-                    ledger_text += f"\n{retry_msg}\n"
-                    if ui_callback:
-                        ui_callback(ledger_text)
-                    if parse_failures >= 2:
-                        if current_idx == len(state["steps"]) - 1:
-                            conversation_history.append({
-                                "role": "user",
-                                "content": (
-                                    "Tool Outputs:\n⚠️ OS OVERRIDE: Parse failures exceeded. "
-                                    "Use finish_task immediately."
-                                ),
-                            })
-                        else:
-                            advance_json_state(
-                                task_file, "OS forced advance (parse failure limit)"
-                            )
-                            conversation_history = []
-                            parse_failures = 0
-                            recent_tool_signatures = []
-                    continue
-
-                parse_failures = 0
-
-                pending_final_report = parsed_response.get("final_report") or ""
-                if pending_final_report:
-                    save_task_deliverable(task_name, mode, pending_final_report)
-
-                tool_calls = parsed_response.get("tools", [])
-                if not isinstance(tool_calls, list):
-                    tool_calls = []
-
-                schema_ok, schema_err = validate_tool_calls(tool_calls)
-                if not schema_ok:
-                    parse_failures += 1
-                    retry_msg = (
-                        f"Tool Outputs:\n❌ OS SCHEMA VIOLATION: {schema_err} "
-                        "Constrained decoding requires each tool to use keys "
-                        "'name' and 'arguments' only."
-                    )
-                    conversation_history.append({"role": "user", "content": retry_msg})
-                    ledger_text += f"\n{retry_msg}\n"
-                    if ui_callback:
-                        ui_callback(ledger_text)
-                    if parse_failures >= 2:
-                        if current_idx == len(state["steps"]) - 1:
-                            conversation_history.append({
-                                "role": "user",
-                                "content": (
-                                    "Tool Outputs:\n⚠️ OS OVERRIDE: Schema violations exceeded. "
-                                    "Use finish_task immediately."
-                                ),
-                            })
-                        else:
-                            advance_json_state(
-                                task_file, "OS forced advance (schema violation limit)"
-                            )
-                            conversation_history = []
-                            parse_failures = 0
-                            recent_tool_signatures = []
-                    continue
-
-                if len(tool_calls) > MAX_TOOLS_PER_TURN:
-                    console.print(
-                        f"[yellow]⚠️ Truncated {len(tool_calls)} tools to {MAX_TOOLS_PER_TURN} per turn.[/yellow]"
-                    )
-                    tool_calls = tool_calls[:MAX_TOOLS_PER_TURN]
-
-                last_tool_output = ""
-                has_advance = False
-                has_finish = False
-                advance_summary = ""
-                finish_msg = ""
-                saved_deliverable = None
-
-                for tc in tool_calls:
-                    tool_name = tc.get("name", "")
-                    
-                    if tool_name == "mark_objective_complete":
-                        if current_idx == len(state['steps']) - 1:
-                            result = "❌ OS BLOCK: On final step. Use `finish_task`."
-                        else:
-                            has_advance = True
-                            advance_summary = tc.get("arguments", {}).get("summary_of_work", "Completed.")
-                            result = "✅ State marked complete."
-                    elif tool_name == "finish_task":
-                        has_finish = True
-                        args = tc.get("arguments", {})
-                        finish_msg = (
-                            args.get("message_to_user")
-                            or args.get("summary")
-                            or "Task completed."
-                        )
-                        report_in_args = args.get("final_report")
-                        if report_in_args:
-                            pending_final_report = report_in_args
-                        result = "✅ Finish task triggered."
-                    else:
-                        execution_results = self.executor.execute([tc])
-                        result = execution_results[0] if execution_results else "No output."
-
-                    last_tool_output += f"\nTool '{tool_name}' result:\n{result}\n"
-                    console.log_tool_execution(tool_name, tc.get("arguments", {}), result)
-                
-                if last_tool_output:
-                    conversation_history.append({"role": "user", "content": f"Tool Outputs:{last_tool_output}"})
-                    ledger_text += f"\n{last_tool_output}\n"
-                    if ui_callback: ui_callback(ledger_text)
-
-                if has_advance:
-                    advance_json_state(task_file, advance_summary)
-                    conversation_history = []
-                    recent_tool_signatures = []
-
-                if has_finish:
-                    saved_deliverable = save_task_deliverable(
-                        task_name, mode, pending_final_report
-                    )
-                    complete_ledger_state(task_file, finish_msg)
-                    aquila_memory.store_experience(task_name, finish_msg)
-                    if saved_deliverable:
-                        finish_msg += f"\n\n📄 Final report saved to: {saved_deliverable}"
-                    return finish_msg
-
-                if step_attempts >= max_step_iterations and not has_advance and not has_finish:
-                    if current_idx == len(state["steps"]) - 1:
-                        conversation_history.append({
-                            "role": "user",
-                            "content": (
-                                "Tool Outputs:\n⚠️ OS FORCED: Iteration limit reached on final step. "
-                                "You must use finish_task now."
-                            ),
-                        })
-                    else:
-                        advance_json_state(
-                            task_file, "OS forced advance (iteration limit)"
-                        )
-                        conversation_history = []
-                        recent_tool_signatures = []
-                    continue
-
-                for tc in tool_calls:
-                    if isinstance(tc, dict):
-                        sig = json.dumps(
-                            {"name": tc.get("name"), "arguments": tc.get("arguments")},
-                            sort_keys=True,
-                        )
-                        recent_tool_signatures.append(sig)
-                if len(recent_tool_signatures) >= 3:
-                    last_three = recent_tool_signatures[-3:]
-                    if last_three[0] == last_three[1] == last_three[2]:
-                        conversation_history.append({
-                            "role": "user",
-                            "content": (
-                                "Tool Outputs:\n⚠️ OS WARNING: You repeated the same tool call "
-                                "three times. Try a different approach or mark_objective_complete."
-                            ),
-                        })
-                        recent_tool_signatures = []
-
-                step_count += 1
-                
-            except Exception as e:
-                return f"OS Error: {str(e)}"
-                
-        return "⚠️ OS halted: Maximum iterations reached."
+        engine = LoopEngine(
+            client=self.client,
+            executor=self.executor,
+            console=console,
+            action_schema=self.action_schema,
+            system_prompt=system_prompt,
+            mode=mode,
+            mode_label=mode_label,
+            plan_dir=plan_dir,
+        )
+        return engine.run(
+            task_name=task_name,
+            user_request=user_request,
+            task_file=task_file,
+            ui_callback=ui_callback,
+            cancel_check=cancel_check,
+            text_chunks=text_chunks,
+            image_payloads=image_payloads,
+        )
 
 _agent_instance = None
 

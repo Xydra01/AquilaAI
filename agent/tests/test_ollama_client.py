@@ -58,3 +58,21 @@ def test_ollama_client_streaming(mock_post):
     # Pull from the generator and verify structure
     chunks = list(generator)
     assert chunks[0]["message"]["content"] == "Hello"
+
+
+@patch("main.requests.Session.get")
+@patch("main.requests.Session.post")
+def test_ollama_client_num_ctx_option(mock_post, mock_get):
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": [{"name": "aquila-tq-64k"}]})
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": "ok"}}],
+    }
+    mock_post.return_value = mock_response
+
+    with patch.dict(os.environ, {"OLLAMA_MODEL": "aquila-tq-64k", "OLLAMA_NUM_CTX": "65536"}, clear=False):
+        client = OllamaClient()
+        client.chat([{"role": "user", "content": "Hi"}], stream=False)
+
+    assert mock_post.call_args.kwargs["json"]["options"] == {"num_ctx": 65536}
+    assert mock_post.call_args.kwargs["json"]["model"] == "aquila-tq-64k"

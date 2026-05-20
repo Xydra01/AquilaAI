@@ -51,3 +51,17 @@ def test_read_webpage_html(mock_create_scraper):
     assert "Main Title" in result
     assert "Some content" in result
     assert "alert('bad')" not in result
+
+
+@patch('tool_library.web_tools.cloudscraper.create_scraper')
+def test_read_webpage_truncates_with_max_chars(mock_create_scraper):
+    mock_scraper = MagicMock()
+    mock_response = MagicMock()
+    mock_response.headers = {'Content-Type': 'text/html'}
+    mock_response.text = "<html><body><p>" + ("word " * 5000) + "</p></body></html>"
+    mock_scraper.get.return_value = mock_response
+    mock_create_scraper.return_value = mock_scraper
+
+    result = web_tools.read_webpage("https://example.com", max_chars=500)
+    assert "...[CONTENT TRUNCATED]" in result
+    assert len(result) < 800

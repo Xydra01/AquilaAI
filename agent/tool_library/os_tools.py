@@ -9,7 +9,7 @@ import psutil
 import inspect
 
 # Firewall Import
-from tools import is_safe_path, FORBIDDEN_DIRS
+from tools import is_safe_path, resolve_tool_path, should_skip_dir
 
 def search_in_file(file_path: str, keyword: str = None, **kwargs) -> str:
     """Searches for a keyword in a file."""
@@ -18,7 +18,7 @@ def search_in_file(file_path: str, keyword: str = None, **kwargs) -> str:
     if not actual_keyword:
         return "❌ Error: You must provide a 'keyword' to search for."
     try:
-        path_obj = Path(file_path).expanduser()
+        path_obj = resolve_tool_path(file_path)
         if not is_safe_path(path_obj):
             return f"SECURITY BLOCK: Access to '{path_obj.name}' is forbidden."
         if not path_obj.exists():
@@ -78,14 +78,13 @@ def manage_process(action: str, process_name: str) -> str:
 def search_files(pattern: str, path: str = ".") -> str:
     """Recursively searches for files matching a pattern, skipping forbidden directories."""
     try:
-        target = Path(path).expanduser().resolve()
+        target = resolve_tool_path(path or ".")
         if not target.exists():
             return f"❌ Error: Directory '{target}' does not exist."
 
         matches = []
         for root, dirs, files in os.walk(target):
-            # THE FIREWALL: Modify dirs in-place to skip black holes
-            dirs[:] = [d for d in dirs if d not in FORBIDDEN_DIRS]
+            dirs[:] = [d for d in dirs if not should_skip_dir(d)]
             
             for filename in fnmatch.filter(files, pattern):
                 matches.append(str(Path(root) / filename))
