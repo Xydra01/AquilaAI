@@ -35,9 +35,11 @@ def reset_dual_logger():
     import main as main_mod
 
     main_mod.console.log_filename = None
+    main_mod.console.jsonl_filename = None
     main_mod.console.current_task = None
     yield
     main_mod.console.log_filename = None
+    main_mod.console.jsonl_filename = None
     main_mod.console.current_task = None
 
 
@@ -55,6 +57,7 @@ def tmp_agent_dirs(tmp_path, monkeypatch):
     ):
         (tmp_path / name).mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
     return tmp_path
 
 

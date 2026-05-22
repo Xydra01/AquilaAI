@@ -3,36 +3,70 @@ import chromadb
 from pathlib import Path
 from datetime import datetime
 
+from workspace_paths import agent_data_path, get_vector_db_path
+
+
 class DualMemorySystem:
     """Manages both Semantic Facts (SQLite) and Episodic Experiences (ChromaDB)."""
     
-    def __init__(self, storage_dir: str = "Agent-Memory"):
-        self.storage_dir = Path(storage_dir)
-        self.storage_dir.mkdir(exist_ok=True)
+    def __init__(
+        self,
+        storage_dir: str | Path | None = None,
+        instance_id: str = "default",
+        *,
+        chroma_path: str | Path | None = None,
+    ):
+        self.instance_id = instance_id or "default"
+        self.storage_dir = (
+            Path(storage_dir) if storage_dir is not None else agent_data_path("Agent-Memory")
+        )
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
         
         self.db_path = self.storage_dir / "fact_graph.db"
         self._init_sqlite()
         
-        self.chroma_client = chromadb.PersistentClient(path=str(Path.cwd() / "agent" / "vector_db"))
+        chroma_dir = Path(chroma_path) if chroma_path is not None else get_vector_db_path()
+        chroma_dir.mkdir(parents=True, exist_ok=True)
+        self.chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
         self.collection = self.chroma_client.get_or_create_collection(name="episodic_experiences")
         self.tool_collection = self.chroma_client.get_or_create_collection(name="agent_tools")
+        self._tools_indexed = False
+
+    def _scratchpad_key(self, task_name: str) -> str:
+        return f"{self.instance_id}::{task_name}"
 
     # Tool Routing
     def index_tools(self, tools_dict: dict):
         """Embeds all available tools into the vector database on startup."""
-        if not tools_dict: return
-        
+        if not tools_dict:
+            return
+        if self._tools_indexed and self.tool_collection.count() >= len(tools_dict):
+            return
+
         ids = []
         documents = []
-        
+
+        try:
+            from tool_catalog import routing_document_for_tool
+        except ImportError:
+            try:
+                from recon_policy import routing_document_for_tool
+            except ImportError:
+                routing_document_for_tool = None
+
         for name, info in tools_dict.items():
             ids.append(name)
-            documents.append(f"Tool Name: {name}. Description: {info['description']}")
-            
+            desc = info.get("description", "")
+            if routing_document_for_tool:
+                documents.append(routing_document_for_tool(name, desc))
+            else:
+                documents.append(f"Tool Name: {name}. Description: {desc}")
+
         self.tool_collection.upsert(
             documents=documents,
             ids=ids
         )
+        self._tools_indexed = True
         print(f"🛠️ System indexed {len(ids)} tools into the semantic router.")
 
     def route_tools(self, objective: str, max_tools: int = 15) -> list[str]:
@@ -67,23 +101,43 @@ class DualMemorySystem:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS workspace_summaries (
+                    instance_id TEXT NOT NULL,
+                    task_name TEXT NOT NULL,
+                    summary_text TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (instance_id, task_name)
+                )
+            ''')
             conn.commit()
 
     # Scratchpad
-    def save_scratchpad_note(self, task_name: str, note: str) -> str:
+    def save_scratchpad_note(self, task_name: str, note: str, instance_id: str | None = None) -> str:
         """Saves a temporary research note tied to the current task."""
+        key = self._scratchpad_key(task_name) if instance_id is None else f"{instance_id}::{task_name}"
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO scratchpad (task_name, note) VALUES (?, ?)", (task_name, note))
+            cursor.execute("INSERT INTO scratchpad (task_name, note) VALUES (?, ?)", (key, note))
             conn.commit()
         return f"✅ Data securely saved to SQLite scratchpad for task: {task_name}"
 
-    def get_scratchpad_notes(self, task_name: str) -> str:
+    def get_scratchpad_notes(self, task_name: str, instance_id: str | None = None) -> str:
         """Retrieves all notes gathered for the current task."""
+        key = self._scratchpad_key(task_name) if instance_id is None else f"{instance_id}::{task_name}"
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT note FROM scratchpad WHERE task_name = ? ORDER BY timestamp ASC", (task_name,))
+            cursor.execute(
+                "SELECT note FROM scratchpad WHERE task_name = ? ORDER BY timestamp ASC",
+                (key,),
+            )
             rows = cursor.fetchall()
+            if not rows:
+                cursor.execute(
+                    "SELECT note FROM scratchpad WHERE task_name = ? ORDER BY timestamp ASC",
+                    (task_name,),
+                )
+                rows = cursor.fetchall()
             
         if not rows:
             return "No research notes found for this task."
@@ -92,6 +146,35 @@ class DualMemorySystem:
         for idx, row in enumerate(rows):
             compiled_notes += f"--- Note {idx + 1} ---\n{row[0]}\n\n"
         return compiled_notes
+
+    def save_workspace_summary_row(
+        self, task_name: str, summary_text: str, instance_id: str | None = None
+    ) -> None:
+        iid = instance_id or self.instance_id
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO workspace_summaries (instance_id, task_name, summary_text, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(instance_id, task_name) DO UPDATE SET
+                    summary_text=excluded.summary_text,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (iid, task_name, summary_text),
+            )
+            conn.commit()
+
+    def get_workspace_summary_row(self, task_name: str, instance_id: str | None = None) -> str:
+        iid = instance_id or self.instance_id
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT summary_text FROM workspace_summaries WHERE instance_id = ? AND task_name = ?",
+                (iid, task_name),
+            )
+            row = cursor.fetchone()
+        return row[0] if row else ""
 
     # Semantic Memory
     def store_fact(self, topic: str, fact: str) -> str:
@@ -118,26 +201,40 @@ class DualMemorySystem:
         return formatted_facts
 
     # Long Term Episodic Memory
-    def store_experience(self, task_name: str, summary: str):
+    def store_experience(self, task_name: str, summary: str, instance_id: str | None = None):
         """Embeds a completed task summary into the vector database."""
-        doc_id = f"{task_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        iid = instance_id or self.instance_id
+        doc_id = f"{iid}_{task_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         self.collection.add(
             documents=[summary],
-            metadatas=[{"task": task_name, "date": datetime.now().isoformat()}],
-            ids=[doc_id]
+            metadatas=[{
+                "task": task_name,
+                "instance_id": iid,
+                "date": datetime.now().isoformat(),
+            }],
+            ids=[doc_id],
         )
-        print(f"🧠 System encoded episodic memory for: {task_name}")
+        print(f"🧠 System encoded episodic memory for: {task_name} [{iid}]")
 
-    def recall_experiences(self, query: str, n_results: int = 3) -> str:
+    def recall_experiences(self, query: str, n_results: int = 3, instance_id: str | None = None) -> str:
         """Performs a semantic search to find similar past tasks."""
         if self.collection.count() == 0:
             return "No past experiences to draw from."
-            
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=min(n_results, self.collection.count())
-        )
+
+        iid = instance_id or self.instance_id
+        where_filter = {"instance_id": iid}
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=min(n_results, self.collection.count()),
+                where=where_filter,
+            )
+        except Exception:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=min(n_results, self.collection.count()),
+            )
         
         if not results['documents'] or not results['documents'][0]:
             return "No relevant past experiences found."

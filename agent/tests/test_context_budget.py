@@ -24,6 +24,7 @@ def test_model_name_infers_96k():
     assert profile.tier == "max"
     assert profile.auto_scrape_urls == 3
     assert profile.scrape_char_cap == 40_000
+    assert profile.max_scrape_chars_per_turn == 60_000
 
 
 def test_model_name_infers_64k():

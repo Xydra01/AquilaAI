@@ -71,7 +71,7 @@ def test_render_code_canvas_html():
 
 
 def test_resolve_ledger_path_code(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
     code_dir = tmp_path / "Agent-Code"
     code_dir.mkdir()
     buf = code_dir / "active_code_state.json"

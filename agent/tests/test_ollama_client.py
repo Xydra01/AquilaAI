@@ -7,8 +7,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from main import OllamaClient
 
+@patch('main.requests.Session.get')
 @patch('main.requests.Session.post')
-def test_ollama_client_non_streaming(mock_post):
+def test_ollama_client_non_streaming(mock_post, mock_get):
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": [{"name": "aquila"}]})
     """TDD Goal: Ensure non-streaming requests return a clean dictionary, not a generator."""
     mock_response = MagicMock()
     # Mock exactly what Ollama returns for stream=False
@@ -37,8 +39,10 @@ def test_ollama_client_non_streaming(mock_post):
     assert isinstance(result, dict)
     assert result["message"]["content"] == "I am fully operational."
 
+@patch('main.requests.Session.get')
 @patch('main.requests.Session.post')
-def test_ollama_client_streaming(mock_post):
+def test_ollama_client_streaming(mock_post, mock_get):
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": [{"name": "aquila"}]})
     """TDD Goal: Ensure streaming requests yield chunks for the UI to consume."""
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = [
@@ -76,3 +80,45 @@ def test_ollama_client_num_ctx_option(mock_post, mock_get):
 
     assert mock_post.call_args.kwargs["json"]["options"] == {"num_ctx": 65536}
     assert mock_post.call_args.kwargs["json"]["model"] == "aquila-tq-64k"
+
+
+@patch("main.requests.Session.get")
+@patch("main.requests.Session.post")
+def test_ollama_client_schema_fallback_chain(mock_post, mock_get):
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": []})
+    """Strict json_schema failure should retry json_object then plain."""
+    schema = {"type": "object", "properties": {"reasoning": {"type": "string"}}}
+    fail = MagicMock()
+    fail.raise_for_status.side_effect = __import__("requests").HTTPError("400")
+    fail.response = MagicMock(text='{"error":"bad schema"}')
+
+    ok = MagicMock()
+    ok.json.return_value = {"choices": [{"message": {"content": '{"reasoning":"hi"}'}}]}
+
+    mock_post.side_effect = [fail, ok]
+
+    client = OllamaClient()
+    result = client.chat([{"role": "user", "content": "Hi"}], format=schema, stream=False)
+
+    assert result["message"]["content"] == '{"reasoning":"hi"}'
+    assert mock_post.call_count == 2
+    first_fmt = mock_post.call_args_list[0].kwargs["json"].get("response_format", {})
+    second_fmt = mock_post.call_args_list[1].kwargs["json"].get("response_format", {})
+    assert first_fmt.get("type") == "json_schema"
+    assert second_fmt.get("type") == "json_object"
+
+
+@patch("main.requests.Session.get")
+@patch("main.requests.Session.post")
+def test_ollama_client_no_retry_on_connection_refused(mock_post, mock_get):
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": []})
+    mock_post.side_effect = __import__("requests").exceptions.ConnectionError(
+        "Connection refused"
+    )
+
+    client = OllamaClient()
+    schema = {"type": "object"}
+    result = client.chat([{"role": "user", "content": "Hi"}], format=schema, stream=False)
+
+    assert mock_post.call_count == 1
+    assert "not reachable" in result["message"]["content"]

@@ -30,45 +30,45 @@ DUMMY_TOOLS = {
 def executor():
     return ToolExecutor()
 
-@patch("main.SURVIVAL_TOOLS", DUMMY_TOOLS)
-@patch("main.ALL_TOOLS", {})
-def test_valid_tool_execution(executor):
+@patch("main.get_executable_tools")
+def test_valid_tool_execution(mock_tools, executor):
+    mock_tools.return_value = DUMMY_TOOLS
     tool_calls = [{"name": "say_hello", "arguments": {"name": "Aquila"}}]
     results = executor.execute(tool_calls)
     
     assert len(results) == 1
     assert "Hello, Aquila!" in results[0]
 
-@patch("main.SURVIVAL_TOOLS", DUMMY_TOOLS)
-@patch("main.ALL_TOOLS", {})
-def test_missing_tool(executor):
+@patch("main.get_executable_tools")
+def test_missing_tool(mock_tools, executor):
+    mock_tools.return_value = DUMMY_TOOLS
     tool_calls = [{"name": "hallucinated_tool", "arguments": {}}]
     results = executor.execute(tool_calls)
     
     assert len(results) == 1
     assert "Function does not exist" in results[0]
 
-@patch("main.SURVIVAL_TOOLS", DUMMY_TOOLS)
-@patch("main.ALL_TOOLS", {})
-def test_tool_exception_handling(executor):
+@patch("main.get_executable_tools")
+def test_tool_exception_handling(mock_tools, executor):
+    mock_tools.return_value = DUMMY_TOOLS
     tool_calls = [{"name": "broken_tool", "arguments": {}}]
     results = executor.execute(tool_calls)
     
     assert len(results) == 1
     assert "Error - Something went wrong inside the tool" in results[0]
 
-@patch("main.SURVIVAL_TOOLS", DUMMY_TOOLS)
-@patch("main.ALL_TOOLS", {})
-def test_hallucinated_arguments_filtered(executor):
+@patch("main.get_executable_tools")
+def test_hallucinated_arguments_filtered(mock_tools, executor):
+    mock_tools.return_value = DUMMY_TOOLS
     tool_calls = [{"name": "say_hello", "arguments": {"name": "Aquila", "fake_arg": "Ignore me"}}]
     results = executor.execute(tool_calls)
     
     assert len(results) == 1
     assert "Hello, Aquila!" in results[0] 
 
-@patch("main.SURVIVAL_TOOLS", DUMMY_TOOLS)
-@patch("main.ALL_TOOLS", {})
-def test_tool_returns_none(executor):
+@patch("main.get_executable_tools")
+def test_tool_returns_none(mock_tools, executor):
+    mock_tools.return_value = DUMMY_TOOLS
     tool_calls = [{"name": "no_return", "arguments": {}}]
     results = executor.execute(tool_calls)
     

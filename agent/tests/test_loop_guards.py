@@ -112,7 +112,9 @@ def test_save_research_note_truncates_large_payload(monkeypatch):
         saved["note"] = note
         return "ok"
 
-    monkeypatch.setattr(at.aquila_memory, "save_scratchpad_note", fake_save)
+    mock_mem = type("M", (), {})()
+    mock_mem.save_scratchpad_note = fake_save
+    monkeypatch.setattr(at, "get_active_memory", lambda: mock_mem)
     big = "x" * (MAX_SCRATCHPAD_NOTE_BYTES + 500)
     result = save_research_note("task1", big)
     assert "truncated" in result.lower()
@@ -126,15 +128,97 @@ def test_loop_engine_duplicate_warning_at_two():
     assert "twice" in msg
 
 
+def test_duplicate_tool_block_on_third_identical_call():
+    from url_visit_registry import UrlVisitRegistry
+
+    sig = json.dumps({"name": "web_search", "arguments": {"query": "nasa exoplanets"}}, sort_keys=True)
+    reg = UrlVisitRegistry()
+    assert reg.duplicate_tool_warning([sig, sig]) is not None
+    assert reg.duplicate_tool_block([sig, sig, sig]) is not None
+    assert "BLOCK" in reg.duplicate_tool_block([sig, sig, sig])
+
+
+def test_build_allowed_includes_tree_when_routed_empty_code_explore():
+    from tool_policy import build_allowed_tool_names
+
+    allowed = build_allowed_tool_names(
+        mode="code",
+        step_kind="explore",
+        routed=[],
+        all_tool_names={
+            "get_directory_tree",
+            "read_code_outline",
+            "mark_objective_complete",
+        },
+    )
+    assert "get_directory_tree" in allowed
+    assert "read_code_outline" in allowed
+
+
+def test_normalize_tool_calls_list_coerces_strings():
+    from main import normalize_tool_calls_list
+
+    out = normalize_tool_calls_list(["web_search", {"name": "read_webpage", "arguments": {"url": "http://x"}}])
+    assert out[0] == {"name": "web_search", "arguments": {}}
+    assert out[1]["name"] == "read_webpage"
+
+
 def test_tdd_red_gate_blocks_without_failure():
     msg = LoopEngine._tdd_advance_gate("tdd_red", [], "Tool 'run_pytest' result:\n✅ pytest: 1 passed")
     assert msg is not None
     assert "tdd_red" in msg
 
 
+def test_explore_gate_accepts_tools_succeeded_set():
+    history: list[dict] = []
+    assert (
+        LoopEngine._explore_advance_gate(
+            history,
+            "Tool 'write_project_markdown' result:\n✅ Wrote",
+            {"get_directory_tree", "read_code_outline", "write_project_markdown"},
+        )
+        is None
+    )
+
+
+def test_explore_gate_tree_plus_outline_plus_region_in_blob():
+    blob = (
+        "Tool 'get_directory_tree' result:\nDirectory Tree for: proj/\n"
+        "Tool 'read_code_outline' result:\nPROJECT: p\n"
+        "Tool 'read_file_region' result:\nlines 1-10"
+    )
+    assert LoopEngine._explore_advance_gate([], blob, set()) is None
+
+
 def test_tdd_red_gate_allows_failure():
     blob = "Tool 'run_pytest' result:\n❌ pytest: 0 passed, 1 failed"
     assert LoopEngine._tdd_advance_gate("tdd_red", [], blob) is None
+
+
+def test_explore_gate_accepts_tools_succeeded_set():
+    succeeded = {
+        "get_directory_tree",
+        "read_code_outline",
+        "read_file_region",
+        "write_project_markdown",
+    }
+    assert (
+        LoopEngine._explore_advance_gate([], "", succeeded) is None
+    )
+
+
+def test_explore_gate_tree_outline_and_doc_write_in_history():
+    hist = [
+        {
+            "role": "user",
+            "content": (
+                "Tool 'get_directory_tree' result:\nDirectory Tree for: proj/\n"
+                "Tool 'read_code_outline' result:\nPROJECT: proj\n"
+                "Tool 'write_project_markdown' result:\n✅ Wrote ARCHITECTURE.md"
+            ),
+        }
+    ]
+    assert LoopEngine._explore_advance_gate(hist, "", set()) is None
 
 
 def test_tdd_green_gate_requires_pass():

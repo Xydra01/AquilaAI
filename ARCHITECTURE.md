@@ -31,7 +31,9 @@ agent-projects/
 └── test_script.py            # Unrelated hello-world
 ```
 
-### Runtime directories (created at use, mostly gitignored)
+### Runtime directories (repo root only — not under `agent/`)
+
+All durable Aquila state lives at the **repository root** (`agent-projects/`), resolved by [`agent/workspace_paths.py`](agent/workspace_paths.py). Running the GUI or CLI from `agent/` still reads/writes repo-root folders (and `start.sh` `cd`s to the repo root first). Do not create `agent/Agent-*` or `agent/vector_db/` — legacy copies are migrated on startup.
 
 | Path | Role |
 |------|------|
@@ -40,9 +42,13 @@ agent-projects/
 | `Agent-Research/` | Research output `.md` from `final_report` |
 | `Agent-Creations/` | Task output `.md` from `final_report` |
 | `Agent-Drafts/` | Writing-mode draft state + compiled documents |
-| `Agent-Logs/` | Per-session execution logs (`DualLogger`) |
+| `Agent-Logs/` | Per-session execution logs (`RunLogger`) |
 | `Agent-Memory/` | SQLite `fact_graph.db` |
-| `agent/vector_db/` | ChromaDB persistence (episodic, tools, codebase) |
+| `Agent-Code/` | Code-mode buffer (`active_code_state.json`) + synced project trees |
+| `Agent-Instances/` | Per-instance profiles, workspace summaries, conversation archives |
+| `vector_db/` | ChromaDB (episodic memory, tool routing, codebase index) |
+
+Override root for tests: `AQUILA_DATA_ROOT=/tmp/...`. Skip one-time migration: `AQUILA_SKIP_MIGRATE=1`.
 
 `.gitignore` excludes `*.env`, `*.db`, `*.md`, `*.json`, `vector_db/`, and most agent output folders — so **on-disk artifacts are local-only**.
 
@@ -326,7 +332,7 @@ Central gate: `is_safe_path(path_obj)`
 | `facts` | Permanent user preferences / lore | `store_fact`, `get_all_facts` |
 | `scratchpad` | Per-task research notes | `save_scratchpad_note`, `get_scratchpad_notes` |
 
-### 7.2 ChromaDB (`agent/vector_db` under cwd)
+### 7.2 ChromaDB (`vector_db/` at repo root)
 
 | Collection | Purpose | API |
 |------------|---------|-----|
@@ -341,7 +347,7 @@ Separate Chroma collection `codebase` with **SentenceTransformer** `all-MiniLM-L
 - `replace_function` does indentation-based textual splice, then auto-runs `test_python_script`
 - `test_python_script` runs flake8 + executes script
 
-**Important:** `agent_tools.py` instantiates its **own** `DualMemorySystem()` — separate from `main.aquila_memory` for facts/scratchpad used by the agent singleton. Tool calls through `ToolExecutor` use functions that may hit different DB instances depending on import path; in practice both use the same paths if cwd is consistent.
+**Important:** `agent_tools.py` may instantiate its **own** `DualMemorySystem()` — separate from `main.aquila_memory` for facts/scratchpad. Both resolve storage via `workspace_paths` (`Agent-Memory/`, `vector_db/` at repo root), so cwd no longer affects which database files are opened.
 
 ---
 
@@ -588,6 +594,8 @@ SleepWorker → initiate_sleep_cycle
 
 - Each step includes `step_kind` (`search`, `read`, `code`, `verify`, `synthesize`, `write`, `finalize`) and `max_iterations` tuned via **BUDGET_RUBRIC** (min/default/max per kind).
 - `validate_and_tune_plan()` runs after `generate_plan()`; caps at 8 steps and total budget 60.
+- Research plans with fewer than 4 steps are auto-expanded via `expand_research_plan()` (search → read → synthesize → finalize). When an explore brief already ran, the template starts at search.
+- Open-ended catalog requests should scope to a representative sample + data-source table, not exhaustive row-by-row coverage.
 
 ### Execution loop (`loop_engine.py`)
 
@@ -603,10 +611,14 @@ flowchart TD
     reflectTurn --> actTurn
 ```
 
-- **Reflect/act:** After non-meta tools run, next turn is reflect-only (`REFLECT_SCHEMA`); then act again.
+- **Continuous loop (3.4):** After tool results, the agent continues on the same act schema (reasoning + tools). Episode budget counts toolful turns per plan step. Legacy act/reflect: `AQUILA_LEGACY_ACT_REFLECT=1`.
 - **Budget:** Parse/schema failures pop the assistant message (do not burn `step_attempts`). Grace +2 iterations once per step if tools succeeded.
 - **Step entry:** Scratchpad notes, `WORKSPACE_ROOT`, and `step_kind` hints injected without an LLM call.
 - **Hardening:** `validate_tool_arguments()`, `save_research_note` 8KB cap, `normalize_workspace_path()` for doubled `agent/agent` paths.
+- **Code recon (3.4):** [`recon_policy.py`](f:/Users/myfri/agent-projects/agent/recon_policy.py) pins `get_directory_tree` / `read_code_outline` on code explore/read; [`path_visit_registry.py`](f:/Users/myfri/agent-projects/agent/path_visit_registry.py) blocks excessive `list_directory`; explore advance gate accepts tree+read; Chroma routing uses USE WHEN blurbs.
+- **Final-step stall:** `AQUILA_FINAL_STEP_STALL_LIMIT` (default 8) counts only act turns with tools on the last step. Stall 6 nudges `finish_task`; stall limit saves a partial report via `save_task_deliverable`.
+- **Duplicate tools:** Identical tool signatures warn twice, then hard-block on the third call (signatures are not cleared after a warning).
+- **Context (max tier):** Proactive in-step compression at 70% of `in_step_token_cap` before each LLM call.
 
 `Agent.run_unified_task` delegates to `LoopEngine.run()`.
 
@@ -670,21 +682,52 @@ flowchart TB
 
 **Context policy for large repos:** buffer stores paths + metadata (`indexed_only`); content loaded on demand. Agent prompt forbids deep `get_directory_tree` on repo root.
 
-**Future:** Writing (doc editor), Learn (LMS-style) — stubs only in 3.4.
+**Future:** Writing (doc editor), Learn (LMS-style) — stubs only in 4.0.
+
+---
+
+## 18b. Aquila OS 3.4 — Instances and context policy
+
+| Component | Role |
+|-----------|------|
+| [`instance_registry.py`](agent/instance_registry.py) | `AquilaInstance` profiles under `Agent-Instances/{id}/`; `active.json` tracks selection |
+| [`memory_singleton.py`](agent/memory_singleton.py) | `get_memory(instance_id)` — scratchpad keys `{instance_id}::{task}`, episodic metadata filter |
+| [`context_manager.py`](agent/context_manager.py) | Tiered step advance: summarize → workspace summary; retain N tool turns at `standard`+ |
+| [`context_budget.py`](agent/context_budget.py) | `ContextProfile` adds `keep_turns_on_advance`, `routed_tool_cap`, `workspace_summary_max_chars` |
+| [`tool_policy.py`](agent/tool_policy.py) | `explore` read-only allowlist; per-`step_kind` filters |
+| [`explore_agent.py`](agent/explore_agent.py) | Optional pre-plan brief (`extended`/`max` tier) for code/research |
+| [`gui_pages/home_page.py`](agent/gui_pages/home_page.py) | Instance picker before workspaces |
+| Code diff review | `pending_patches` in `active_code_state.json`; Code IDE Accept/Reject (`AQUILA_DIFF_REVIEW`) |
+| Terminal | [`shell_tools.py`](agent/tool_library/shell_tools.py) — `run_terminal_command` when `AQUILA_TERMINAL=1` |
+| MCP | [`mcp_bridge.py`](agent/mcp_bridge.py) — stub for 4.0 |
+
+**Loop changes:** `LoopEngine` uses `generation_start` for stream kill switch, `build_loop_messages()`, routed schema via `route_tools`, `explore` advance gate.
+
+### Research reliability (96k / long runs)
+
+| Component | Role |
+|-----------|------|
+| [`url_visit_registry.py`](agent/url_visit_registry.py) | Per-run URL tracking; hard-blocks repeat `read_webpage` and paywall revisits |
+| [`web_content_quality.py`](agent/web_content_quality.py) | Paywall/thin-page heuristics before content enters context |
+| [`timeout_policy.py`](agent/timeout_policy.py) | `compute_read_timeout()` scales with estimated prompt tokens + tier (`AQUILA_READ_TIMEOUT_MAX`) |
+| [`run_logger.py`](agent/run_logger.py) | Truncated `Agent-Logs/*.log` + optional `*.jsonl` (`AQUILA_LOG_JSON`) |
+| `ContextProfile.max_scrape_chars_per_turn` | Max tier: 60k chars total auto-scrape per act turn |
+
+On VRAM/read timeout at high context, the loop may run one in-step compress + retry (`AQUILA_TIMEOUT_COMPRESS_RETRY`) instead of schema-retry storms.
 
 ---
 
 ## 19. Extension points and rough edges
 
-| Item | Status (3.3) |
+| Item | Status (3.4) |
 |------|----------------|
-| `route_tools(objective)` | Implemented, not used in `run_unified_task` (full schema + server guards instead) |
+| `route_tools(objective)` | Wired per-step in `LoopEngine._schema_for_step` with required-tool union |
 | Inter-modal automation | Prompt says “in development” |
 | Streamlit (`app.py`) | Legacy 3.1 artifact; not maintained for 3.2 |
 | Task State Tracker | `gui_state`: autonomous, research, writing, **code** (`render_code_canvas_html`) |
 | Code Mode | `code_canvas_tools.py`, `language_registry.py`, `gui_pages/code_ide_page.py` |
 | Mode workspaces | `gui_pages/` + `QStackedWidget` in `gui.py` (3.4) |
-| Memory singleton | Fixed: `memory_singleton.aquila_memory` shared by `main` and `agent_tools` |
+| Memory | `get_memory(instance_id)` per instance; `aquila_memory` alias for `default` |
 | `_index_codebase` | Excluded from strict schema / executable tools |
 | Dependencies | `requirements.txt` at repo root |
 | Chat double-bubble | Fixed: `chat_finished` vs `task_finished` in `gui.py` |

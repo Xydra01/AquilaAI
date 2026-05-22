@@ -105,6 +105,22 @@ class CodeIdePage(BaseModePage):
         main_split.addWidget(right)
         main_split.setSizes([200, 550, 350])
 
+        pending_row = QHBoxLayout()
+        self.pending_view = QPlainTextEdit()
+        self.pending_view.setReadOnly(True)
+        self.pending_view.setMaximumHeight(100)
+        self.pending_view.setPlaceholderText("Pending diffs (review queue)")
+        pending_row.addWidget(self.pending_view, stretch=1)
+        self.accept_patch_btn = QPushButton("Accept")
+        self.accept_patch_btn.clicked.connect(self._accept_patch)
+        self.accept_all_btn = QPushButton("Accept all")
+        self.accept_all_btn.clicked.connect(self._accept_all_patches)
+        self.reject_patch_btn = QPushButton("Reject")
+        self.reject_patch_btn.clicked.connect(self._reject_patch)
+        for w in (self.accept_patch_btn, self.accept_all_btn, self.reject_patch_btn):
+            pending_row.addWidget(w)
+        root_layout.addLayout(pending_row)
+
         bottom_split = QSplitter(Qt.Horizontal)
         self.problems_view = QTextEdit()
         self.problems_view.setReadOnly(True)
@@ -160,6 +176,24 @@ class CodeIdePage(BaseModePage):
         QMessageBox.information(self, "Sync", result[:2000])
         self.refresh_state()
 
+    def _accept_patch(self) -> None:
+        from tool_library import code_canvas_tools
+
+        QMessageBox.information(self, "Pending patch", code_canvas_tools.accept_pending_patch(0))
+        self.refresh_state()
+
+    def _reject_patch(self) -> None:
+        from tool_library import code_canvas_tools
+
+        QMessageBox.information(self, "Pending patch", code_canvas_tools.reject_pending_patch(0))
+        self.refresh_state()
+
+    def _accept_all_patches(self) -> None:
+        from tool_library import code_canvas_tools
+
+        QMessageBox.information(self, "Pending patches", code_canvas_tools.accept_all_pending_patches())
+        self.refresh_state()
+
     def append_chat_html(self, html: str) -> None:
         self.chat_history.append(html)
 
@@ -185,7 +219,9 @@ class CodeIdePage(BaseModePage):
             self._last_pytest_summary = text[-800:]
 
     def refresh_state(self) -> None:
-        buf_path = Path("Agent-Code/active_code_state.json")
+        from workspace_paths import agent_data_path
+
+        buf_path = agent_data_path("Agent-Code", "active_code_state.json")
         if not buf_path.exists():
             self.status_label.setText("No project open")
             return
@@ -211,7 +247,7 @@ class CodeIdePage(BaseModePage):
 
         task_ledger = None
         if self._worker:
-            task_path = Path(f"Agent-Tasks/{self._worker.task_name}.json")
+            task_path = agent_data_path("Agent-Tasks", f"{self._worker.task_name}.json")
             if task_path.exists():
                 try:
                     raw = task_path.read_text(encoding="utf-8").strip()
@@ -229,6 +265,17 @@ class CodeIdePage(BaseModePage):
                     }
 
         self.state_view.setHtml(render_code_canvas_html(state_data, task_ledger))
+        patches = code_canvas_tools.list_pending_patches()
+        if patches:
+            lines = []
+            for i, patch in enumerate(patches):
+                lines.append(f"[{i}] {patch.get('path', '?')}")
+                diff = patch.get("unified_diff", "")
+                if diff:
+                    lines.append(diff[:600])
+            self.pending_view.setPlainText("\n\n".join(lines))
+        else:
+            self.pending_view.clear()
         self._populate_file_tree(state_data)
         self._populate_editors(state_data)
         self._populate_problems(state_data)

@@ -14,9 +14,26 @@ from pathlib import Path
 from language_registry import get_language, index_extensions, run_linter
 from tools import is_ignored_code_path, normalize_workspace_path, read_file_lines, should_skip_dir
 
-CODE_DIR = Path("Agent-Code")
-CODE_DIR.mkdir(exist_ok=True)
-ACTIVE_CODE_FILE = CODE_DIR / "active_code_state.json"
+from workspace_paths import agent_data_path, resolve_under_data_root
+
+
+def code_dir() -> Path:
+    d = agent_data_path("Agent-Code")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def active_code_file() -> Path:
+    return code_dir() / "active_code_state.json"
+
+
+def __getattr__(name: str):
+    """Backward-compatible names for tests and older imports."""
+    if name == "CODE_DIR":
+        return code_dir()
+    if name == "ACTIVE_CODE_FILE":
+        return active_code_file()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 MAX_REGION_LINES = 150
 MAX_NEW_FILE_LINES = 80
 MAX_OUTLINE_FILES = 200
@@ -28,14 +45,18 @@ def _slugify(name: str) -> str:
     return slug[:64] or "project"
 
 
-def _project_root(state: dict) -> str:
-    return normalize_workspace_path(state.get("root") or "Agent-Code")
+def _project_root(state: dict) -> Path:
+    rel = normalize_workspace_path(state.get("root") or "Agent-Code")
+    p = Path(rel)
+    if p.is_absolute():
+        return p.resolve()
+    return resolve_under_data_root(rel)
 
 
 def _relative_to_root(state: dict, path: str) -> str:
     """Store paths relative to project root (not workspace absolutes)."""
     p = normalize_workspace_path(path)
-    root = _project_root(state)
+    root = _project_root(state).as_posix()
     if p == root:
         return p
     prefix = root.rstrip("/") + "/"
@@ -50,9 +71,10 @@ def _disk_path(state: dict, path: str) -> Path:
 
 
 def _load_state() -> dict:
-    if not ACTIVE_CODE_FILE.exists():
+    buf = active_code_file()
+    if not buf.exists():
         return {}
-    with open(ACTIVE_CODE_FILE, "r", encoding="utf-8") as f:
+    with open(buf, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -63,14 +85,102 @@ def get_active_project_scope() -> dict | None:
         return None
     return {
         "project_name": state.get("project_name", "project"),
-        "root": _project_root(state),
+        "root": normalize_workspace_path(state.get("root") or "Agent-Code"),
         "workspace_mode": state.get("workspace_mode", "sandbox"),
     }
 
 
 def _save_state(state: dict) -> None:
-    with open(ACTIVE_CODE_FILE, "w", encoding="utf-8") as f:
+    with open(active_code_file(), "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
+
+
+def _should_queue_patch() -> bool:
+    if os.getenv("AQUILA_DIFF_REVIEW", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    try:
+        from context_budget import get_context_profile
+        from instance_registry import get_active_instance_id, get_instance
+
+        inst = get_instance(get_active_instance_id())
+        if inst is not None and inst.auto_apply_patches is not None:
+            return not inst.auto_apply_patches
+        if get_context_profile().tier == "max":
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _make_unified_diff(path: str, old: str, new: str) -> str:
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    return "".join(
+        difflib.unified_diff(
+            old_lines, new_lines, fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""
+        )
+    )
+
+
+def _queue_pending_patch(state: dict, path: str, old_content: str, new_content: str) -> str:
+    patches = state.setdefault("pending_patches", [])
+    diff = _make_unified_diff(path, old_content, new_content)
+    patches.append(
+        {
+            "path": path,
+            "unified_diff": diff,
+            "old_hash": str(hash(old_content)),
+            "new_content": new_content,
+            "new_content_preview": new_content[:500],
+        }
+    )
+    _save_state(state)
+    return (
+        f"⏳ Patch queued for review on '{path}' ({len(diff)} diff chars). "
+        "Use Code IDE Accept/Reject or sync after approval."
+    )
+
+
+def list_pending_patches() -> list[dict]:
+    state = _load_state()
+    return list(state.get("pending_patches") or [])
+
+
+def accept_pending_patch(index: int = 0) -> str:
+    state = _load_state()
+    patches = state.get("pending_patches") or []
+    if not patches or index < 0 or index >= len(patches):
+        return "❌ No pending patch at that index."
+    entry = patches.pop(index)
+    path = entry["path"]
+    new_content = entry.get("new_content") or entry.get("new_content_preview", "")
+    if new_content:
+        _upsert_file(state, path, new_content)
+    state["pending_patches"] = patches
+    _save_state(state)
+    return f"✅ Accepted patch for '{path}'. Call sync_project_to_disk to flush."
+
+
+def reject_pending_patch(index: int = 0) -> str:
+    state = _load_state()
+    patches = state.get("pending_patches") or []
+    if not patches or index < 0 or index >= len(patches):
+        return "❌ No pending patch at that index."
+    removed = patches.pop(index)
+    state["pending_patches"] = patches
+    _save_state(state)
+    return f"✅ Rejected patch for '{removed.get('path', '?')}'."
+
+
+def accept_all_pending_patches() -> str:
+    state = _load_state()
+    patches = state.get("pending_patches") or []
+    if not patches:
+        return "No pending patches."
+    count = len(patches)
+    for i in range(count):
+        accept_pending_patch(0)
+    return f"✅ Accepted {count} pending patch(es)."
 
 
 def _find_file(state: dict, path: str) -> dict | None:
@@ -230,7 +340,7 @@ def import_codebase(
     load_content: str = "false",
 ) -> str:
     """Import a directory manifest into the code buffer (sandbox copy or in-place)."""
-    src = Path(normalize_workspace_path(source_path))
+    src = resolve_under_data_root(normalize_workspace_path(source_path))
     if not src.is_dir():
         return f"❌ Error: '{source_path}' is not a directory."
     slug = _slugify(project_name or src.name)
@@ -241,7 +351,7 @@ def import_codebase(
         norm_root = normalize_workspace_path(str(src))
     else:
         norm_root = f"Agent-Code/{slug}"
-        dest = Path(norm_root)
+        dest = resolve_under_data_root(norm_root)
         if dest.exists():
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
@@ -264,7 +374,7 @@ def import_codebase(
     for fp in files:
         if mode == "sandbox":
             rel = fp.relative_to(src)
-            target = Path(norm_root) / rel
+            target = resolve_under_data_root(norm_root) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(fp, target)
             buf_path = str(rel.as_posix())
@@ -328,12 +438,14 @@ def index_codebase_for_search(query: str, directory: str = "") -> str:
     from tool_library.coding_tools import semantic_code_search
 
     state = _load_state()
-    root = directory.strip() or (_project_root(state) if state else ".")
+    root = directory.strip() or (
+        _project_root(state).as_posix() if state else "."
+    )
     return semantic_code_search(query, root)
 
 
 def read_code_outline() -> str:
-    """List files in the buffer with line counts (low context cost)."""
+    """List files in the buffer with line counts (low context cost). Call once per project before deep file reads."""
     state = _load_state()
     if not state:
         return "❌ Error: No active code project. Use init_code_project first."
@@ -436,6 +548,8 @@ def replace_lines(file_path: str, start_line: int, end_line: int, new_content: s
         new_lines[-1] = new_lines[-1].rstrip("\n") + "\n"
     merged = lines[:start] + new_lines + lines[end:]
     new_text = "".join(merged)
+    if _should_queue_patch():
+        return _queue_pending_patch(state, norm, entry["content"], new_text)
     _upsert_file(state, norm, new_text)
     _save_state(state)
     return (
@@ -461,6 +575,8 @@ def apply_unified_patch(file_path: str, patch_text: str) -> str:
     except Exception as e:
         return f"❌ Patch failed: {e}"
 
+    if _should_queue_patch():
+        return _queue_pending_patch(state, norm, entry["content"], new_text)
     _upsert_file(state, norm, new_text)
     _save_state(state)
     delta = len(new_text.splitlines()) - len(entry["content"].splitlines())
@@ -594,8 +710,8 @@ def set_test_targets(targets: str) -> str:
 
 def write_project_markdown(file_path: str, content: str) -> str:
     """
-    Write a documentation file (ARCHITECTURE.md, README.md, etc.) directly under the
-    open project root. Use this in Code Mode instead of write_file for repo docs.
+    USE WHEN: ARCHITECTURE.md, README.md, or other repo documentation deliverable in Code Mode.
+    Writes directly under the open project root. Not write_file.
     """
     state = _load_state()
     if not state:
@@ -615,11 +731,79 @@ def write_project_markdown(file_path: str, content: str) -> str:
         text = re.sub(r"^```[a-zA-Z]*\n", "", text)
         if text.endswith("```"):
             text = text[:-3].strip()
+    try:
+        from doc_write_policy import truncate_write_content
+
+        text, trunc_note = truncate_write_content(text)
+    except ImportError:
+        trunc_note = None
+    try:
+        from doc_write_policy import looks_incomplete_markdown
+
+        incomplete = looks_incomplete_markdown(text, file_path=norm)
+        if incomplete:
+            return f"❌ Rejected write to {norm}: {incomplete}"
+    except ImportError:
+        incomplete = None
+
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text + "\n", encoding="utf-8")
     _upsert_file(state, norm, text, dirty=False)
     _save_state(state)
-    return f"✅ Wrote documentation to {target.as_posix()}"
+    n = len(text)
+    msg = f"✅ Wrote {n} characters to {target.as_posix()}"
+    if trunc_note:
+        msg += f"\n⚠️ {trunc_note}"
+    if n > 4000:
+        msg += (
+            "\n⚠️ Large single-call write; if sections are missing, use "
+            "append_project_markdown on the next turn."
+        )
+    return msg
+
+
+def append_project_markdown(file_path: str, content: str) -> str:
+    """
+    USE WHEN: ARCHITECTURE.md or README.md needs more sections after write_project_markdown.
+    Appends to an existing doc under the project root (max ~4000 chars per call).
+    """
+    state = _load_state()
+    if not state:
+        return "❌ Error: No active code project."
+    norm = _relative_to_root(state, file_path)
+    lower = norm.lower()
+    if not lower.endswith((".md", ".markdown", ".txt", ".rst")):
+        return "❌ Only documentation paths allowed."
+    root = Path(_project_root(state)).resolve()
+    target = (root / norm).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return f"❌ Path escapes project root: {norm}"
+    chunk = (content or "").strip()
+    if not chunk:
+        return "❌ append content is empty."
+    try:
+        from doc_write_policy import APPEND_PROJECT_MARKDOWN_MAX_CHARS
+
+        if len(chunk) > APPEND_PROJECT_MARKDOWN_MAX_CHARS:
+            return (
+                f"❌ append exceeds {APPEND_PROJECT_MARKDOWN_MAX_CHARS} characters. "
+                "Split into multiple append calls."
+            )
+    except ImportError:
+        pass
+    existing = target.read_text(encoding="utf-8") if target.is_file() else ""
+    if not existing.strip():
+        return (
+            f"❌ {norm} does not exist or is empty. "
+            "Call write_project_markdown first, then append sections."
+        )
+    combined = existing.rstrip() + "\n\n" + chunk + "\n"
+    target.write_text(combined, encoding="utf-8")
+    _upsert_file(state, norm, combined, dirty=False)
+    _save_state(state)
+    return f"✅ Appended {len(chunk)} characters to {target.as_posix()} (total {len(combined)})."
 
 
 def sync_project_to_disk() -> str:
@@ -629,7 +813,7 @@ def sync_project_to_disk() -> str:
         return "❌ Error: No active code project."
     written = []
     root = _project_root(state)
-    Path(root).mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     for entry in state.get("files", []):
         if entry.get("indexed_only") and not entry.get("dirty") and not entry.get("content"):
             continue
@@ -653,8 +837,8 @@ def _pytest_path_args(state: dict, target: str) -> str:
     else:
         rels = state.get("test_targets", []) if state else []
     if not rels:
-        root = _project_root(state) if state else "."
-        return root
+        root = _project_root(state) if state else Path(".")
+        return root.as_posix()
     disks = [_disk_path(state, r) for r in rels]
     return " ".join(d.as_posix() for d in disks)
 
@@ -719,6 +903,10 @@ CODE_CANVAS_TOOLS = {
     "replace_symbol": {"func": replace_symbol, "description": inspect.getdoc(replace_symbol)},
     "delete_buffer_file": {"func": delete_buffer_file, "description": inspect.getdoc(delete_buffer_file)},
     "set_test_targets": {"func": set_test_targets, "description": inspect.getdoc(set_test_targets)},
+    "append_project_markdown": {
+        "func": append_project_markdown,
+        "description": inspect.getdoc(append_project_markdown),
+    },
     "write_project_markdown": {
         "func": write_project_markdown,
         "description": inspect.getdoc(write_project_markdown),

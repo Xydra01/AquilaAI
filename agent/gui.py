@@ -26,10 +26,12 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
 
 from file_parser import process_local_attachments
-from gui_pages import AutonomousPage, ChatPage, CodeIdePage, StubModePage, BaseModePage
+from gui_pages import AutonomousPage, ChatPage, CodeIdePage, StubModePage, BaseModePage, HomePage
 
 # Import Aquila's Brain and Tools
-from main import global_agent, initiate_sleep_cycle
+from main import get_agent, get_active_instance_id, initiate_sleep_cycle
+from workspace_paths import agent_data_path, ensure_repo_cwd
+from instance_registry import get_instance
 from tool_library import agent_tools
 
 MODE_FLAGS = {
@@ -55,6 +57,7 @@ class AgentWorker(QThread):
         attached_chunks=None,
         attached_images=None,
         chat_history=None,
+        instance_id=None,
     ):
         super().__init__()
         self.task_name = task_name
@@ -63,6 +66,7 @@ class AgentWorker(QThread):
         self.attached_chunks = attached_chunks or []
         self.attached_images = attached_images or []
         self.chat_history = chat_history or []
+        self.instance_id = instance_id or get_active_instance_id()
         self.cancel_flag = False
         self.user_reply = ""
         self.reply_event = threading.Event()
@@ -75,9 +79,10 @@ class AgentWorker(QThread):
 
     def run(self):
         agent_tools.USER_INPUT_CALLBACK = self._ask_user_bridge
+        agent = get_agent(self.instance_id)
         try:
             if self.mode.lower() == "chat":
-                generator = global_agent.run_chat(
+                generator = agent.run_chat(
                     user_input=self.prompt,
                     chat_history=self.chat_history,
                     image_payloads=self.attached_images,
@@ -92,7 +97,7 @@ class AgentWorker(QThread):
                     self.ledger_signal.emit(token)
                 self.finished_signal.emit(full_text)
             else:
-                res = global_agent.run_unified_task(
+                res = agent.run_unified_task(
                     self.task_name,
                     self.prompt,
                     self.mode,
@@ -120,7 +125,7 @@ class SleepWorker(QThread):
 class AquilaOS(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🦅 Aquila OS 3.3 - Mode Workspaces")
+        self.setWindowTitle("🦅 Aquila OS 3.4 - Instances & Workspaces")
         self.resize(1400, 800)
         self.dark_mode = False
         self._chat_streaming = False
@@ -128,6 +133,7 @@ class AquilaOS(QMainWindow):
         self.attached_images = []
         self._chat_history_messages = []
         self.worker = None
+        self.active_instance_id = get_active_instance_id()
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -137,22 +143,36 @@ class AquilaOS(QMainWindow):
         self.theme_btn = QPushButton("🌙 Toggle Dark Mode")
         self.theme_btn.clicked.connect(self.toggle_theme)
         top_bar.addWidget(self.theme_btn)
+        self.home_btn = QPushButton("🏠 Home")
+        self.home_btn.clicked.connect(self.show_home)
+        top_bar.addWidget(self.home_btn)
         top_bar.addStretch()
+        self.instance_label = QLabel()
+        top_bar.addWidget(self.instance_label)
         self.sleep_btn = QPushButton("🧠 Initiate Sleep Cycle")
         self.sleep_btn.clicked.connect(self.trigger_sleep_cycle)
         top_bar.addWidget(self.sleep_btn)
         main_layout.addLayout(top_bar)
 
+        self.main_stack = QStackedWidget()
+        main_layout.addWidget(self.main_stack, stretch=1)
+
+        self.home_page = HomePage(self)
+        self.main_stack.addWidget(self.home_page)
+
+        self.workspace_widget = QWidget()
+        workspace_layout = QVBoxLayout(self.workspace_widget)
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Workspace:"))
         self.mode_selector = QComboBox()
         self.mode_selector.addItems(list(MODE_FLAGS.keys()))
         self.mode_selector.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self.mode_selector, stretch=1)
-        main_layout.addLayout(mode_row)
+        workspace_layout.addLayout(mode_row)
 
         self.page_stack = QStackedWidget()
-        main_layout.addWidget(self.page_stack, stretch=1)
+        workspace_layout.addWidget(self.page_stack, stretch=1)
+        self.main_stack.addWidget(self.workspace_widget)
 
         self.autonomous_page = AutonomousPage(self)
         self.chat_page = ChatPage(self)
@@ -176,14 +196,40 @@ class AquilaOS(QMainWindow):
         for page in {self.chat_page, self.autonomous_page, self.code_page, self.learn_stub}:
             self.page_stack.addWidget(page)
 
-        self._on_mode_changed(0)
-        self.chat_page.chat_history.append(
-            "<b>System:</b> Aquila OS 3.3 Online. Select a workspace above."
-        )
-        self.autonomous_page.chat_history.append(
-            "<b>System:</b> Autonomous Task — all-in-one canvas."
-        )
+        self._update_instance_label()
+        self.main_stack.setCurrentIndex(0)
         self.toggle_theme()
+
+    def show_home(self) -> None:
+        self.main_stack.setCurrentIndex(0)
+        self.home_page.refresh_list()
+
+    def enter_workspace(self, instance_id: str) -> None:
+        self.active_instance_id = instance_id
+        self._update_instance_label()
+        inst = get_instance(instance_id)
+        if inst:
+            mode_map = {
+                "chat": "Chat Mode",
+                "autonomous": "Autonomous Task",
+                "code": "Code Mode",
+                "writing": "Writing Mode",
+                "research": "Research Mode",
+                "learn": "Learn Mode",
+            }
+            label = mode_map.get(inst.default_mode, "Chat Mode")
+            idx = self.mode_selector.findText(label)
+            if idx >= 0:
+                self.mode_selector.setCurrentIndex(idx)
+        self.main_stack.setCurrentIndex(1)
+        self.chat_page.chat_history.append(
+            f"<b>System:</b> Instance '{instance_id}' active. Select a workspace above."
+        )
+
+    def _update_instance_label(self) -> None:
+        inst = get_instance(self.active_instance_id)
+        name = inst.display_name if inst else self.active_instance_id
+        self.instance_label.setText(f"Instance: {name}")
 
     def _on_mode_changed(self, _index: int) -> None:
         label = self.mode_selector.currentText()
@@ -261,11 +307,11 @@ class AquilaOS(QMainWindow):
         self.sleep_btn.setDisabled(False)
 
     def _infer_resume_mode(self, task_name: str) -> str:
-        if os.path.exists(f"Agent-Plans/{task_name}.json"):
+        if agent_data_path("Agent-Plans", f"{task_name}.json").exists():
             return "research"
-        if Path("Agent-Drafts/active_draft_state.json").exists():
+        if agent_data_path("Agent-Drafts", "active_draft_state.json").exists():
             return "writing"
-        if Path("Agent-Code/active_code_state.json").exists():
+        if agent_data_path("Agent-Code", "active_code_state.json").exists():
             return "code"
         return "autonomous"
 
@@ -278,7 +324,10 @@ class AquilaOS(QMainWindow):
                 return
 
     def resume_task_dialog(self):
-        task_files = glob.glob("Agent-Tasks/*.json") + glob.glob("Agent-Plans/*.json")
+        task_files = (
+            glob.glob(str(agent_data_path("Agent-Tasks", "*.json")))
+            + glob.glob(str(agent_data_path("Agent-Plans", "*.json")))
+        )
         active_tasks = []
         for f in task_files:
             try:
@@ -288,7 +337,7 @@ class AquilaOS(QMainWindow):
                         active_tasks.append(os.path.basename(f).replace(".json", ""))
             except Exception:
                 pass
-        code_buf = Path("Agent-Code/active_code_state.json")
+        code_buf = agent_data_path("Agent-Code", "active_code_state.json")
         if code_buf.exists():
             try:
                 with open(code_buf, "r", encoding="utf-8") as cf:
@@ -321,7 +370,12 @@ class AquilaOS(QMainWindow):
         page.set_run_buttons_running(True)
         page.update_ledger("", clear=True)
         self._chat_streaming = False
-        self.worker = AgentWorker(task_name, "Resume from current objective.", mode_flag)
+        self.worker = AgentWorker(
+            task_name,
+            "Resume from current objective.",
+            mode_flag,
+            instance_id=self.active_instance_id,
+        )
         self._wire_worker(self.worker, page)
 
     def stop_task(self):
@@ -365,6 +419,7 @@ class AquilaOS(QMainWindow):
             self.attached_chunks,
             self.attached_images,
             chat_history=self._chat_history_messages.copy(),
+            instance_id=self.active_instance_id,
         )
         self.attached_chunks = []
         self.attached_images = []
@@ -411,6 +466,7 @@ class AquilaOS(QMainWindow):
 
 
 if __name__ == "__main__":
+    ensure_repo_cwd()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = AquilaOS()

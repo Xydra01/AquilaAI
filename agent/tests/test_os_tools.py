@@ -17,6 +17,7 @@ def workspace(tmp_path, monkeypatch):
     workspace_dir = tmp_path / "sandbox"
     workspace_dir.mkdir()
     
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(workspace_dir))
     monkeypatch.chdir(workspace_dir)
     yield workspace_dir
 

@@ -30,13 +30,17 @@ def test_generation_kill_switch():
     mock_response = MagicMock()
     mock_response.iter_lines.return_value = [b'data: {"choices": [{"delta": {"content": "Partial text"}}]}']
 
-    times = iter([0.0, 0.0, 1.0, 200.0, 200.0, 200.0])
+    clock = {"n": 0}
+
+    def fake_time():
+        clock["n"] += 1
+        return 0.0 if clock["n"] < 4 else 200.0
 
     with patch("main.console.log_filename", None), patch("main.console.print"), patch(
-        "main.time.time", side_effect=lambda: next(times, 200.0)
+        "main.time.time", side_effect=fake_time
     ), patch("main.requests.Session.post", return_value=mock_response), patch.object(
         OllamaClient, "_log_model_availability"
-    ):
+    ), patch("main.OllamaClient.probe", return_value=True):
         client = OllamaClient()
         generator = client.chat(
             [{"role": "user", "content": "Write an infinite loop"}],

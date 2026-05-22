@@ -11,6 +11,7 @@
 *.bin
 *.sqlite3
 *.json
+*.jsonl
 __pycache__/
 vector_db/
 Agent-Creations/

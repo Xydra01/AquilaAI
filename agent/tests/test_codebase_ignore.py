@@ -34,7 +34,7 @@ def test_import_skips_venv_tree(code_workspace):
     assert "✅ Imported" in result
     assert ".venv" in result or "not indexed" in result.lower()
     state = __import__("json").loads(
-        code_canvas_tools.ACTIVE_CODE_FILE.read_text(encoding="utf-8")
+        code_canvas_tools.active_code_file().read_text(encoding="utf-8")
     )
     paths = [f["path"] for f in state["files"]]
     assert all(".venv" not in p for p in paths)
@@ -47,9 +47,8 @@ def code_workspace(tmp_path, monkeypatch):
     code_dir = tmp_path / "Agent-Code"
     code_dir.mkdir()
     active = code_dir / "active_code_state.json"
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(code_canvas_tools, "CODE_DIR", code_dir)
-    monkeypatch.setattr(code_canvas_tools, "ACTIVE_CODE_FILE", active)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("AQUILA_DIFF_REVIEW", "0")
     yield tmp_path
 
 

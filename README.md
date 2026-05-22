@@ -69,7 +69,7 @@ Compared to **Aquila 3.2** (PySide6 stabilization, Writing Mode):
 ### Carried from 3.2
 
 - **PySide6 desktop UI**, **Writing Mode**, **attachments**, **Task State Tracker**, strict JSON tool loop, shared memory singleton, sleep cycle.
-- **`agent/app.py`** (Streamlit) — legacy 3.1 UI; not maintained. Use `gui.py`.
+- **`agent/legacy/streamlit_app.py`** — legacy 3.1 Streamlit UI (unsupported). Use `gui.py`.
 - **`route_tools()`** — exists but **not wired** into the loop (planned for 3.4).
 
 ---
@@ -317,7 +317,7 @@ agent-projects/
 | `Agent-Code/` | Code Mode buffer (`active_code_state.json`) + synced workspace files |
 | `Agent-Logs/` | Per-run execution logs |
 | `Agent-Memory/` | SQLite `fact_graph.db` |
-| `agent/vector_db/` | ChromaDB persistence |
+| `vector_db/` | ChromaDB persistence (repo root) |
 
 ---
 
@@ -399,7 +399,7 @@ Tools are merged from `SURVIVAL_TOOLS` and `tool_library.ALL_TOOLS`. Internal `_
 **Dual memory** (`DualMemorySystem`):
 
 - **Facts** — SQLite `Agent-Memory/fact_graph.db`
-- **Episodic** — ChromaDB `agent/vector_db/` (experiences, tool docs, codebase chunks)
+- **Episodic** — ChromaDB `vector_db/` at repo root (experiences, tool docs, codebase chunks)
 
 **Sleep cycle** (`initiate_sleep_cycle()` from GUI or API): scans completed ledgers in `Agent-Tasks/` and `Agent-Plans/`, consolidates scratchpad + outcomes into long-term memory.
 
@@ -437,15 +437,28 @@ From `agent/` with venv active:
 
 ```bash
 cd agent
-pytest tests/ -q --ignore=tests/test_live_ollama.py --ignore=tests/test_live_prompts.py
+pytest tests/ -q --ignore=tests/test_live_ollama.py --ignore=tests/test_live_prompts.py --ignore=tests/test_live_context_smoke.py
 ```
 
-Include live Ollama tests (requires running Ollama; model from `OLLAMA_MODEL`, default `aquila`):
+**Release check** (unit + GUI; live tests need Ollama running):
+
+```bash
+cd agent
+pytest tests/ -v --tb=short
+```
+
+Include live Ollama tests only (requires running Ollama; model from `OLLAMA_MODEL`):
 
 ```bash
 pytest tests/ -m live -v
 # TurboQuant / 64k smoke (set OLLAMA_MODEL=aquila-tq-64k first):
 pytest tests/test_live_context_smoke.py -m live -v
+```
+
+GUI-only:
+
+```bash
+pytest tests/test_gui.py tests/test_gui_chat_streaming.py tests/test_gui_state_tracker.py -v
 ```
 
 Context benchmark (manual VRAM check):

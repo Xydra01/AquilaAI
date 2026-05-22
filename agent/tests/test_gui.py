@@ -32,16 +32,16 @@ def test_agent_worker_signals(qtbot, qapp):
     worker = gui.AgentWorker(task_name="test_task", prompt="Do something", mode="Task")
     
     # Mock the LLM's unified task runner so the test runs instantly and doesn't hit the API
-    with patch('gui.global_agent.run_unified_task') as mock_run:
-        mock_run.return_value = "✅ Task complete!"
-        
+    mock_agent = MagicMock()
+    mock_agent.run_unified_task.return_value = "✅ Task complete!"
+    with patch('gui.get_agent', return_value=mock_agent):
         # Use qtbot to wait for the background thread to emit the finished_signal
         with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
             worker.start()
             
         # Verify the signal carried the exact result from the mock (including the worker's prepend string)
         assert blocker.args == ["✅ Task Completed:\n✅ Task complete!"]
-        assert mock_run.called
+        assert mock_agent.run_unified_task.called
 
 def test_ui_button_states_on_finish(qtbot, qapp):
     """TDD Goal: Ensure the Stop button disables and Run/Resume re-enable when a task finishes."""
@@ -94,12 +94,12 @@ def test_agent_worker_chat_streaming(qtbot, qapp):
         attached_images=mock_images
     )
     
-    with patch('gui.global_agent.run_chat') as mock_chat:
-        # Mock a streaming generator yielding 2 chunks (like the OllamaClient does now)
-        def mock_generator():
-            yield {"message": {"content": "Stream "}}
-            yield {"message": {"content": "Test!"}}
-        mock_chat.return_value = mock_generator()
+    mock_agent = MagicMock()
+    def mock_generator():
+        yield {"message": {"content": "Stream "}}
+        yield {"message": {"content": "Test!"}}
+    mock_agent.run_chat.return_value = mock_generator()
+    with patch('gui.get_agent', return_value=mock_agent):
         
         signals = []
         worker.ledger_signal.connect(signals.append)
@@ -114,8 +114,8 @@ def test_agent_worker_chat_streaming(qtbot, qapp):
         assert signals == ["Stream ", "Test!"]
         
         # 3. CRITICAL: The worker must pass the correct parameters to run_chat!
-        assert mock_chat.called
-        args, kwargs = mock_chat.call_args
+        assert mock_agent.run_chat.called
+        args, kwargs = mock_agent.run_chat.call_args
 
         # Validate it routed the images, the history, and requested a stream via kwargs!
         assert kwargs.get("user_input") == "Hi"
