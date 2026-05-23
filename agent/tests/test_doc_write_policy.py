@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from doc_write_policy import (
+    DOC_MIN_CHARS_ARCHITECTURE,
     WRITE_PROJECT_MARKDOWN_MAX_CHARS,
     compact_read_code_outline_result,
     filter_stashable_reflect_tools,
@@ -12,6 +13,15 @@ from doc_write_policy import (
     validate_append_project_markdown_args,
     validate_write_project_markdown_args,
 )
+
+
+def _architecture_doc_body(prefix: str = "# Title\n\nShort doc.\n") -> str:
+    """Pad to meet ARCHITECTURE.md minimum length (validator strips trailing whitespace)."""
+    text = prefix
+    line = "Additional architecture section detail.\n"
+    while len(text.strip()) < DOC_MIN_CHARS_ARCHITECTURE:
+        text += line
+    return text
 from main import validate_tool_arguments
 
 
@@ -73,7 +83,7 @@ def test_stash_reflect_write_under_cap():
             "name": "write_project_markdown",
             "arguments": {
                 "file_path": "ARCHITECTURE.md",
-                "content": "# Title\n\nShort doc.",
+                "content": _architecture_doc_body(),
             },
         }
     ])

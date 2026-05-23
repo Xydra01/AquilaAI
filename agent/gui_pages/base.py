@@ -50,3 +50,26 @@ class BaseModePage(QWidget):
 
     def stream_chat_token(self, token: str) -> None:
         pass
+
+    def begin_assistant_stream(self) -> None:
+        pass
+
+    def finalize_streamed_message(self, raw_text: str) -> None:
+        pass
+
+    def get_extra_run_context(self) -> str:
+        """Optional context merged into task prompt (journal, selection, etc.)."""
+        return ""
+
+    def get_extra_text_chunks(self) -> list[str]:
+        """Optional extra attachment chunks for AgentWorker."""
+        return []
+
+    def on_task_started(self) -> None:
+        pass
+
+    def on_task_finished(self) -> None:
+        pass
+
+    def refresh_theme(self, *, dark: bool) -> None:
+        pass

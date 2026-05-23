@@ -131,6 +131,8 @@ def test_write_project_markdown(code_workspace):
         "files": [],
         "test_targets": [],
     })
-    result = code_canvas_tools.write_project_markdown("ARCHITECTURE.md", "# Pink Sapphire Cove\n")
+    body = "# Pink Sapphire Cove\n\n" + ("Overview of the cove project.\n" * 80)
+    assert len(body) >= 1500
+    result = code_canvas_tools.write_project_markdown("ARCHITECTURE.md", body)
     assert "✅" in result
     assert (proj / "ARCHITECTURE.md").read_text(encoding="utf-8").startswith("# Pink Sapphire Cove")

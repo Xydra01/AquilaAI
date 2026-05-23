@@ -117,6 +117,36 @@ def format_user_message_html(mode_label: str, prompt: str) -> str:
     )
 
 
+def format_attachment_notice_html(
+    file_names: list[str],
+    *,
+    text_chunk_count: int = 0,
+    image_count: int = 0,
+) -> str:
+    """Visible confirmation that file attachments will be sent with the next message."""
+    if not file_names and text_chunk_count == 0 and image_count == 0:
+        return ""
+    parts: list[str] = []
+    if file_names:
+        names = ", ".join(html.escape(n) for n in file_names[:8])
+        if len(file_names) > 8:
+            names += f" (+{len(file_names) - 8} more)"
+        parts.append(f"Files: {names}")
+    if text_chunk_count:
+        parts.append(
+            f"{text_chunk_count} text chunk(s) included in model context"
+        )
+    if image_count:
+        parts.append(f"{image_count} image(s) sent to vision")
+    detail = " · ".join(parts)
+    return (
+        '<div class="msg user attachment-notice" style="margin-top:-6px;">'
+        '<div class="msg-body" style="font-size:10pt; opacity:0.9;">'
+        f"📎 <b>Attachments</b> — {detail}"
+        "</div></div>"
+    )
+
+
 def format_assistant_message_html(text: str) -> str:
     body = _fences_to_html(text or "")
     return (

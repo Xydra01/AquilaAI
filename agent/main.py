@@ -141,10 +141,32 @@ AQUILA_ACTION_SCHEMA = build_strict_schema(executable_tools)
 
 
 def format_attachment_context(text_chunks: list | None) -> str:
-    """Format the first attachment chunk for injection into prompts."""
+    """Format attachment chunks for injection into prompts (tier-capped)."""
     if not text_chunks:
         return ""
-    return f"\n\n--- ATTACHED CONTEXT ---\n{text_chunks[0]}\n--- END ATTACHED CONTEXT ---\n"
+    try:
+        from context_budget import get_context_profile
+
+        cap = max(4000, get_context_profile().scratchpad_bytes)
+    except Exception:
+        cap = 32_000
+    parts: list[str] = []
+    total = 0
+    for i, chunk in enumerate(text_chunks):
+        if not chunk:
+            continue
+        piece = chunk if isinstance(chunk, str) else str(chunk)
+        if total + len(piece) > cap:
+            remain = cap - total
+            if remain > 200:
+                parts.append(piece[:remain] + "\n...[truncated]")
+            break
+        parts.append(piece)
+        total += len(piece)
+    if not parts:
+        return ""
+    body = "\n\n--- chunk ---\n".join(parts) if len(parts) > 1 else parts[0]
+    return f"\n\n--- ATTACHED CONTEXT ---\n{body}\n--- END ATTACHED CONTEXT ---\n"
 
 from run_logger import RunLogger
 
@@ -845,17 +867,29 @@ class Agent:
             return self.CODE_PROMPT
         return self.master_prompt
 
-    def run_chat(self, user_input: str, chat_history: list, image_payloads: list = None, stream: bool = True):
+    def run_chat(
+        self,
+        user_input: str,
+        chat_history: list,
+        image_payloads: list = None,
+        text_chunks: list = None,
+        stream: bool = True,
+    ):
         facts = self.memory.get_all_facts()
         episodic_memories = self.memory.recall_experiences(user_input, n_results=2)
-        
+
         system_prompt = get_chat_prompt(facts, episodic_memories)
-        
+
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(chat_history)
-        
+
+        attachment_block = format_attachment_context(text_chunks)
+        full_text = user_input
+        if attachment_block:
+            full_text = f"{user_input}{attachment_block}"
+
         if image_payloads:
-            content_list = [{"type": "text", "text": user_input}]
+            content_list = [{"type": "text", "text": full_text}]
             for img_b64 in image_payloads:
                 prefix = "data:image/jpeg;base64,"
                 clean_b64 = img_b64.split(",", 1)[-1] if "," in img_b64 else img_b64
@@ -865,10 +899,10 @@ class Agent:
                 })
             user_msg = {"role": "user", "content": content_list}
         else:
-            user_msg = {"role": "user", "content": user_input}
-            
+            user_msg = {"role": "user", "content": full_text}
+
         messages.append(user_msg)
-        
+
         return self.client.chat(messages, temperature=0.6, stream=stream)
 
     def generate_plan(
@@ -1184,6 +1218,19 @@ class Agent:
             console=console,
         )
 
+        human_notes = ""
+        if mode == "research" and text_chunks:
+            for ch in text_chunks:
+                if not ch:
+                    continue
+                if "--- HUMAN RESEARCH NOTES ---" in ch:
+                    start = ch.find("--- HUMAN RESEARCH NOTES ---")
+                    end = ch.find("--- END HUMAN RESEARCH NOTES ---")
+                    if start >= 0 and end > start:
+                        human_notes = ch[start + len("--- HUMAN RESEARCH NOTES ---") : end].strip()
+                    else:
+                        human_notes = ch.strip()
+                    break
         engine = LoopEngine(
             client=self.client,
             executor=self.executor,
@@ -1196,6 +1243,7 @@ class Agent:
             instance_id=self.instance_id,
             memory=self.memory,
             base_tools=self.base_tools,
+            human_research_notes=human_notes,
         )
         return engine.run(
             task_name=task_name,

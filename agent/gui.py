@@ -27,11 +27,22 @@ from PySide6.QtGui import QFont
 from file_parser import process_local_attachments
 from gui_formatting import (
     format_assistant_message_html,
+    format_attachment_notice_html,
     format_sleep_cycle_html,
     format_system_message_html,
     format_user_message_html,
 )
-from gui_pages import AutonomousPage, ChatPage, CodeIdePage, StubModePage, BaseModePage, HomePage
+from gui_pages import (
+    ChatPage,
+    CodeIdePage,
+    ResearchPage,
+    StubModePage,
+    TaskPage,
+    WritingPage,
+    BaseModePage,
+    HomePage,
+)
+from gui_theme import main_window_stylesheet
 
 # Import Aquila's Brain and Tools
 from main import get_agent, get_active_instance_id, initiate_sleep_cycle
@@ -70,6 +81,7 @@ class AgentWorker(QThread):
         self.mode = mode
         self.attached_chunks = attached_chunks or []
         self.attached_images = attached_images or []
+        self.model_user_content = prompt
         self.chat_history = chat_history or []
         self.instance_id = instance_id or get_active_instance_id()
         self.cancel_flag = False
@@ -87,10 +99,17 @@ class AgentWorker(QThread):
         agent = get_agent(self.instance_id)
         try:
             if self.mode.lower() == "chat":
+                from main import format_attachment_context
+
+                attachment_block = format_attachment_context(self.attached_chunks)
+                self.model_user_content = (
+                    f"{self.prompt}{attachment_block}" if attachment_block else self.prompt
+                )
                 generator = agent.run_chat(
                     user_input=self.prompt,
                     chat_history=self.chat_history,
                     image_payloads=self.attached_images,
+                    text_chunks=self.attached_chunks,
                     stream=True,
                 )
                 full_text = ""
@@ -116,6 +135,29 @@ class AgentWorker(QThread):
             self.finished_signal.emit(f"❌ Error: {str(e)}")
 
 
+class ChatSubcallWorker(QThread):
+    """One-shot chat completion for selection edits (writing/code)."""
+
+    finished_signal = Signal(str)
+
+    def __init__(self, prompt: str, instance_id: str | None = None):
+        super().__init__()
+        self.prompt = prompt
+        self.instance_id = instance_id or get_active_instance_id()
+
+    def run(self):
+        agent = get_agent(self.instance_id)
+        try:
+            resp = agent.run_chat(user_input=self.prompt, chat_history=[], stream=False)
+            if isinstance(resp, dict):
+                content = resp.get("message", {}).get("content", "") or ""
+            else:
+                content = str(resp)
+            self.finished_signal.emit(content)
+        except Exception as e:
+            self.finished_signal.emit(f"❌ Error: {e}")
+
+
 class SleepWorker(QThread):
     finished_signal = Signal(str)
 
@@ -136,6 +178,7 @@ class AquilaOS(QMainWindow):
         self._chat_streaming = False
         self.attached_chunks = []
         self.attached_images = []
+        self.attached_file_names: list[str] = []
         self._chat_history_messages = []
         self.worker = None
         self.active_instance_id = get_active_instance_id()
@@ -179,26 +222,35 @@ class AquilaOS(QMainWindow):
         workspace_layout.addWidget(self.page_stack, stretch=1)
         self.main_stack.addWidget(self.workspace_widget)
 
-        self.autonomous_page = AutonomousPage(self)
         self.chat_page = ChatPage(self)
+        self.task_page = TaskPage(self)
+        self.research_page = ResearchPage(self)
+        self.writing_page = WritingPage(self)
         self.code_page = CodeIdePage(self)
         self.learn_stub = StubModePage(
             self,
             "Learn Workspace",
-            "A classroom-style layout (courses, assignments, progress) is planned for Aquila 4.0.",
+            "A classroom-style layout (courses, assignments, progress) is planned for Aquila 3.5.",
             "learn",
             "Learn Mode",
         )
 
         self._page_by_mode_label = {
             "Chat Mode": self.chat_page,
-            "Autonomous Task": self.autonomous_page,
+            "Autonomous Task": self.task_page,
             "Code Mode": self.code_page,
-            "Writing Mode": self.autonomous_page,
-            "Research Mode": self.autonomous_page,
+            "Writing Mode": self.writing_page,
+            "Research Mode": self.research_page,
             "Learn Mode": self.learn_stub,
         }
-        for page in {self.chat_page, self.autonomous_page, self.code_page, self.learn_stub}:
+        for page in (
+            self.chat_page,
+            self.task_page,
+            self.research_page,
+            self.writing_page,
+            self.code_page,
+            self.learn_stub,
+        ):
             self.page_stack.addWidget(page)
 
         self._update_instance_label()
@@ -206,7 +258,13 @@ class AquilaOS(QMainWindow):
         self.toggle_theme()
 
     def _apply_page_themes(self) -> None:
-        for page in (self.chat_page, self.autonomous_page, self.code_page):
+        for page in (
+            self.chat_page,
+            self.task_page,
+            self.research_page,
+            self.writing_page,
+            self.code_page,
+        ):
             if hasattr(page, "refresh_theme"):
                 page.refresh_theme(dark=self.dark_mode)
 
@@ -255,7 +313,7 @@ class AquilaOS(QMainWindow):
 
     def _on_mode_changed(self, _index: int) -> None:
         label = self.mode_selector.currentText()
-        page = self._page_by_mode_label.get(label, self.autonomous_page)
+        page = self._page_by_mode_label.get(label, self.task_page)
         for i in range(self.page_stack.count()):
             if self.page_stack.widget(i) is page:
                 self.page_stack.setCurrentIndex(i)
@@ -265,49 +323,26 @@ class AquilaOS(QMainWindow):
 
     def current_page(self) -> BaseModePage:
         w = self.page_stack.currentWidget()
-        return w if isinstance(w, BaseModePage) else self.autonomous_page
+        return w if isinstance(w, BaseModePage) else self.task_page
 
     def current_mode_flag(self) -> str:
         return MODE_FLAGS.get(self.mode_selector.currentText(), "autonomous")
 
     def toggle_theme(self):
         self.dark_mode = not self.dark_mode
-        if self.dark_mode:
-            self.setStyleSheet("""
-                QWidget { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Segoe UI', sans-serif; }
-                QTextEdit, QLineEdit, QPlainTextEdit, QTreeWidget {
-                    background-color: #252526; border: 1px solid #3e3e42; border-radius: 4px;
-                    padding: 4px; selection-background-color: #264f78;
-                }
-                QLineEdit { padding: 6px 8px; min-height: 1.2em; }
-                QPushButton {
-                    background-color: #333333; border: 1px solid #3e3e42; padding: 6px 12px;
-                    border-radius: 4px;
-                }
-                QPushButton:hover { background-color: #3e3e42; }
-                QPushButton:disabled { color: #6e6e6e; background-color: #2a2a2a; }
-                QTabWidget::pane { border: 1px solid #3e3e42; border-radius: 4px; }
-                QTabBar::tab { background: #252526; padding: 6px 12px; margin-right: 2px; }
-                QTabBar::tab:selected { background: #3e3e42; }
-                QLabel { color: #cccccc; }
-                QComboBox { background: #252526; border: 1px solid #3e3e42; padding: 4px 8px; }
-                QSplitter::handle { background: #3e3e42; width: 3px; }
-            """)
-        else:
-            self.setStyleSheet("""
-                QWidget { font-family: 'Segoe UI', sans-serif; color: #1a1a1a; }
-                QTextEdit, QLineEdit, QPlainTextEdit, QTreeWidget {
-                    background-color: #ffffff; border: 1px solid #d0d7de; border-radius: 4px; padding: 4px;
-                }
-                QLineEdit { padding: 6px 8px; }
-                QPushButton {
-                    background-color: #f6f8fa; border: 1px solid #d0d7de; padding: 6px 12px; border-radius: 4px;
-                }
-                QPushButton:hover { background-color: #eaeef2; }
-                QTabBar::tab { padding: 6px 12px; }
-                QSplitter::handle { background: #d0d7de; width: 3px; }
-            """)
+        self.setStyleSheet(main_window_stylesheet(dark=self.dark_mode))
         self._apply_page_themes()
+
+    def run_chat_subcall(self, prompt: str, on_result) -> None:
+        """Non-streaming chat for quick selection edits."""
+        worker = ChatSubcallWorker(prompt, instance_id=self.active_instance_id)
+
+        def _done(text: str) -> None:
+            on_result(text)
+
+        worker.finished_signal.connect(_done)
+        worker.start()
+        self._subcall_worker = worker
 
     def open_attachment_dialog(self):
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -320,6 +355,7 @@ class AquilaOS(QMainWindow):
         )
         if file_paths:
             self.attached_chunks, self.attached_images = process_local_attachments(file_paths)
+            self.attached_file_names = [Path(p).name for p in file_paths]
             msg = f"Successfully attached and parsed {len(file_paths)} file(s).\n"
             msg += (
                 f"Resulted in {len(self.attached_chunks)} text chunk(s) and "
@@ -446,23 +482,37 @@ class AquilaOS(QMainWindow):
         mode_selection = self.mode_selector.currentText()
         clean_prefix = re.sub(r"[^a-zA-Z0-9]", "", "_".join(user_prompt.split()[:3]).lower())
         task_name = f"{clean_prefix}_{int(time.time())}"
-        page.append_chat_html(format_user_message_html(mode_selection, user_prompt))
+        display_prompt = user_prompt
+        page.append_chat_html(
+            format_user_message_html(mode_selection, display_prompt)
+            + format_attachment_notice_html(
+                self.attached_file_names,
+                text_chunk_count=len(self.attached_chunks),
+                image_count=len(self.attached_images),
+            )
+        )
         page.clear_chat_input()
         page.set_run_buttons_running(True)
         page.update_ledger("", clear=True)
         self._reset_live_scroll_panels(page)
+        if hasattr(page, "on_task_started"):
+            page.on_task_started()
         self._chat_streaming = mode_flag == "chat"
+        chunks = list(self.attached_chunks)
+        if hasattr(page, "get_extra_text_chunks"):
+            chunks.extend(page.get_extra_text_chunks())
         self.worker = AgentWorker(
             task_name,
             user_prompt,
             mode_flag,
-            self.attached_chunks,
+            chunks,
             self.attached_images,
             chat_history=self._chat_history_messages.copy(),
             instance_id=self.active_instance_id,
         )
         self.attached_chunks = []
         self.attached_images = []
+        self.attached_file_names = []
         if hasattr(page, "attach_button"):
             page.attach_button.setText("📎 Attach" if mode_flag == "chat" else "📎")
         self._wire_worker(self.worker, page)
@@ -493,17 +543,23 @@ class AquilaOS(QMainWindow):
         if hasattr(page, "finalize_streamed_message") and result:
             page.finalize_streamed_message(result)
         if result and self.worker:
+            user_content = getattr(
+                self.worker, "model_user_content", self.worker.prompt
+            )
             self._chat_history_messages.append(
-                {"role": "user", "content": self.worker.prompt}
+                {"role": "user", "content": user_content}
             )
             self._chat_history_messages.append({"role": "assistant", "content": result})
         self.current_page().set_run_buttons_running(False)
 
     def task_finished(self, result: str) -> None:
-        self.current_page().append_chat_html(format_assistant_message_html(result))
-        self.current_page().set_run_buttons_running(False)
+        page = self.current_page()
+        page.append_chat_html(format_assistant_message_html(result))
+        page.set_run_buttons_running(False)
+        if hasattr(page, "on_task_finished"):
+            page.on_task_finished()
         if self.worker and self.worker.mode.lower() != "chat":
-            self.current_page().refresh_state()
+            page.refresh_state()
 
 
 if __name__ == "__main__":

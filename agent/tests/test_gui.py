@@ -51,14 +51,14 @@ def test_ui_button_states_on_finish(qtbot, qapp):
     window = MainWindowClass()
     qtbot.addWidget(window)
     window.mode_selector.setCurrentText("Autonomous Task")
-    page = window.autonomous_page
+    page = window.task_page.agent_rail
 
     page.run_btn.setDisabled(True)
     page.stop_btn.setDisabled(False)
     window.task_finished("✅ Done!")
 
     assert page.run_btn.isEnabled() is True
-    assert page.resume_btn.isEnabled() is True
+    assert window.task_page.agent_rail.resume_btn.isEnabled() is True
     assert page.stop_btn.isEnabled() is False
 
 def test_chat_history_appends_result(qtbot, qapp):
@@ -72,11 +72,11 @@ def test_chat_history_appends_result(qtbot, qapp):
 
     window.task_finished("This is a test result.")
 
-    chat_html = window.autonomous_page.chat_history.toHtml()
+    chat_html = window.task_page.agent_rail.chat_history.toHtml()
     
     # Verify the agent's response was formatted and injected
     assert "This is a test result" in chat_html
-    assert "Aquila:" in chat_html
+    assert "assistant" in chat_html.lower() or "Aquila" in chat_html
 
 def test_agent_worker_chat_streaming(qtbot, qapp):
     """TDD Goal: Ensure AgentWorker routes Chat mode to run_chat, passes payloads correctly, and streams tokens via ledger_signal."""

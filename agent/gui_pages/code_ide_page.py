@@ -18,10 +18,11 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QFileDialog,
     QMessageBox,
+    QInputDialog,
     QWidget,
 )
 from PySide6.QtGui import QFont
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from gui_formatting import format_ledger_html
 from gui_pages.base import BaseModePage
@@ -46,15 +47,21 @@ class CodeIdePage(BaseModePage):
         self.import_sandbox_btn.clicked.connect(self._import_sandbox)
         self.new_project_btn = QPushButton("New project")
         self.new_project_btn.clicked.connect(self._new_project)
+        self.save_buffer_btn = QPushButton("Save buffer")
+        self.save_buffer_btn.clicked.connect(self._save_buffer)
         self.sync_btn = QPushButton("Sync to disk")
         self.sync_btn.clicked.connect(self._sync_disk)
+        self.quick_edit_btn = QPushButton("Edit selection (chat)")
+        self.quick_edit_btn.clicked.connect(self._quick_edit_selection)
         self.status_label = QLabel("No project open")
         self.status_label.setStyleSheet("color: #7f8c8d;")
         for w in (
             self.open_inplace_btn,
             self.import_sandbox_btn,
             self.new_project_btn,
+            self.save_buffer_btn,
             self.sync_btn,
+            self.quick_edit_btn,
         ):
             toolbar.addWidget(w)
         toolbar.addStretch()
@@ -67,6 +74,7 @@ class CodeIdePage(BaseModePage):
         self.file_tree = QTreeWidget()
         self.file_tree.setHeaderLabel("Files")
         self.file_tree.setMinimumWidth(180)
+        self.file_tree.itemClicked.connect(self._on_tree_click)
         main_split.addWidget(self.file_tree)
 
         center = QWidget()
@@ -140,6 +148,13 @@ class CodeIdePage(BaseModePage):
         root_layout.addWidget(bottom_split, stretch=0)
 
         self._last_pytest_summary = ""
+        self._tab_paths: list[str] = []
+        self._user_edited_paths: set[str] = set()
+        self._editor_save_timer = QTimer(self)
+        self._editor_save_timer.setSingleShot(True)
+        self._editor_save_timer.setInterval(400)
+        self._pending_editor_path: str | None = None
+        self._editor_save_timer.timeout.connect(self._flush_editor_save)
 
     def _open_in_place(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Open codebase in-place")
@@ -177,9 +192,106 @@ class CodeIdePage(BaseModePage):
         QMessageBox.information(self, "Sync", result[:2000])
         self.refresh_state()
 
+    def _save_buffer(self) -> None:
+        path = self._current_editor_path()
+        if not path:
+            QMessageBox.information(self, "Code", "Open a file tab first.")
+            return
+        editor = self.editor_tabs.currentWidget()
+        if not isinstance(editor, QPlainTextEdit):
+            return
+        from tool_library import code_canvas_tools
+
+        result = code_canvas_tools.apply_user_buffer_edit(path, editor.toPlainText())
+        self._user_edited_paths.discard(path)
+        QMessageBox.information(self, "Save buffer", result[:1500])
+        self.refresh_state()
+
+    def _current_editor_path(self) -> str | None:
+        idx = self.editor_tabs.currentIndex()
+        if 0 <= idx < len(self._tab_paths):
+            return self._tab_paths[idx]
+        return None
+
+    def _on_tree_click(self, item: QTreeWidgetItem, _column: int) -> None:
+        path = item.data(0, Qt.UserRole)
+        if not path:
+            return
+        for i, p in enumerate(self._tab_paths):
+            if p == path:
+                self.editor_tabs.setCurrentIndex(i)
+                return
+
+    def _schedule_editor_save(self, path: str) -> None:
+        self._pending_editor_path = path
+        self._editor_save_timer.start()
+
+    def _flush_editor_save(self) -> None:
+        path = self._pending_editor_path
+        if not path:
+            return
+        idx = self._tab_paths.index(path) if path in self._tab_paths else -1
+        if idx < 0:
+            return
+        editor = self.editor_tabs.widget(idx)
+        if not isinstance(editor, QPlainTextEdit):
+            return
+        from tool_library import code_canvas_tools
+
+        code_canvas_tools.apply_user_buffer_edit(path, editor.toPlainText())
+        self._user_edited_paths.add(path)
+
+    def _quick_edit_selection(self) -> None:
+        editor = self.editor_tabs.currentWidget()
+        if not isinstance(editor, QPlainTextEdit):
+            return
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            QMessageBox.information(self.main, "Code", "Highlight code first.")
+            return
+        instruction, ok = QInputDialog.getMultiLineText(
+            self.main, "Edit selection", "Instruction for the agent:"
+        )
+        if not ok or not instruction.strip():
+            return
+        selection = cursor.selectedText()
+        path = self._current_editor_path() or "file"
+        self.main.run_chat_subcall(
+            f"Refactor this code snippet from {path}.\n"
+            f"Instruction: {instruction.strip()}\n\n```\n{selection}\n```\n"
+            "Return only the revised code, no fences or explanation.",
+            on_result=lambda revised: self._apply_code_selection(cursor, revised),
+        )
+
+    def _apply_code_selection(self, cursor, revised: str) -> None:
+        text = (revised or "").strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines)
+        if text:
+            cursor.insertText(text)
+            path = self._current_editor_path()
+            if path:
+                self._schedule_editor_save(path)
+
     def _accept_patch(self) -> None:
         from tool_library import code_canvas_tools
 
+        patches = code_canvas_tools.list_pending_patches()
+        if patches:
+            p0 = patches[0].get("path", "")
+            if p0 in self._user_edited_paths:
+                ans = QMessageBox.question(
+                    self,
+                    "Conflict",
+                    f"You edited {p0} locally. Accept agent patch anyway?",
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    return
         QMessageBox.information(self, "Pending patch", code_canvas_tools.accept_pending_patch(0))
         self.refresh_state()
 
@@ -318,8 +430,10 @@ class CodeIdePage(BaseModePage):
         root_item.setExpanded(True)
 
     def _populate_editors(self, state_data: dict) -> None:
+        current_path = self._current_editor_path()
         while self.editor_tabs.count() > 0:
             self.editor_tabs.removeTab(0)
+        self._tab_paths = []
         mono = QFont("Courier New", 10)
         for f in state_data.get("files", []):
             path = f.get("path", "file")
@@ -327,7 +441,7 @@ class CodeIdePage(BaseModePage):
                 continue
             editor = QPlainTextEdit()
             editor.setFont(mono)
-            editor.setReadOnly(True)
+            editor.setReadOnly(False)
             content = f.get("content", "")
             if not content and f.get("indexed_only"):
                 disk = Path(state_data.get("root", ".")) / path
@@ -337,10 +451,19 @@ class CodeIdePage(BaseModePage):
                     except Exception:
                         content = "(unable to read from disk)"
             editor.setPlainText(content or "")
+            rel = path
+
+            def _on_change(p=rel, ed=editor) -> None:
+                self._schedule_editor_save(p)
+
+            editor.textChanged.connect(_on_change)
             label = Path(path).name
             if f.get("dirty"):
                 label += " *"
+            self._tab_paths.append(rel)
             self.editor_tabs.addTab(editor, label)
+        if current_path and current_path in self._tab_paths:
+            self.editor_tabs.setCurrentIndex(self._tab_paths.index(current_path))
 
     def _populate_problems(self, state_data: dict) -> None:
         lines = []

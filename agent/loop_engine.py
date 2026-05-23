@@ -69,6 +69,7 @@ class LoopEngine:
         instance_id: str = "default",
         memory=None,
         base_tools: dict | None = None,
+        human_research_notes: str = "",
     ):
         self.client = client
         self.executor = executor
@@ -89,6 +90,7 @@ class LoopEngine:
         self._schema_widen_attempts = 0
         self._parse_failures = 0
         self._force_full_schema = False
+        self.human_research_notes = (human_research_notes or "").strip()
 
     @staticmethod
     def _use_legacy_loop() -> bool:
@@ -1094,6 +1096,10 @@ class LoopEngine:
                 pass
         if notes and "No research notes found" not in notes:
             parts.append(f"--- SCRATCHPAD (prior steps) ---\n{notes}\n--- END SCRATCHPAD ---")
+        if self.mode == "research" and self.human_research_notes:
+            from research_journal import format_journal_context
+
+            parts.append(format_journal_context(self.human_research_notes).strip())
         return [{"role": "user", "content": "\n".join(parts)}]
 
     def _build_user_message(

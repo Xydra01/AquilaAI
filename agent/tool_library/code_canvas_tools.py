@@ -806,6 +806,30 @@ def append_project_markdown(file_path: str, content: str) -> str:
     return f"✅ Appended {len(chunk)} characters to {target.as_posix()} (total {len(combined)})."
 
 
+def apply_user_buffer_edit(file_path: str, full_content: str) -> str:
+    """Apply a full-file edit from the GUI editor into the code buffer."""
+    state = _load_state()
+    if not state:
+        return "❌ Error: No active code project."
+    norm = _relative_to_root(state, file_path)
+    entry = _find_file(state, norm)
+    if not entry:
+        return f"❌ Error: File not in buffer: {norm}"
+    _upsert_file(state, norm, full_content, dirty=True)
+    entry = _find_file(state, norm) or {}
+    entry["edited_by"] = "user"
+    disk = _disk_path(state, norm)
+    lint_status = "unknown"
+    if disk.exists():
+        lint = run_linter(str(disk), full_content)
+        lint_status = lint.status
+        entry["lint_status"] = lint_status
+    else:
+        entry["lint_status"] = lint_status
+    _save_state(state)
+    return f"✅ Buffer updated for {norm} (user edit, lint={lint_status})."
+
+
 def sync_project_to_disk() -> str:
     """Write all buffer files under project root to disk and run linters."""
     state = _load_state()
@@ -910,6 +934,10 @@ CODE_CANVAS_TOOLS = {
     "write_project_markdown": {
         "func": write_project_markdown,
         "description": inspect.getdoc(write_project_markdown),
+    },
+    "apply_user_buffer_edit": {
+        "func": apply_user_buffer_edit,
+        "description": inspect.getdoc(apply_user_buffer_edit),
     },
     "sync_project_to_disk": {"func": sync_project_to_disk, "description": inspect.getdoc(sync_project_to_disk)},
     "run_pytest": {"func": run_pytest, "description": inspect.getdoc(run_pytest)},

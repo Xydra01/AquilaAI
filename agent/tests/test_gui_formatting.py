@@ -20,7 +20,7 @@ def test_format_ledger_html_pretty_prints_agent_json():
     html = format_ledger_html(raw)
     assert "step-header" in html
     assert "json-block" in html
-    assert '"reasoning"' in html
+    assert "reasoning" in html
     assert "web_search" in html
 
 

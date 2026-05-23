@@ -1,13 +1,9 @@
 """Chat-only workspace (single column)."""
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton
+from PySide6.QtWidgets import QVBoxLayout, QLabel
 
 from gui_pages.base import BaseModePage
-from gui_richtext import (
-    SmartScrollTextEdit,
-    apply_panel_style,
-    finalize_streamed_message,
-    mark_stream_start,
-)
+from gui_theme import mode_accent_style
+from gui_widgets.agent_rail import AgentRail
 
 
 class ChatPage(BaseModePage):
@@ -17,59 +13,66 @@ class ChatPage(BaseModePage):
     def __init__(self, main_window):
         super().__init__(main_window)
         layout = QVBoxLayout(self)
-        self.chat_history = SmartScrollTextEdit()
-        apply_panel_style(self.chat_history, "chat", dark=main_window.dark_mode)
-        layout.addWidget(self.chat_history)
+        header = QLabel("Chat Workspace")
+        header.setStyleSheet(mode_accent_style("chat"))
+        layout.addWidget(header)
+        self.agent_rail = AgentRail(
+            main_window,
+            placeholder="Say hello or ask a question...",
+            show_resume=False,
+            show_clear=True,
+            compact_buttons=False,
+        )
+        self.agent_rail.run_btn.setText("▶️ Send")
+        layout.addWidget(self.agent_rail)
 
-        row = QHBoxLayout()
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Say hello or ask a question...")
-        self.chat_input.returnPressed.connect(main_window.execute_task)
-        self.attach_button = QPushButton("📎 Attach")
-        self.attach_button.clicked.connect(main_window.open_attachment_dialog)
-        self.run_btn = QPushButton("▶️ Send")
-        self.run_btn.clicked.connect(main_window.execute_task)
-        self.stop_btn = QPushButton("🛑 Stop")
-        self.stop_btn.clicked.connect(main_window.stop_task)
-        self.stop_btn.setDisabled(True)
-        self.clear_chat_btn = QPushButton("🧹 Clear")
-        self.clear_chat_btn.clicked.connect(main_window.clear_chat_display)
-        for w in (
-            self.attach_button,
-            self.run_btn,
-            self.stop_btn,
-            self.clear_chat_btn,
-        ):
-            row.addWidget(w)
-        layout.addWidget(self.chat_input)
-        layout.addLayout(row)
+    @property
+    def chat_history(self):
+        return self.agent_rail.chat_history
+
+    @property
+    def chat_input(self):
+        return self.agent_rail.chat_input
+
+    @property
+    def attach_button(self):
+        return self.agent_rail.attach_button
+
+    @property
+    def run_btn(self):
+        return self.agent_rail.run_btn
+
+    @property
+    def stop_btn(self):
+        return self.agent_rail.stop_btn
+
+    @property
+    def clear_chat_btn(self):
+        return self.agent_rail.clear_chat_btn
 
     def refresh_theme(self, *, dark: bool) -> None:
-        apply_panel_style(self.chat_history, "chat", dark=dark)
+        self.agent_rail.refresh_theme(dark=dark)
 
     def append_chat_html(self, html: str) -> None:
-        self.chat_history.append_smart(html)
+        self.agent_rail.append_chat_html(html)
 
     def clear_chat_display(self) -> None:
-        self.chat_history.clear()
-        self.chat_history.reset_scroll_follow()
+        self.agent_rail.clear_chat_display()
 
     def get_chat_input_text(self) -> str:
-        return self.chat_input.text().strip()
+        return self.agent_rail.get_chat_input_text()
 
     def clear_chat_input(self) -> None:
-        self.chat_input.clear()
+        self.agent_rail.clear_chat_input()
 
     def set_run_buttons_running(self, running: bool) -> None:
-        self.run_btn.setDisabled(running)
-        self.stop_btn.setDisabled(not running)
+        self.agent_rail.set_run_buttons_running(running)
 
     def begin_assistant_stream(self) -> None:
-        """Mark where streamed plain text starts (rendered on finish)."""
-        mark_stream_start(self.chat_history)
+        self.agent_rail.begin_assistant_stream()
 
     def stream_chat_token(self, token: str) -> None:
-        self.chat_history.insert_text_smart(token)
+        self.agent_rail.stream_chat_token(token)
 
     def finalize_streamed_message(self, raw_text: str) -> None:
-        finalize_streamed_message(self.chat_history, raw_text)
+        self.agent_rail.finalize_streamed_message(raw_text)
