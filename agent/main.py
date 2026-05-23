@@ -783,7 +783,6 @@ def save_task_deliverable(
                 memory,
                 task_name,
                 instance_id=instance_id,
-                extra_task_names=("agentic_architectures",),
             ).strip()
 
     if not body:

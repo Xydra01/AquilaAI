@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
 
+from gui_formatting import format_ledger_html
 from gui_pages.base import BaseModePage
+from gui_richtext import SmartScrollTextEdit, apply_panel_style
 from gui_state import render_code_canvas_html
 from tools import is_ignored_code_path
 
@@ -77,8 +79,8 @@ class CodeIdePage(BaseModePage):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history = SmartScrollTextEdit()
+        apply_panel_style(self.chat_history, "chat", dark=main_window.dark_mode)
         right_layout.addWidget(self.chat_history, stretch=2)
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Code task (TDD, implement, fix)...")
@@ -97,9 +99,8 @@ class CodeIdePage(BaseModePage):
         for w in (self.attach_button, self.run_btn, self.resume_btn, self.stop_btn):
             btn_row.addWidget(w)
         right_layout.addLayout(btn_row)
-        self.ledger_view = QTextEdit()
-        self.ledger_view.setReadOnly(True)
-        self.ledger_view.setFont(QFont("Consolas", 9))
+        self.ledger_view = SmartScrollTextEdit()
+        apply_panel_style(self.ledger_view, "ledger", dark=main_window.dark_mode)
         right_layout.addWidget(QLabel("Execution log"))
         right_layout.addWidget(self.ledger_view, stretch=2)
         main_split.addWidget(right)
@@ -195,10 +196,12 @@ class CodeIdePage(BaseModePage):
         self.refresh_state()
 
     def append_chat_html(self, html: str) -> None:
-        self.chat_history.append(html)
+        self.chat_history.append_smart(html)
 
     def clear_chat_display(self) -> None:
         self.chat_history.clear()
+        self.chat_history.reset_scroll_follow()
+        self.ledger_view.reset_scroll_follow()
 
     def get_chat_input_text(self) -> str:
         return self.chat_input.text().strip()
@@ -211,10 +214,16 @@ class CodeIdePage(BaseModePage):
         self.resume_btn.setDisabled(running)
         self.stop_btn.setDisabled(not running)
 
+    def refresh_theme(self, *, dark: bool) -> None:
+        apply_panel_style(self.chat_history, "chat", dark=dark)
+        apply_panel_style(self.ledger_view, "ledger", dark=dark)
+
     def update_ledger(self, text: str, *, clear: bool = False) -> None:
+        html = format_ledger_html(text)
         if clear:
-            self.ledger_view.clear()
-        self.ledger_view.append(text)
+            self.ledger_view.set_html_smart(html)
+        else:
+            self.ledger_view.append_smart(html)
         if "run_pytest" in text.lower() or "pytest" in text.lower():
             self._last_pytest_summary = text[-800:]
 

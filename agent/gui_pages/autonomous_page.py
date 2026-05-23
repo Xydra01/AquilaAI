@@ -17,7 +17,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
 
+from gui_formatting import format_ledger_html
 from gui_pages.base import BaseModePage
+from gui_richtext import (
+    SmartScrollTextEdit,
+    apply_panel_style,
+    finalize_streamed_message,
+    mark_stream_start,
+)
 from gui_state import (
     resolve_ledger_path,
     render_step_ledger_html,
@@ -38,8 +45,8 @@ class AutonomousPage(BaseModePage):
 
         self.left_panel = QWidget()
         left_layout = QVBoxLayout(self.left_panel)
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history = SmartScrollTextEdit()
+        apply_panel_style(self.chat_history, "chat", dark=main_window.dark_mode)
         left_layout.addWidget(self.chat_history)
 
         self.chat_input = QLineEdit()
@@ -81,9 +88,8 @@ class AutonomousPage(BaseModePage):
         self.right_panel = QWidget()
         right_layout = QVBoxLayout(self.right_panel)
         self.tab_widget = QTabWidget()
-        self.ledger_view = QTextEdit()
-        self.ledger_view.setReadOnly(True)
-        self.ledger_view.setFont(QFont("Consolas", 10))
+        self.ledger_view = SmartScrollTextEdit()
+        apply_panel_style(self.ledger_view, "ledger", dark=main_window.dark_mode)
         self.tab_widget.addTab(self.ledger_view, "Execution Log")
         self.state_view = QTextEdit()
         self.state_view.setReadOnly(True)
@@ -97,10 +103,12 @@ class AutonomousPage(BaseModePage):
         self.splitter.setSizes([300, 600, 500])
 
     def append_chat_html(self, html: str) -> None:
-        self.chat_history.append(html)
+        self.chat_history.append_smart(html)
 
     def clear_chat_display(self) -> None:
         self.chat_history.clear()
+        self.chat_history.reset_scroll_follow()
+        self.ledger_view.reset_scroll_follow()
 
     def get_chat_input_text(self) -> str:
         return self.chat_input.text().strip()
@@ -113,10 +121,22 @@ class AutonomousPage(BaseModePage):
         self.resume_btn.setDisabled(running)
         self.stop_btn.setDisabled(not running)
 
+    def refresh_theme(self, *, dark: bool) -> None:
+        apply_panel_style(self.chat_history, "chat", dark=dark)
+        apply_panel_style(self.ledger_view, "ledger", dark=dark)
+
     def update_ledger(self, text: str, *, clear: bool = False) -> None:
+        html = format_ledger_html(text)
         if clear:
-            self.ledger_view.clear()
-        self.ledger_view.append(text)
+            self.ledger_view.set_html_smart(html)
+        else:
+            self.ledger_view.append_smart(html)
+
+    def begin_assistant_stream(self) -> None:
+        mark_stream_start(self.chat_history)
+
+    def finalize_streamed_message(self, raw_text: str) -> None:
+        finalize_streamed_message(self.chat_history, raw_text)
 
     def refresh_state(self) -> None:
         if not self._worker:
@@ -158,9 +178,4 @@ class AutonomousPage(BaseModePage):
             )
 
     def stream_chat_token(self, token: str) -> None:
-        from PySide6.QtGui import QTextCursor
-
-        cursor = self.chat_history.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertText(token)
-        self.chat_history.setTextCursor(cursor)
+        self.chat_history.insert_text_smart(token)

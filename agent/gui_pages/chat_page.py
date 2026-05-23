@@ -1,8 +1,13 @@
 """Chat-only workspace (single column)."""
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit, QPushButton
-from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton
 
 from gui_pages.base import BaseModePage
+from gui_richtext import (
+    SmartScrollTextEdit,
+    apply_panel_style,
+    finalize_streamed_message,
+    mark_stream_start,
+)
 
 
 class ChatPage(BaseModePage):
@@ -12,8 +17,8 @@ class ChatPage(BaseModePage):
     def __init__(self, main_window):
         super().__init__(main_window)
         layout = QVBoxLayout(self)
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history = SmartScrollTextEdit()
+        apply_panel_style(self.chat_history, "chat", dark=main_window.dark_mode)
         layout.addWidget(self.chat_history)
 
         row = QHBoxLayout()
@@ -39,11 +44,15 @@ class ChatPage(BaseModePage):
         layout.addWidget(self.chat_input)
         layout.addLayout(row)
 
+    def refresh_theme(self, *, dark: bool) -> None:
+        apply_panel_style(self.chat_history, "chat", dark=dark)
+
     def append_chat_html(self, html: str) -> None:
-        self.chat_history.append(html)
+        self.chat_history.append_smart(html)
 
     def clear_chat_display(self) -> None:
         self.chat_history.clear()
+        self.chat_history.reset_scroll_follow()
 
     def get_chat_input_text(self) -> str:
         return self.chat_input.text().strip()
@@ -55,8 +64,12 @@ class ChatPage(BaseModePage):
         self.run_btn.setDisabled(running)
         self.stop_btn.setDisabled(not running)
 
+    def begin_assistant_stream(self) -> None:
+        """Mark where streamed plain text starts (rendered on finish)."""
+        mark_stream_start(self.chat_history)
+
     def stream_chat_token(self, token: str) -> None:
-        cursor = self.chat_history.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertText(token)
-        self.chat_history.setTextCursor(cursor)
+        self.chat_history.insert_text_smart(token)
+
+    def finalize_streamed_message(self, raw_text: str) -> None:
+        finalize_streamed_message(self.chat_history, raw_text)

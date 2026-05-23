@@ -1,7 +1,6 @@
 import sys
 import re
 import threading
-import markdown
 import json
 import os
 import time
@@ -26,6 +25,12 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
 
 from file_parser import process_local_attachments
+from gui_formatting import (
+    format_assistant_message_html,
+    format_sleep_cycle_html,
+    format_system_message_html,
+    format_user_message_html,
+)
 from gui_pages import AutonomousPage, ChatPage, CodeIdePage, StubModePage, BaseModePage, HomePage
 
 # Import Aquila's Brain and Tools
@@ -200,6 +205,21 @@ class AquilaOS(QMainWindow):
         self.main_stack.setCurrentIndex(0)
         self.toggle_theme()
 
+    def _apply_page_themes(self) -> None:
+        for page in (self.chat_page, self.autonomous_page, self.code_page):
+            if hasattr(page, "refresh_theme"):
+                page.refresh_theme(dark=self.dark_mode)
+
+    @staticmethod
+    def _reset_live_scroll_panels(page: BaseModePage) -> None:
+        """Tail-follow on new runs; user can scroll up during execution to freeze view."""
+        from gui_richtext import SmartScrollTextEdit
+
+        for name in ("chat_history", "ledger_view"):
+            widget = getattr(page, name, None)
+            if isinstance(widget, SmartScrollTextEdit):
+                widget.reset_scroll_follow()
+
     def show_home(self) -> None:
         self.main_stack.setCurrentIndex(0)
         self.home_page.refresh_list()
@@ -222,8 +242,10 @@ class AquilaOS(QMainWindow):
             if idx >= 0:
                 self.mode_selector.setCurrentIndex(idx)
         self.main_stack.setCurrentIndex(1)
-        self.chat_page.chat_history.append(
-            f"<b>System:</b> Instance '{instance_id}' active. Select a workspace above."
+        self.chat_page.append_chat_html(
+            format_system_message_html(
+                f"Instance '{instance_id}' active. Select a workspace above."
+            )
         )
 
     def _update_instance_label(self) -> None:
@@ -252,17 +274,40 @@ class AquilaOS(QMainWindow):
         self.dark_mode = not self.dark_mode
         if self.dark_mode:
             self.setStyleSheet("""
-                QWidget { background-color: #1e1e1e; color: #d4d4d4; }
-                QTextEdit, QLineEdit, QPlainTextEdit, QTreeWidget { background-color: #252526;
-                    border: 1px solid #3e3e42; }
-                QPushButton { background-color: #333333; border: 1px solid #3e3e42; padding: 5px; }
+                QWidget { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Segoe UI', sans-serif; }
+                QTextEdit, QLineEdit, QPlainTextEdit, QTreeWidget {
+                    background-color: #252526; border: 1px solid #3e3e42; border-radius: 4px;
+                    padding: 4px; selection-background-color: #264f78;
+                }
+                QLineEdit { padding: 6px 8px; min-height: 1.2em; }
+                QPushButton {
+                    background-color: #333333; border: 1px solid #3e3e42; padding: 6px 12px;
+                    border-radius: 4px;
+                }
                 QPushButton:hover { background-color: #3e3e42; }
-                QTabWidget::pane { border: 1px solid #3e3e42; }
-                QTabBar::tab { background: #252526; padding: 5px 10px; }
+                QPushButton:disabled { color: #6e6e6e; background-color: #2a2a2a; }
+                QTabWidget::pane { border: 1px solid #3e3e42; border-radius: 4px; }
+                QTabBar::tab { background: #252526; padding: 6px 12px; margin-right: 2px; }
                 QTabBar::tab:selected { background: #3e3e42; }
+                QLabel { color: #cccccc; }
+                QComboBox { background: #252526; border: 1px solid #3e3e42; padding: 4px 8px; }
+                QSplitter::handle { background: #3e3e42; width: 3px; }
             """)
         else:
-            self.setStyleSheet("")
+            self.setStyleSheet("""
+                QWidget { font-family: 'Segoe UI', sans-serif; color: #1a1a1a; }
+                QTextEdit, QLineEdit, QPlainTextEdit, QTreeWidget {
+                    background-color: #ffffff; border: 1px solid #d0d7de; border-radius: 4px; padding: 4px;
+                }
+                QLineEdit { padding: 6px 8px; }
+                QPushButton {
+                    background-color: #f6f8fa; border: 1px solid #d0d7de; padding: 6px 12px; border-radius: 4px;
+                }
+                QPushButton:hover { background-color: #eaeef2; }
+                QTabBar::tab { padding: 6px 12px; }
+                QSplitter::handle { background: #d0d7de; width: 3px; }
+            """)
+        self._apply_page_themes()
 
     def open_attachment_dialog(self):
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -297,13 +342,7 @@ class AquilaOS(QMainWindow):
         self.sleep_worker.start()
 
     def sleep_finished(self, result):
-        html_content = markdown.markdown(result, extensions=["fenced_code", "tables"])
-        bubble = (
-            f"<div style='margin-bottom: 20px; padding: 10px; border-left: 4px solid #9b59b6;'>"
-            f"<b style='color: #9b59b6;'>🧠 System (Sleep Cycle):</b><br>"
-            f"<div style='line-height: 1.5;'>{html_content}</div></div>"
-        )
-        self.current_page().append_chat_html(bubble)
+        self.current_page().append_chat_html(format_sleep_cycle_html(result))
         self.sleep_btn.setDisabled(False)
 
     def _infer_resume_mode(self, task_name: str) -> str:
@@ -388,7 +427,9 @@ class AquilaOS(QMainWindow):
         page = self.current_page()
         page.clear_chat_display()
         page.append_chat_html(
-            "<b>System:</b> Chat view cleared; memory preserved for next message."
+            format_system_message_html(
+                "Chat view cleared; memory preserved for next message."
+            )
         )
 
     def prompt_user_input(self, question):
@@ -405,12 +446,11 @@ class AquilaOS(QMainWindow):
         mode_selection = self.mode_selector.currentText()
         clean_prefix = re.sub(r"[^a-zA-Z0-9]", "", "_".join(user_prompt.split()[:3]).lower())
         task_name = f"{clean_prefix}_{int(time.time())}"
-        page.append_chat_html(
-            f"<b>User ({mode_selection}):</b> {user_prompt}"
-        )
+        page.append_chat_html(format_user_message_html(mode_selection, user_prompt))
         page.clear_chat_input()
         page.set_run_buttons_running(True)
         page.update_ledger("", clear=True)
+        self._reset_live_scroll_panels(page)
         self._chat_streaming = mode_flag == "chat"
         self.worker = AgentWorker(
             task_name,
@@ -431,7 +471,8 @@ class AquilaOS(QMainWindow):
         page.bind_worker(worker)
         worker.ask_user_signal.connect(self.prompt_user_input)
         if self._chat_streaming:
-            page.append_chat_html("<b>🦅 Aquila:</b> ")
+            if hasattr(page, "begin_assistant_stream"):
+                page.begin_assistant_stream()
             worker.ledger_signal.connect(page.stream_chat_token)
             worker.finished_signal.connect(self.chat_finished)
         else:
@@ -448,6 +489,9 @@ class AquilaOS(QMainWindow):
 
     def chat_finished(self, result: str) -> None:
         self._chat_streaming = False
+        page = self.current_page()
+        if hasattr(page, "finalize_streamed_message") and result:
+            page.finalize_streamed_message(result)
         if result and self.worker:
             self._chat_history_messages.append(
                 {"role": "user", "content": self.worker.prompt}
@@ -456,10 +500,7 @@ class AquilaOS(QMainWindow):
         self.current_page().set_run_buttons_running(False)
 
     def task_finished(self, result: str) -> None:
-        html_content = markdown.markdown(result, extensions=["fenced_code", "tables"])
-        self.current_page().append_chat_html(
-            f"<b>🦅 Aquila:</b><br>{html_content}"
-        )
+        self.current_page().append_chat_html(format_assistant_message_html(result))
         self.current_page().set_run_buttons_running(False)
         if self.worker and self.worker.mode.lower() != "chat":
             self.current_page().refresh_state()

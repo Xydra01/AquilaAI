@@ -37,8 +37,9 @@ def test_chat_finished_does_not_duplicate_bubble(qtbot, qapp):
     window.mode_selector.setCurrentText("Chat Mode")
     page = window.chat_page
     page.chat_history.clear()
-    page.chat_history.append("<b>🦅 Aquila:</b><br>Hello from stream")
-    before_count = page.chat_history.toHtml().count("Aquila:")
+    page.begin_assistant_stream()
+    page.stream_chat_token("Hello from stream")
+    before_count = page.chat_history.toHtml().count("Aquila")
     window.worker = gui.AgentWorker("chat", "Hello", "chat")
     window.chat_finished("Hello from stream")
     after_html = page.chat_history.toHtml()

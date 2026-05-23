@@ -29,7 +29,10 @@ class DualMemorySystem:
         chroma_dir.mkdir(parents=True, exist_ok=True)
         self.chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
         self.collection = self.chroma_client.get_or_create_collection(name="episodic_experiences")
-        self.tool_collection = self.chroma_client.get_or_create_collection(name="agent_tools")
+        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in self.instance_id)
+        self.tool_collection = self.chroma_client.get_or_create_collection(
+            name=f"agent_tools_{safe_id}"
+        )
         self._tools_indexed = False
 
     def _scratchpad_key(self, task_name: str) -> str:
@@ -67,6 +70,34 @@ class DualMemorySystem:
             ids=ids
         )
         self._tools_indexed = True
+        # #region agent log
+        try:
+            import json as _json
+            import time as _time
+            from pathlib import Path as _Path
+
+            _log = _Path(__file__).resolve().parents[1] / "debug-5063e5.log"
+            with open(_log, "a", encoding="utf-8") as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "5063e5",
+                            "hypothesisId": "H1",
+                            "location": "memory.py:index_tools",
+                            "message": "tools_indexed",
+                            "data": {
+                                "instance_id": self.instance_id,
+                                "collection": self.tool_collection.name,
+                                "count": len(ids),
+                            },
+                            "timestamp": int(_time.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except OSError:
+            pass
+        # #endregion
         print(f"🛠️ System indexed {len(ids)} tools into the semantic router.")
 
     def route_tools(self, objective: str, max_tools: int = 15) -> list[str]:
@@ -146,6 +177,25 @@ class DualMemorySystem:
         for idx, row in enumerate(rows):
             compiled_notes += f"--- Note {idx + 1} ---\n{row[0]}\n\n"
         return compiled_notes
+
+    def list_scratchpad_task_names(self, instance_id: str | None = None) -> list[str]:
+        """Distinct scratchpad keys for this instance (suffix after 'instance::')."""
+        iid = instance_id or self.instance_id
+        prefix = f"{iid}::"
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT task_name FROM scratchpad WHERE task_name LIKE ?",
+                (f"{prefix}%",),
+            )
+            rows = cursor.fetchall()
+        names: list[str] = []
+        for (key,) in rows:
+            if key.startswith(prefix):
+                names.append(key[len(prefix) :])
+            else:
+                names.append(key)
+        return names
 
     def save_workspace_summary_row(
         self, task_name: str, summary_text: str, instance_id: str | None = None
@@ -235,12 +285,21 @@ class DualMemorySystem:
                 query_texts=[query],
                 n_results=min(n_results, self.collection.count()),
             )
-        
-        if not results['documents'] or not results['documents'][0]:
+
+        docs = results.get("documents") or [[]]
+        metas = results.get("metadatas") or [[]]
+        if not docs[0]:
             return "No relevant past experiences found."
-            
+
         recalled = "=== RELEVANT PAST EXPERIENCES ===\n"
-        for idx, doc in enumerate(results['documents'][0]):
-            recalled += f"Memory {idx + 1}: {doc}\n\n"
-            
+        shown = 0
+        for doc, meta in zip(docs[0], metas[0] if metas else [{}] * len(docs[0])):
+            if meta and meta.get("instance_id") not in (None, iid):
+                continue
+            shown += 1
+            recalled += f"Memory {shown}: {doc}\n\n"
+            if shown >= n_results:
+                break
+        if shown == 0:
+            return "No relevant past experiences found."
         return recalled
