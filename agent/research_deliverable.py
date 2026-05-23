@@ -64,31 +64,6 @@ def recover_research_body(
     If the model saved notes under a different slug on the same instance, scan all
     instance scratchpads and pick the best synthesis note.
     """
-    # #region agent log
-    try:
-        import json as _json
-        import time as _time
-        from pathlib import Path as _Path
-
-        _log = _Path(__file__).resolve().parents[1] / "debug-5063e5.log"  # repo root
-        with open(_log, "a", encoding="utf-8") as _f:
-            _f.write(
-                _json.dumps(
-                    {
-                        "sessionId": "5063e5",
-                        "hypothesisId": "H3",
-                        "location": "research_deliverable.py:recover_research_body",
-                        "message": "recover_start",
-                        "data": {"task_name": task_name},
-                        "timestamp": int(_time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-    except OSError:
-        pass
-    # #endregion
-
     candidates: list[str] = []
     names: list[str] = [task_name, *extra_task_names]
     list_fn = getattr(memory, "list_scratchpad_task_names", None)
@@ -113,29 +88,4 @@ def recover_research_body(
             candidates.append(body)
     if not candidates:
         return ""
-    best = max(candidates, key=_score_note)
-    # #region agent log
-    try:
-        import json as _json
-        import time as _time
-        from pathlib import Path as _Path
-
-        _log = _Path(__file__).resolve().parents[1] / "debug-5063e5.log"  # repo root
-        with open(_log, "a", encoding="utf-8") as _f:
-            _f.write(
-                _json.dumps(
-                    {
-                        "sessionId": "5063e5",
-                        "hypothesisId": "H3",
-                        "location": "research_deliverable.py:recover_research_body",
-                        "message": "recover_ok",
-                        "data": {"task_name": task_name, "body_len": len(best)},
-                        "timestamp": int(_time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-    except OSError:
-        pass
-    # #endregion
-    return best
+    return max(candidates, key=_score_note)

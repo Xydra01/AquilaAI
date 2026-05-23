@@ -70,35 +70,7 @@ class DualMemorySystem:
             ids=ids
         )
         self._tools_indexed = True
-        # #region agent log
-        try:
-            import json as _json
-            import time as _time
-            from pathlib import Path as _Path
-
-            _log = _Path(__file__).resolve().parents[1] / "debug-5063e5.log"
-            with open(_log, "a", encoding="utf-8") as _f:
-                _f.write(
-                    _json.dumps(
-                        {
-                            "sessionId": "5063e5",
-                            "hypothesisId": "H1",
-                            "location": "memory.py:index_tools",
-                            "message": "tools_indexed",
-                            "data": {
-                                "instance_id": self.instance_id,
-                                "collection": self.tool_collection.name,
-                                "count": len(ids),
-                            },
-                            "timestamp": int(_time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except OSError:
-            pass
-        # #endregion
-        print(f"🛠️ System indexed {len(ids)} tools into the semantic router.")
+        print(f"System indexed {len(ids)} tools into the semantic router.")
 
     def route_tools(self, objective: str, max_tools: int = 15) -> list[str]:
         """Finds the most relevant tools for the current objective."""
@@ -265,7 +237,7 @@ class DualMemorySystem:
             }],
             ids=[doc_id],
         )
-        print(f"🧠 System encoded episodic memory for: {task_name} [{iid}]")
+        print(f"System encoded episodic memory for: {task_name} [{iid}]")
 
     def recall_experiences(self, query: str, n_results: int = 3, instance_id: str | None = None) -> str:
         """Performs a semantic search to find similar past tasks."""
