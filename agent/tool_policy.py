@@ -112,6 +112,7 @@ def build_allowed_tool_names(
     all_tool_names: set[str],
     objective: str = "",
     user_request: str = "",
+    persona_research_lore: bool = False,
 ) -> set[str]:
     try:
         return _catalog_allowed(
@@ -121,6 +122,7 @@ def build_allowed_tool_names(
             all_names=all_tool_names,
             objective=objective,
             user_request=user_request,
+            persona_research_lore=persona_research_lore,
         )
     except Exception:
         pass

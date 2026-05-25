@@ -28,12 +28,14 @@ from file_parser import process_local_attachments
 from gui_formatting import (
     format_assistant_message_html,
     format_attachment_notice_html,
+    format_character_message_html,
     format_sleep_cycle_html,
     format_system_message_html,
     format_user_message_html,
 )
 from gui_pages import (
     ChatPage,
+    CharacterPage,
     CodeIdePage,
     ResearchPage,
     StubModePage,
@@ -56,6 +58,7 @@ MODE_FLAGS = {
     "Code Mode": "code",
     "Writing Mode": "writing",
     "Research Mode": "research",
+    "Character Mode": "character",
     "Learn Mode": "learn",
 }
 
@@ -74,6 +77,8 @@ class AgentWorker(QThread):
         attached_images=None,
         chat_history=None,
         instance_id=None,
+        persona_id=None,
+        persona_research_lore: bool = False,
     ):
         super().__init__()
         self.task_name = task_name
@@ -84,6 +89,8 @@ class AgentWorker(QThread):
         self.model_user_content = prompt
         self.chat_history = chat_history or []
         self.instance_id = instance_id or get_active_instance_id()
+        self.persona_id = persona_id
+        self.persona_research_lore = persona_research_lore
         self.cancel_flag = False
         self.user_reply = ""
         self.reply_event = threading.Event()
@@ -120,6 +127,34 @@ class AgentWorker(QThread):
                     full_text += token
                     self.ledger_signal.emit(token)
                 self.finished_signal.emit(full_text)
+            elif self.mode.lower() == "character":
+                from main import format_attachment_context
+                from persona_registry import get_persona
+
+                persona = get_persona(self.instance_id, self.persona_id or "")
+                if not persona:
+                    self.finished_signal.emit("❌ Error: Persona not found.")
+                    return
+                attachment_block = format_attachment_context(self.attached_chunks)
+                self.model_user_content = (
+                    f"{self.prompt}{attachment_block}" if attachment_block else self.prompt
+                )
+                generator = agent.run_character_chat(
+                    persona,
+                    user_input=self.prompt,
+                    chat_history=self.chat_history,
+                    image_payloads=self.attached_images,
+                    text_chunks=self.attached_chunks,
+                    stream=True,
+                )
+                full_text = ""
+                for chunk in generator:
+                    if self.cancel_flag:
+                        break
+                    token = chunk.get("message", {}).get("content", "")
+                    full_text += token
+                    self.ledger_signal.emit(token)
+                self.finished_signal.emit(full_text)
             else:
                 res = agent.run_unified_task(
                     self.task_name,
@@ -129,6 +164,7 @@ class AgentWorker(QThread):
                     cancel_check=lambda: self.cancel_flag,
                     text_chunks=self.attached_chunks,
                     image_payloads=self.attached_images,
+                    persona_research_lore=self.persona_research_lore,
                 )
                 self.finished_signal.emit(f"✅ Task Completed:\n{res}")
         except Exception as e:
@@ -227,6 +263,7 @@ class AquilaOS(QMainWindow):
         self.research_page = ResearchPage(self)
         self.writing_page = WritingPage(self)
         self.code_page = CodeIdePage(self)
+        self.character_page = CharacterPage(self)
         self.learn_stub = StubModePage(
             self,
             "Learn Workspace",
@@ -241,6 +278,7 @@ class AquilaOS(QMainWindow):
             "Code Mode": self.code_page,
             "Writing Mode": self.writing_page,
             "Research Mode": self.research_page,
+            "Character Mode": self.character_page,
             "Learn Mode": self.learn_stub,
         }
         for page in (
@@ -249,6 +287,7 @@ class AquilaOS(QMainWindow):
             self.research_page,
             self.writing_page,
             self.code_page,
+            self.character_page,
             self.learn_stub,
         ):
             self.page_stack.addWidget(page)
@@ -264,6 +303,7 @@ class AquilaOS(QMainWindow):
             self.research_page,
             self.writing_page,
             self.code_page,
+            self.character_page,
         ):
             if hasattr(page, "refresh_theme"):
                 page.refresh_theme(dark=self.dark_mode)
@@ -293,6 +333,7 @@ class AquilaOS(QMainWindow):
                 "code": "Code Mode",
                 "writing": "Writing Mode",
                 "research": "Research Mode",
+                "character": "Character Mode",
                 "learn": "Learn Mode",
             }
             label = mode_map.get(inst.default_mode, "Chat Mode")
@@ -479,42 +520,91 @@ class AquilaOS(QMainWindow):
         if not user_prompt:
             return
         mode_flag = self.current_mode_flag()
+        if mode_flag == "character" and isinstance(page, CharacterPage):
+            if page.is_persona_build_view():
+                return
+            if not page.is_streaming_character_chat():
+                return
         mode_selection = self.mode_selector.currentText()
         clean_prefix = re.sub(r"[^a-zA-Z0-9]", "", "_".join(user_prompt.split()[:3]).lower())
         task_name = f"{clean_prefix}_{int(time.time())}"
         display_prompt = user_prompt
-        page.append_chat_html(
-            format_user_message_html(mode_selection, display_prompt)
-            + format_attachment_notice_html(
-                self.attached_file_names,
-                text_chunk_count=len(self.attached_chunks),
-                image_count=len(self.attached_images),
+        if mode_flag == "character" and isinstance(page, CharacterPage):
+            pname = page._active_persona.display_name if page._active_persona else "Character"
+            page.append_chat_html(
+                format_character_message_html(pname, display_prompt, "user")
+                + format_attachment_notice_html(
+                    self.attached_file_names,
+                    text_chunk_count=len(self.attached_chunks),
+                    image_count=len(self.attached_images),
+                )
             )
-        )
+        else:
+            page.append_chat_html(
+                format_user_message_html(mode_selection, display_prompt)
+                + format_attachment_notice_html(
+                    self.attached_file_names,
+                    text_chunk_count=len(self.attached_chunks),
+                    image_count=len(self.attached_images),
+                )
+            )
         page.clear_chat_input()
         page.set_run_buttons_running(True)
         page.update_ledger("", clear=True)
         self._reset_live_scroll_panels(page)
         if hasattr(page, "on_task_started"):
             page.on_task_started()
-        self._chat_streaming = mode_flag == "chat"
+        self._chat_streaming = mode_flag in ("chat", "character")
         chunks = list(self.attached_chunks)
         if hasattr(page, "get_extra_text_chunks"):
             chunks.extend(page.get_extra_text_chunks())
+        chat_history = self._chat_history_messages.copy()
+        persona_id = None
+        if mode_flag == "character" and isinstance(page, CharacterPage):
+            chat_history = page.get_persona_chat_history()
+            persona_id = page.active_persona_id()
         self.worker = AgentWorker(
             task_name,
             user_prompt,
             mode_flag,
             chunks,
             self.attached_images,
-            chat_history=self._chat_history_messages.copy(),
+            chat_history=chat_history,
             instance_id=self.active_instance_id,
+            persona_id=persona_id,
         )
         self.attached_chunks = []
         self.attached_images = []
         self.attached_file_names = []
         if hasattr(page, "attach_button"):
-            page.attach_button.setText("📎 Attach" if mode_flag == "chat" else "📎")
+            page.attach_button.setText("📎 Attach" if mode_flag in ("chat", "character") else "📎")
+        self._wire_worker(self.worker, page)
+
+    def _start_character_build(
+        self,
+        *,
+        task_name: str,
+        prompt: str,
+        chunks: list,
+        images: list,
+        page: CharacterPage,
+        persona_research_lore: bool = False,
+    ) -> None:
+        page.set_run_buttons_running(True)
+        page.update_ledger("", clear=True)
+        self._chat_streaming = False
+        self.worker = AgentWorker(
+            task_name,
+            prompt,
+            "character_build",
+            chunks,
+            images,
+            instance_id=self.active_instance_id,
+            persona_research_lore=persona_research_lore,
+        )
+        self.attached_chunks = []
+        self.attached_images = []
+        self.attached_file_names = []
         self._wire_worker(self.worker, page)
 
     def _wire_worker(self, worker: AgentWorker, page: BaseModePage) -> None:
@@ -546,10 +636,17 @@ class AquilaOS(QMainWindow):
             user_content = getattr(
                 self.worker, "model_user_content", self.worker.prompt
             )
-            self._chat_history_messages.append(
-                {"role": "user", "content": user_content}
-            )
-            self._chat_history_messages.append({"role": "assistant", "content": result})
+            if self.worker.mode.lower() == "character" and isinstance(
+                page, CharacterPage
+            ):
+                page.persist_character_turn(user_content, result)
+            else:
+                self._chat_history_messages.append(
+                    {"role": "user", "content": user_content}
+                )
+                self._chat_history_messages.append(
+                    {"role": "assistant", "content": result}
+                )
         self.current_page().set_run_buttons_running(False)
 
     def task_finished(self, result: str) -> None:

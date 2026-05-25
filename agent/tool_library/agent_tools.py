@@ -40,25 +40,59 @@ def _scratchpad_byte_limit() -> int:
     return max(MAX_SCRATCHPAD_NOTE_BYTES, get_context_profile().scratchpad_bytes)
 
 
+def _utf8_byte_chunks(text: str, max_bytes: int) -> list[str]:
+    """Split text into UTF-8-safe pieces each at most max_bytes."""
+    if max_bytes <= 0:
+        return [text or ""]
+    encoded = (text or "").encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return [text or ""]
+    chunks: list[str] = []
+    pos = 0
+    total = len(encoded)
+    while pos < total:
+        end = min(pos + max_bytes, total)
+        piece = encoded[pos:end]
+        while piece:
+            try:
+                chunks.append(piece.decode("utf-8"))
+                pos += len(piece)
+                break
+            except UnicodeDecodeError:
+                piece = piece[:-1]
+        else:
+            break
+    return chunks
+
+
 def save_research_note(task_name: str, gathered_data: str) -> str:
     """
     CRITICAL RESEARCH TOOL: Use this to save facts, URLs, outlines, and data you find.
     Instead of trying to hold information in your head, save it to your SQLite scratchpad.
+    Large payloads are split into multiple scratchpad rows (no silent truncation).
     """
     data = gathered_data or ""
-    truncated = False
     limit = _scratchpad_byte_limit()
-    encoded = data.encode("utf-8")
-    if len(encoded) > limit:
-        data = encoded[:limit].decode("utf-8", errors="ignore")
-        truncated = True
-    result = get_active_memory().save_scratchpad_note(task_name, data)
-    if truncated:
-        return (
-            f"{result}\n⚠️ OS NOTE: gathered_data was truncated to {limit} "
-            "bytes to prevent JSON parse failures. Save smaller chunks."
-        )
-    return result
+    chunks = _utf8_byte_chunks(data, limit)
+    memory = get_active_memory()
+    if len(chunks) <= 1:
+        return memory.save_scratchpad_note(task_name, chunks[0] if chunks else "")
+
+    total_bytes = len(data.encode("utf-8"))
+    saved = 0
+    last_result = ""
+    for index, chunk in enumerate(chunks, start=1):
+        header = f"[scratchpad chunk {index}/{len(chunks)}]\n"
+        payload = header + chunk
+        if len(payload.encode("utf-8")) > limit:
+            payload = chunk
+        last_result = memory.save_scratchpad_note(task_name, payload)
+        saved += 1
+    return (
+        f"✅ Saved {saved} scratchpad chunks for task: {task_name} "
+        f"({total_bytes} bytes total; {limit} bytes max per chunk). "
+        "Use read_all_research_notes to read them in order."
+    )
 
 def subagent_explore(user_request: str, mode: str = "code") -> str:
     """

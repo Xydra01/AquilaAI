@@ -147,6 +147,27 @@ def format_attachment_notice_html(
     )
 
 
+def format_character_message_html(
+    persona_name: str,
+    text: str,
+    role: str,
+) -> str:
+    """In-character chat bubbles (distinct from professional Chat Mode)."""
+    safe_name = html.escape(persona_name or "Character")
+    body = _fences_to_html(text or "")
+    if role == "user":
+        return (
+            '<div class="msg user character">'
+            '<span class="msg-label">You</span>'
+            f'<div class="msg-body">{body}</div></div>'
+        )
+    return (
+        f'<div class="msg assistant character">'
+        f'<span class="msg-label">{safe_name}</span>'
+        f'<div class="msg-body">{body}</div></div>'
+    )
+
+
 def format_assistant_message_html(text: str) -> str:
     body = _fences_to_html(text or "")
     return (

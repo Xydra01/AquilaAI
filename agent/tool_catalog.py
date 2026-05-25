@@ -14,7 +14,7 @@ TOOL_ALIASES: dict[str, str] = {
 
 INTERNAL_TOOL_NAMES = frozenset({"_index_codebase"})
 
-ALL_MODES = frozenset({"task", "code", "research", "writing", "autonomous"})
+ALL_MODES = frozenset({"task", "code", "research", "writing", "autonomous", "character_build"})
 
 STEP_KINDS_ALL = frozenset({
     "explore", "search", "read", "code", "verify", "synthesize", "write",
@@ -119,8 +119,24 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "save_task_deliverable": _spec("save_task_deliverable", "deliver", "Save Agent-Creations/Research file", modes=ALL_MODES),
     "mark_objective_complete": _spec("mark_objective_complete", "meta", "Complete current plan step", modes=ALL_MODES),
     "finish_task": _spec("finish_task", "meta", "End entire task", modes=ALL_MODES),
-    "web_search": _spec("web_search", "web", "Web search", modes=frozenset({"research", "task", "autonomous"})),
-    "read_webpage": _spec("read_webpage", "web", "Fetch URL", modes=frozenset({"research", "task", "autonomous"})),
+    "web_search": _spec(
+        "web_search", "web", "Web search",
+        modes=frozenset({"research", "task", "autonomous", "character_build"}),
+    ),
+    "read_webpage": _spec(
+        "read_webpage", "web", "Fetch URL",
+        modes=frozenset({"research", "task", "autonomous", "character_build"}),
+    ),
+    "write_persona_file": _spec(
+        "write_persona_file", "persona",
+        "Write initialization.md or notes under persona build dir",
+        modes=frozenset({"character_build"}),
+    ),
+    "finalize_persona": _spec(
+        "finalize_persona", "persona",
+        "Save greeting and complete persona build",
+        modes=frozenset({"character_build"}),
+    ),
 }
 
 # Step-kind allowlists (canonical tool names)
@@ -156,6 +172,7 @@ STEP_KIND_TOOLS: dict[str, frozenset[str]] = {
         "compile_final_document", "write_project_markdown", "append_project_markdown",
         "save_task_deliverable", "finish_task", "save_research_note",
         "read_file", "read_file_smart", "read_file_region",
+        "write_persona_file", "finalize_persona",
     }),
     "tdd_red": frozenset({"run_pytest", "create_buffer_file", "replace_lines", "read_code_outline", "read_file_region"}),
     "tdd_green": frozenset({
@@ -174,7 +191,47 @@ MODE_REQUIRED: dict[str, frozenset[str]] = {
     }),
     "research": frozenset({"web_search", "read_webpage", "save_research_note", "read_all_research_notes"}),
     "writing": frozenset({"init_document", "write_section", "read_outline", "compile_final_document"}),
+    "character_build": frozenset({
+        "web_search", "read_webpage", "save_research_note",
+        "write_persona_file", "finalize_persona",
+    }),
 }
+
+# Persona build: strict per-step tool sets (ignore semantic router extras).
+CHARACTER_BUILD_READ_TOOLS = frozenset({
+    "save_research_note",
+})
+
+CHARACTER_BUILD_SEARCH_TOOLS = frozenset({
+    "web_search",
+    "read_webpage",
+    "save_research_note",
+})
+
+CHARACTER_BUILD_SYNTHESIZE_TOOLS = frozenset({
+    "read_all_research_notes",
+    "write_persona_file",
+})
+
+CHARACTER_BUILD_FINALIZE_TOOLS = frozenset({
+    "finalize_persona",
+})
+
+# Generic workspace file tools must not write initialization.md during persona build.
+CHARACTER_BUILD_FORBIDDEN_FILE_TOOLS = frozenset({
+    "write_file",
+    "replace_in_file",
+    "replace_lines",
+    "apply_patch",
+    "apply_unified_patch",
+    "replace_symbol",
+    "write_project_markdown",
+    "append_project_markdown",
+    "read_file",
+    "read_file_smart",
+    "read_file_lines",
+    "read_file_region",
+})
 
 
 def resolve_tool_name(name: str) -> tuple[str, str | None]:
@@ -209,6 +266,11 @@ def get_mode_playbook(mode: str) -> str:
         lines.append("web_search then save_research_note; synthesize on finalize with final_report.")
     elif mode == "writing":
         lines.append("init_document, write_section, compile_final_document.")
+    elif mode == "character_build":
+        lines.append(
+            "Ingest attachments via save_research_note; optional web_search. "
+            "write_persona_file initialization.md (rich character bible), then finalize_persona."
+        )
     else:
         lines.append("grep_repo and read_file_smart for files; save_research_note for progress.")
     lines.append("Work continuously across tool results until the step objective is done.")
@@ -245,12 +307,28 @@ def allowed_tools_for_step(
     all_names: set[str],
     objective: str = "",
     user_request: str = "",
+    persona_research_lore: bool = False,
 ) -> set[str]:
     from recon_policy import pinned_tools_for_code_step
 
+    meta = frozenset({"mark_objective_complete", "finish_task"})
+
+    if mode == "character_build":
+        if step_kind == "search" and persona_research_lore:
+            pool = CHARACTER_BUILD_SEARCH_TOOLS | meta
+        elif step_kind == "read":
+            pool = CHARACTER_BUILD_READ_TOOLS | meta
+        elif step_kind == "synthesize":
+            pool = CHARACTER_BUILD_SYNTHESIZE_TOOLS | meta
+        elif step_kind == "finalize":
+            pool = CHARACTER_BUILD_FINALIZE_TOOLS | meta
+        else:
+            pool = set(routed) | MODE_REQUIRED.get(mode, frozenset()) | meta
+        return {n for n in pool if n in all_names or n in TOOL_ALIASES}
+
     allowed = set(routed)
+    allowed |= meta
     allowed |= MODE_REQUIRED.get(mode, frozenset())
-    allowed |= {"mark_objective_complete", "finish_task"}
 
     filt = STEP_KIND_TOOLS.get(step_kind)
     names_ok = all_names | set(TOOL_ALIASES.keys())

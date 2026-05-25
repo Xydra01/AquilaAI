@@ -1,6 +1,6 @@
 # Aquila OS 3.4 — Codebase Architecture (Detailed)
 
-This repository implements **Aquila OS 3.4**: a **local-first autonomous AI agent** that talks to **Ollama** (custom model `aquila`, based on Qwen 3.5 9B), runs **strict JSON tool-calling**, persists work in **filesystem ledgers**, and uses **dual memory** (SQLite facts + ChromaDB episodic search). The primary UI is a **PySide6 desktop app** with **per-mode workspaces** and **multi-instance** profiles. A legacy **Streamlit** app lives under `agent/legacy/` and is not maintained.
+This repository implements **Aquila OS 3.4**: a **local-first autonomous AI agent** that talks to **Ollama** (custom model `aquila`, based on Qwen 3.5 9B), runs **strict JSON tool-calling**, persists work in **filesystem ledgers**, and uses **dual memory** (SQLite facts + ChromaDB episodic search). The primary UI is a **PySide6 desktop app** with **per-mode workspaces** (Chat, Task, Research, Writing, Code, **Character AI**) and **multi-instance** profiles. **Character AI (CAI)** adds persona build + in-character roleplay without cloud APIs. A legacy **Streamlit** app lives under `agent/legacy/` and is not maintained.
 
 See **[README.md](README.md)** for setup, usage, and release notes. Dependencies are listed in **`requirements.txt`** at the repo root; there is no `pyproject.toml` yet.
 
@@ -13,7 +13,9 @@ agent-projects/
 ├── agent/                    # Entire application (Python package by convention)
 │   ├── main.py               # Brain: Agent, OllamaClient, tool loop, sleep cycle
 │   ├── gui.py                # Primary UI (PySide6), AgentWorker, ChatSubcallWorker
-│   ├── gui_pages/            # Chat, Task, Research, Writing, Code, Home, Learn stub
+│   ├── gui_pages/            # Chat, Task, Research, Writing, Code, Character, Home, Learn stub
+│   ├── persona_registry.py   # CAI personas, chat history, preferences
+│   ├── tool_library/persona_tools.py  # write_persona_file, finalize_persona
 │   ├── gui_widgets/          # AgentRail, ExecutionLogPanel
 │   ├── gui_theme.py          # Global + panel styles
 │   ├── gui_state.py          # Ledger HTML renderers
@@ -55,7 +57,7 @@ All durable Aquila state lives at the **repository root** (`agent-projects/`), r
 | `Agent-Logs/` | Per-session execution logs (`RunLogger`) |
 | `Agent-Memory/` | SQLite `fact_graph.db` |
 | `Agent-Code/` | Code-mode buffer (`active_code_state.json`) + synced project trees |
-| `Agent-Instances/` | Per-instance profiles, workspace summaries, conversation archives |
+| `Agent-Instances/` | Per-instance profiles, workspace summaries, conversation archives, **`personas/{id}/`** (CAI) |
 | `vector_db/` | ChromaDB (episodic memory, tool routing, codebase index) |
 
 Override root for tests: `AQUILA_DATA_ROOT=/tmp/...`. Skip one-time migration: `AQUILA_SKIP_MIGRATE=1`.
@@ -137,7 +139,7 @@ Running `import main` or launching the GUI **always** connects to Ollama and ind
 
 ## 4. Operational modes
 
-Aquila exposes **five operational modes** (+ Learn stub in GUI):
+Aquila exposes **six operational modes** (+ Learn stub in GUI):
 
 | Mode | UI flag | System prompt | Ledger file | Output dirs |
 |------|---------|---------------|-------------|-------------|
@@ -146,7 +148,15 @@ Aquila exposes **five operational modes** (+ Learn stub in GUI):
 | **Research** | `research` | `get_research_prompt` | `Agent-Plans/{name}.json` | `Agent-Research/` |
 | **Writing** | `writing` | `get_writing_prompt` | `Agent-Tasks/{name}.json` + `Agent-Drafts/active_draft_state.json` | `compile_final_document` → `Agent-Drafts/*.md` |
 | **Code** | `code` | `get_code_prompt` | `Agent-Tasks/{name}.json` + `Agent-Code/active_code_state.json` | `sync_project_to_disk` → project tree |
+| **Character AI** | `character` / `character_build` | `get_character_prompt` / `get_persona_build_prompt` | Build: `Agent-Tasks/persona_build_{id}.json` | `Agent-Instances/{instance}/personas/{id}/` |
 | **Learn** | `learn` | _(none — stub)_ | None | Planned 3.5 |
+
+**Character AI** splits into two runtime paths:
+
+- **Chat** (`run_character_chat`) — streaming only; system prompt = bible + user prefs + scene-agency rules; history in `chat_history.json` (not global GUI chat list).
+- **Build** (`run_unified_task`, `mode="character_build"`) — tool loop: ingest → synthesize `initialization.md` → `finalize_persona`; optional **4-step** plan when GUI passes `persona_research_lore=True` (search step gets `web_search` / `read_webpage`).
+
+See [`docs/cai-mode.md`](docs/cai-mode.md).
 
 Inter-modal automation is noted as **“in development”** in prompts; the Task workspace UI reserves a **mode stack** column for future orchestration.
 
@@ -451,6 +461,7 @@ Mode-specific rules:
 - **Writing:** draft buffer lifecycle; `compile_final_document` on finalize; never dump full doc into `final_report`
 - **Code:** TDD canvas tools, project scope, recon policy; pytest/flake8 on verify steps
 - **Chat:** natural language; inject facts + episodic memory; explicitly deny “no memory”
+- **Character AI:** `get_character_prompt` — bible + prefs, no `MODES_ROSTER`, no tools; `get_persona_build_prompt` for build-only tool loop
 - **Research:** honors `--- HUMAN RESEARCH NOTES ---` when injected from GUI journal
 
 ---
@@ -469,13 +480,14 @@ Mode-specific rules:
 | Research | `research_page.py` | Rail + SearXNG search/reader + journal + log/tracker |
 | Writing | `writing_page.py` | Home (doc list) ↔ Canvas (markdown + preview + rail) |
 | Code | `code_ide_page.py` | Toolbar, tree, **editable** tabs, rail, patches, lint/pytest strip |
+| Character AI | `character_page.py` | Persona home, create/build log, in-character chat + user prefs panel |
 | Learn | `stub_page.py` | Placeholder (3.5) |
 
 Shared: [`gui_widgets/agent_rail.py`](agent/gui_widgets/agent_rail.py), [`execution_log_panel.py`](agent/gui_widgets/execution_log_panel.py), [`gui_formatting.py`](agent/gui_formatting.py), [`gui_richtext.py`](agent/gui_richtext.py) (`SmartScrollTextEdit`, stream finalize).
 
 **Threads:**
 
-- `AgentWorker` — `run_chat` or `run_unified_task`; signals `ledger_signal`, `finished_signal`, `ask_user_signal`
+- `AgentWorker` — `run_chat`, `run_character_chat`, or `run_unified_task` (incl. `character_build` + `persona_research_lore`); signals `ledger_signal`, `finished_signal`, `ask_user_signal`
 - `ChatSubcallWorker` — one-shot `run_chat` for selection edits (Writing/Code)
 - `SleepWorker` — `initiate_sleep_cycle`
 
@@ -536,6 +548,26 @@ User prompt (+ optional images)
   → finished_signal → full text (no checkmark prefix)
 ```
 
+### Character AI — persona build
+
+```
+Create persona (GUI) → persona_build_{id} task
+  → run_unified_task(mode=character_build, persona_research_lore=?)
+  → set_active_persona_build → LoopEngine
+  → plan: 3 steps (read/synthesize/finalize) or 4 steps (+ search if lore)
+  → write_persona_file('initialization.md') → finalize_persona
+  → Agent-Instances/{instance}/personas/{id}/ ready
+```
+
+### Character AI — in-character chat
+
+```
+User message (+ optional attachments)
+  → execute_task (Character page) → persona chat_history (not _chat_history_messages)
+  → run_character_chat(persona, text_chunks, image_payloads)
+  → stream → persist_character_turn → chat_history.json
+```
+
 ### Sleep cycle
 
 ```
@@ -558,7 +590,8 @@ SleepWorker → initiate_sleep_cycle
 | Research | `test_research_deliverable.py`, `test_research_journal.py`, `test_web_enrichment.py` |
 | Writing | `test_writing_tools.py`, `test_writing_canvas.py` |
 | Instances / memory | `test_instance_registry.py`, `test_memory_instance_scope.py`, `test_memory_tool_isolation.py` |
-| GUI / workspaces | `test_gui.py`, `test_gui_*_page.py`, `test_gui_state_tracker.py`, `test_gui_formatting.py`, `test_gui_smart_scroll.py` |
+| GUI / workspaces | `test_gui.py`, `test_gui_*_page.py`, `test_gui_character_page.py`, `test_gui_state_tracker.py`, `test_gui_formatting.py`, `test_gui_smart_scroll.py` |
+| Character AI | `test_persona_registry.py`, `test_persona_tools.py`, `test_character_prompt.py`, `test_character_chat.py`, `test_character_build_ingest.py`, `test_character_chat_isolation.py`, `test_gui_character_worker.py` |
 | Live Ollama | `test_live_ollama.py`, `test_live_context_smoke.py` (marker `live`) |
 
 Run from `agent/`: `pytest tests/ -q`. See README § Testing. Manual checklist: `docs/workspace-qa-3.4.md`.
@@ -686,6 +719,7 @@ flowchart TB
     Stack --> ResearchPage[ResearchPage]
     Stack --> WritingPage[WritingPage]
     Stack --> CodeIDE[CodeIdePage]
+    Stack --> CharacterPage[CharacterPage]
     Stack --> LearnStub[Learn stub]
 ```
 
@@ -706,6 +740,21 @@ flowchart TB
 **Task** (`task_page.py`): Plan list + future mode-stack placeholder; generic output preview.
 
 **Code IDE** (`code_ide_page.py`): Editable `QPlainTextEdit` tabs, `apply_user_buffer_edit`, tree→tab navigation, patch conflict warning.
+
+**Character AI** (`character_page.py`, `persona_registry.py`, `persona_tools.py`):
+
+| Piece | Role |
+|-------|------|
+| `persona_registry.py` | `Persona` dataclass, CRUD, `initialization.md`, `user_preferences.md`, `chat_history.json` |
+| `persona_tools.py` | `write_persona_file` (canonical path only), `finalize_persona`, active build session |
+| `character_page.py` | Home / Create / Chat stack; Research lore checkbox → `persona_research_lore` |
+| `get_character_prompt` | Injects bible + prefs + scene-agency rules; no tools |
+| `get_persona_build_prompt` | Build-only; strict step tool allowlists via `tool_catalog` |
+| `tool_catalog` | `CHARACTER_BUILD_*_TOOLS` per step; search pool when lore enabled |
+
+Personas live at `Agent-Instances/{instance_id}/personas/{persona_id}/`. Chat temperature: `AQUILA_CHARACTER_TEMP` (default 0.8).
+
+Docs: [`docs/cai-mode.md`](docs/cai-mode.md), [`docs/release-3.4-cai.md`](docs/release-3.4-cai.md), QA [`docs/workspace-qa-cai.md`](docs/workspace-qa-cai.md).
 
 **Future:** Learn (LMS-style) — **3.5**.
 
@@ -752,6 +801,7 @@ On VRAM/read timeout at high context, the loop may run one in-step compress + re
 | Task State Tracker | `gui_state`: autonomous, research, writing, **code** (`render_code_canvas_html`) |
 | Code Mode | `code_canvas_tools.py`, `language_registry.py`, `gui_pages/code_ide_page.py` |
 | Mode workspaces | `gui_pages/` + `QStackedWidget` in `gui.py` (3.4) |
+| Character AI | `persona_registry.py`, `character_page.py`, `persona_tools.py`, `character_build` mode |
 | Memory | `get_memory(instance_id)` per instance; `aquila_memory` alias for `default` |
 | `_index_codebase` | Excluded from strict schema / executable tools |
 | Dependencies | `requirements.txt` at repo root |
@@ -781,9 +831,10 @@ On VRAM/read timeout at high context, the loop may run one in-step compress + re
 | How are tools registered? | `agent/tools.py`, `agent/tool_library/__init__.py` |
 | How is memory stored? | `agent/memory.py` |
 | What does the model see? | `agent/prompts.py` |
+| Character AI / personas? | `agent/persona_registry.py`, `agent/gui_pages/character_page.py`, `docs/cai-mode.md` |
 | How do I run it? | `start.sh`, `agent/gui.py` |
 | What’s tested? | `agent/tests/` |
 
 ---
 
-This is a **single-package autonomous agent framework**: Ollama for inference, a merged tool registry with strict JSON calling and per-step routing, file-based step ledgers for long tasks, dual memory for chat and consolidation, multi-instance isolation, and a PySide6 workspace shell as the intended daily driver.
+This is a **single-package autonomous agent framework**: Ollama for inference, a merged tool registry with strict JSON calling and per-step routing, file-based step ledgers for long tasks, dual memory for chat and consolidation, multi-instance isolation, **Character AI** for local roleplay personas, and a PySide6 workspace shell as the intended daily driver.

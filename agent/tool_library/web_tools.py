@@ -10,7 +10,7 @@ import io
 
 import cloudscraper
 
-import fitz
+from pdf_text import extract_pdf_text
 
 import markdownify
 
@@ -169,17 +169,7 @@ def read_webpage(url: str, max_chars: int | None = None) -> str:
 
         if "application/pdf" in content_type or url.lower().endswith(".pdf"):
 
-            pdf_stream = io.BytesIO(response.content)
-
-            doc = fitz.open(stream=pdf_stream, filetype="pdf")
-
-            pdf_text = ""
-
-            for page in doc:
-
-                pdf_text += page.get_text()
-
-
+            pdf_text = extract_pdf_text(response.content)
 
             if len(pdf_text) > cap:
 

@@ -8,6 +8,7 @@ MODE_ACCENTS: dict[str, str] = {
     "writing": "#27ae60",
     "code": "#3498db",
     "learn": "#95a5a6",
+    "character": "#e84393",
 }
 
 SPLITTER_DEFAULTS: dict[str, list[int]] = {

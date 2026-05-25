@@ -30,6 +30,8 @@ from prompts import (
     get_writing_prompt,
     get_code_prompt,
     get_chat_prompt,
+    get_character_prompt,
+    get_persona_build_prompt,
 )
 
 # Tools imports
@@ -856,6 +858,7 @@ class Agent:
         self.RESEARCH_PROMPT = get_research_prompt(tool_docs) + addendum
         self.WRITING_PROMPT = get_writing_prompt(tool_docs) + addendum
         self.CODE_PROMPT = get_code_prompt(tool_docs) + addendum
+        self.PERSONA_BUILD_PROMPT = get_persona_build_prompt(tool_docs) + addendum
         self.action_schema = build_strict_schema(tools)
 
     def _system_prompt_for_mode(self, mode: str) -> str:
@@ -865,7 +868,67 @@ class Agent:
             return self.WRITING_PROMPT
         if mode == "code":
             return self.CODE_PROMPT
+        if mode == "character_build":
+            return self.PERSONA_BUILD_PROMPT
         return self.master_prompt
+
+    def run_character_chat(
+        self,
+        persona,
+        user_input: str,
+        chat_history: list,
+        *,
+        image_payloads=None,
+        text_chunks=None,
+        stream: bool = True,
+    ):
+        from persona_registry import load_initialization_doc, load_user_preferences
+
+        init_doc = load_initialization_doc(self.instance_id, persona.id)
+        user_prefs = load_user_preferences(self.instance_id, persona.id)
+        system_prompt = get_character_prompt(
+            init_doc, user_prefs, persona.display_name
+        )
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(chat_history)
+
+        attachment_block = format_attachment_context(text_chunks)
+        full_text = user_input
+        if attachment_block:
+            full_text = f"{user_input}{attachment_block}"
+
+        if image_payloads:
+            content_list = [{"type": "text", "text": full_text}]
+            for img_b64 in image_payloads:
+                prefix = "data:image/jpeg;base64,"
+                clean_b64 = img_b64.split(",", 1)[-1] if "," in img_b64 else img_b64
+                content_list.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"{prefix}{clean_b64}"},
+                })
+            user_msg = {"role": "user", "content": content_list}
+        else:
+            user_msg = {"role": "user", "content": full_text}
+        messages.append(user_msg)
+
+        temp = float(os.getenv("AQUILA_CHARACTER_TEMP", "0.8"))
+        return self.client.chat(messages, temperature=temp, stream=stream)
+
+    def summarize_user_preferences(self, history_snippet: str) -> str:
+        """Extract bullet notes about the user from recent chat (non-streaming)."""
+        prompt = f"""From this roleplay chat excerpt, list 1-5 short bullet facts the CHARACTER would remember about the USER
+(habits, name, preferences, boundaries, ongoing plot). No preamble. Bullets only.
+
+{history_snippet[:6000]}
+"""
+        resp = self.client.chat(
+            [{"role": "user", "content": prompt}],
+            temperature=0.3,
+            stream=False,
+        )
+        if isinstance(resp, dict):
+            return (resp.get("message", {}) or {}).get("content", "") or ""
+        return str(resp)
 
     def run_chat(
         self,
@@ -914,6 +977,7 @@ class Agent:
         image_payloads: list = None,
         *,
         explore_brief_ran: bool = False,
+        persona_research_lore: bool = False,
     ) -> str:
         from plan_validator import BUDGET_RUBRIC, STEP_KINDS
 
@@ -975,6 +1039,41 @@ class Agent:
                 '{"status": "pending", "description": "Draft section 1", '
                 '"step_kind": "write", "max_iterations": 5}'
             )
+        elif mode == "character_build":
+            role_desc = "You are Aquila's Character AI persona build planner."
+            if persona_research_lore:
+                objectives = (
+                    "Produce exactly 4 steps: (1) search — web_search / read_webpage / save_research_note "
+                    "for lore; (2) read — merge attachments via save_research_note only; "
+                    "(3) synthesize — write_persona_file ONCE for initialization.md; "
+                    "(4) finalize — finalize_persona then finish_task. "
+                    "Never put write_persona_file before synthesize."
+                )
+                example_step = (
+                    '{"status": "pending", "description": "Web search for character lore", '
+                    '"step_kind": "search", "max_iterations": 5}, '
+                    '{"status": "pending", "description": "Ingest attachments via save_research_note", '
+                    '"step_kind": "read", "max_iterations": 4}, '
+                    '{"status": "pending", "description": "write_persona_file initialization.md once", '
+                    '"step_kind": "synthesize", "max_iterations": 4}, '
+                    '{"status": "pending", "description": "finalize_persona + finish_task", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
+            else:
+                objectives = (
+                    "Produce exactly 3 steps: (1) read — save_research_note ONLY, "
+                    "NO write_persona_file; (2) synthesize — write_persona_file ONCE for initialization.md; "
+                    "(3) finalize — finalize_persona then finish_task. "
+                    "Never put write_persona_file on the read step."
+                )
+                example_step = (
+                    '{"status": "pending", "description": "Ingest user text and attachments via save_research_note", '
+                    '"step_kind": "read", "max_iterations": 4}, '
+                    '{"status": "pending", "description": "Synthesize initialization.md once via write_persona_file", '
+                    '"step_kind": "synthesize", "max_iterations": 4}, '
+                    '{"status": "pending", "description": "finalize_persona + finish_task", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
         elif mode == "code":
             from recon_policy import is_documentation_task
 
@@ -1115,6 +1214,7 @@ class Agent:
                     mode,
                     user_request,
                     explore_brief_ran=explore_brief_ran,
+                    persona_research_lore=persona_research_lore,
                 )
                 if tune_notes:
                     console.print("[cyan]📋 Plan tuning:[/cyan]")
@@ -1126,9 +1226,28 @@ class Agent:
                 
         raise Exception("Fatal: LLM failed to generate a valid JSON plan after 3 attempts.")
 
-    def run_unified_task(self, task_name: str, user_request: str, mode: str = "task", ui_callback=None, cancel_check=None, text_chunks: list = None, image_payloads: list = None) -> str:
+    def run_unified_task(
+        self,
+        task_name: str,
+        user_request: str,
+        mode: str = "task",
+        ui_callback=None,
+        cancel_check=None,
+        text_chunks: list = None,
+        image_payloads: list = None,
+        *,
+        persona_research_lore: bool = False,
+    ) -> str:
         system_prompt = self._system_prompt_for_mode(mode)
-        if mode == "research":
+        persona_build_id = None
+        if mode == "character_build":
+            from persona_registry import persona_dir
+            from tool_library.persona_tools import set_active_persona_build
+
+            persona_build_id = task_name.replace("persona_build_", "", 1)
+            set_active_persona_build(self.instance_id, persona_build_id)
+            working_dir = persona_dir(self.instance_id, persona_build_id)
+        elif mode == "research":
             working_dir = agent_data_path("Agent-Research")
         elif mode == "writing":
             working_dir = agent_data_path("Agent-Drafts")
@@ -1149,6 +1268,8 @@ class Agent:
             mode_label = "Writing Task"
         elif mode == "code":
             mode_label = "Code Mode (TDD)"
+        elif mode == "character_build":
+            mode_label = "Character AI — Persona Build"
         else:
             mode_label = "Autonomous Task"
         
@@ -1157,7 +1278,12 @@ class Agent:
         
         ledger_text = f"Initializing {mode.title()} Engine for: {task_name}\n"
         
-        if not os.path.exists(task_file):
+        if not os.path.exists(task_file) or mode == "character_build":
+            if mode == "character_build" and os.path.exists(task_file):
+                try:
+                    os.remove(task_file)
+                except OSError:
+                    pass
             from context_budget import get_context_profile
 
             profile = get_context_profile()
@@ -1202,6 +1328,7 @@ class Agent:
                 text_chunks,
                 image_payloads,
                 explore_brief_ran=explore_brief_ran,
+                persona_research_lore=persona_research_lore,
             )
             with open(task_file, "w", encoding="utf-8") as f:
                 f.write(plan_json)
@@ -1244,8 +1371,9 @@ class Agent:
             memory=self.memory,
             base_tools=self.base_tools,
             human_research_notes=human_notes,
+            persona_research_lore=persona_research_lore,
         )
-        return engine.run(
+        result = engine.run(
             task_name=task_name,
             user_request=user_request,
             task_file=task_file,
@@ -1254,6 +1382,11 @@ class Agent:
             text_chunks=text_chunks,
             image_payloads=image_payloads,
         )
+        if mode == "character_build":
+            from tool_library.persona_tools import clear_active_persona_build
+
+            clear_active_persona_build()
+        return result
 
 _agent_instances: dict[str, Agent] = {}
 _data_layout_ready = False

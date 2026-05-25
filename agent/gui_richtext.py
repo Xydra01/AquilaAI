@@ -178,14 +178,20 @@ def _maybe_scroll_chat(chat_widget) -> None:
             chat_widget._scroll_to_bottom()
 
 
-def finalize_streamed_message(chat_widget, raw_text: str) -> None:
+def finalize_streamed_message(
+    chat_widget,
+    raw_text: str,
+    *,
+    html_formatter=None,
+) -> None:
     """Replace streamed plain text with rendered markdown/HTML."""
+    render = html_formatter or format_assistant_message_html
     start = chat_widget.property("_stream_start_pos")
     if start is None:
         if isinstance(chat_widget, SmartScrollTextEdit):
-            chat_widget.append_smart(format_assistant_message_html(raw_text))
+            chat_widget.append_smart(render(raw_text))
         else:
-            chat_widget.append(format_assistant_message_html(raw_text))
+            chat_widget.append(render(raw_text))
         chat_widget.setProperty("_stream_start_pos", None)
         _maybe_scroll_chat(chat_widget)
         return
@@ -198,7 +204,7 @@ def finalize_streamed_message(chat_widget, raw_text: str) -> None:
         cursor.setPosition(start)
         cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
         cursor.removeSelectedText()
-    rendered = format_assistant_message_html(raw_text)
+    rendered = render(raw_text)
     cursor.insertHtml(rendered)
     chat_widget.setTextCursor(cursor)
     chat_widget.setProperty("_stream_start_pos", None)

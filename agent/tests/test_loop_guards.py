@@ -101,15 +101,15 @@ def test_normalize_workspace_path_collapses_doubled_agent():
     assert normalize_workspace_path("agent/agent/tests/foo.py") == "agent/tests/foo.py"
 
 
-def test_save_research_note_truncates_large_payload(monkeypatch):
+def test_save_research_note_splits_large_payload_into_chunks(monkeypatch):
     from context_budget import set_runtime_context
     from tool_library import agent_tools as at
 
     set_runtime_context("aquila", 8192)
-    saved = {}
+    saved_notes: list[str] = []
 
     def fake_save(task_name, note):
-        saved["note"] = note
+        saved_notes.append(note)
         return "ok"
 
     mock_mem = type("M", (), {})()
@@ -117,8 +117,15 @@ def test_save_research_note_truncates_large_payload(monkeypatch):
     monkeypatch.setattr(at, "get_active_memory", lambda: mock_mem)
     big = "x" * (MAX_SCRATCHPAD_NOTE_BYTES + 500)
     result = save_research_note("task1", big)
-    assert "truncated" in result.lower()
-    assert len(saved["note"].encode("utf-8")) <= MAX_SCRATCHPAD_NOTE_BYTES + 100
+    assert "scratchpad chunks" in result.lower()
+    assert len(saved_notes) >= 2
+    for note in saved_notes:
+        assert len(note.encode("utf-8")) <= MAX_SCRATCHPAD_NOTE_BYTES + 64
+    rejoined = "".join(
+        n.split("\n", 1)[-1] if n.startswith("[scratchpad chunk") else n
+        for n in saved_notes
+    )
+    assert len(rejoined) == len(big)
 
 
 def test_loop_engine_duplicate_warning_at_two():

@@ -73,12 +73,15 @@ MODE_MIN_STEPS: dict[str, int] = {
     "task": 2,
     "autonomous": 2,
     "code": 4,
+    "character_build": 3,
 }
 
 TDD_KEYWORDS = ("implement", "build", "feature", "fix bug", "add ", "create ", "tdd", "pytest")
 
 MAX_STEP_DESCRIPTION_CHARS = 600
 _RESEARCH_STEP_KINDS = ("search", "read", "synthesize", "finalize")
+_CHARACTER_BUILD_STEP_KINDS = ("read", "synthesize", "finalize")
+_CHARACTER_BUILD_LORE_STEP_KINDS = ("search", "read", "synthesize", "finalize")
 
 _FALLBACK_DESCRIPTIONS: dict[str, str] = {
     "explore": "Reconnaissance: survey sources and codebase before deeper work.",
@@ -249,12 +252,85 @@ def expand_research_plan(
     return plan, note
 
 
+def expand_character_build_plan(
+    plan: dict[str, Any],
+    user_request: str,
+    *,
+    persona_research_lore: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Replace an under-sized or legacy persona-build plan with the standard template."""
+    steps = plan.get("steps") or []
+    original_desc = ""
+    if steps and isinstance(steps[0], dict):
+        original_desc = str(steps[0].get("description", "")).strip()[:400]
+
+    req = (user_request or "the persona").strip()[:500]
+    if persona_research_lore:
+        template: list[tuple[str, str]] = [
+            (
+                "search",
+                f"Research lore on the web: web_search and read_webpage for {req}; "
+                "save_research_note with findings (no write_persona_file).",
+            ),
+            (
+                "read",
+                f"Merge user description and attachments via save_research_note if needed "
+                f"(no write_persona_file). Topic: {req}.",
+            ),
+            (
+                "synthesize",
+                f"read_all_research_notes then write_persona_file once for initialization.md: {req}.",
+            ),
+            (
+                "finalize",
+                f"finalize_persona (greeting + tagline) then finish_task for: {req}.",
+            ),
+        ]
+    else:
+        template = [
+            (
+                "read",
+                f"Ingest user description and attachments via save_research_note only "
+                f"(no write_persona_file). Topic: {req}.",
+            ),
+            (
+                "synthesize",
+                f"read_all_research_notes then write_persona_file once for initialization.md: {req}.",
+            ),
+            (
+                "finalize",
+                f"finalize_persona (greeting + tagline) then finish_task for: {req}.",
+            ),
+        ]
+
+    new_steps: list[dict[str, Any]] = []
+    for kind, desc in template:
+        _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
+        new_steps.append({
+            "status": "pending",
+            "description": desc,
+            "step_kind": kind,
+            "max_iterations": default,
+        })
+
+    if original_desc and original_desc not in new_steps[0]["description"]:
+        new_steps[0]["description"] += f" Prior planner note: {original_desc}"
+
+    old_count = len(steps)
+    plan["steps"] = new_steps
+    plan["current_step_index"] = 0
+    plan["status"] = "in_progress"
+    note = f"Expanded character_build plan from {old_count} to {len(new_steps)} steps."
+    return plan, note
+
+
 def validate_and_tune_plan(
     plan: dict[str, Any],
     mode: str,
     user_request: str = "",
     *,
     explore_brief_ran: bool = False,
+    persona_research_lore: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     """
     Ensure step_kind and realistic max_iterations; cap steps and total budget.
@@ -284,6 +360,13 @@ def validate_and_tune_plan(
         if mode_key == "research" and total_steps >= 4 and i < len(_RESEARCH_STEP_KINDS):
             kind = _RESEARCH_STEP_KINDS[i]
             step["step_kind"] = kind
+        elif mode_key == "character_build":
+            lore_kinds = _CHARACTER_BUILD_LORE_STEP_KINDS
+            std_kinds = _CHARACTER_BUILD_STEP_KINDS
+            kinds = lore_kinds if persona_research_lore else std_kinds
+            if total_steps >= len(kinds) and i < len(kinds):
+                kind = kinds[i]
+                step["step_kind"] = kind
         elif kind not in STEP_KINDS:
             kind = infer_step_kind(desc, mode_key if mode != "code" else "code", i, total_steps)
             step["step_kind"] = kind
@@ -331,6 +414,29 @@ def validate_and_tune_plan(
             break
 
     min_steps = MODE_MIN_STEPS.get(mode_key, 2)
+    if mode_key == "character_build" and persona_research_lore:
+        min_steps = len(_CHARACTER_BUILD_LORE_STEP_KINDS)
+    if mode_key == "character_build" and len(steps) != min_steps:
+        plan, expand_note = expand_character_build_plan(
+            plan, user_request, persona_research_lore=persona_research_lore
+        )
+        notes.append(expand_note)
+        steps = plan["steps"]
+        total_steps = len(steps)
+        kinds = (
+            _CHARACTER_BUILD_LORE_STEP_KINDS
+            if persona_research_lore
+            else _CHARACTER_BUILD_STEP_KINDS
+        )
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            kind = kinds[i] if i < len(kinds) else "code"
+            step["step_kind"] = kind
+            step["max_iterations"] = _clamp_budget(kind, step.get("max_iterations"))
+            if step.get("status") is None:
+                step["status"] = "pending"
+
     if mode_key == "research" and len(steps) < min_steps:
         plan, expand_note = expand_research_plan(
             plan, user_request, explore_brief_ran=explore_brief_ran

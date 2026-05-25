@@ -17,6 +17,7 @@ from context_manager import (
     should_proactive_summarize,
 )
 from instance_registry import load_workspace_summary
+from tool_catalog import CHARACTER_BUILD_FORBIDDEN_FILE_TOOLS
 from tool_policy import build_allowed_tool_names
 from timeout_policy import is_system_error_response, timeout_compress_retry_enabled
 from url_visit_registry import UrlVisitRegistry
@@ -70,6 +71,7 @@ class LoopEngine:
         memory=None,
         base_tools: dict | None = None,
         human_research_notes: str = "",
+        persona_research_lore: bool = False,
     ):
         self.client = client
         self.executor = executor
@@ -91,6 +93,7 @@ class LoopEngine:
         self._parse_failures = 0
         self._force_full_schema = False
         self.human_research_notes = (human_research_notes or "").strip()
+        self.persona_research_lore = bool(persona_research_lore)
 
     @staticmethod
     def _use_legacy_loop() -> bool:
@@ -184,6 +187,7 @@ class LoopEngine:
         outline_logged_this_step = False
         source_registry = SourceRegistry() if self.mode == "research" else None
         self._research_deliverable_draft: str | None = None
+        self._persona_read_autosave_done = False
 
         while loop_tick < max_loop_ticks:
             if cancel_check and cancel_check():
@@ -239,6 +243,48 @@ class LoopEngine:
                         conversation_history=conversation_history,
                     )
                     step_entry_injected = True
+
+                if (
+                    self.mode == "character_build"
+                    and step_kind in ("read", "search")
+                    and episode_count == 0
+                    and not self._persona_read_autosave_done
+                ):
+                    auto_msg = self._auto_ingest_persona_attachments(
+                        task_name,
+                        user_request,
+                        text_chunks,
+                        skip_advance=self.persona_research_lore,
+                    )
+                    if auto_msg:
+                        self._persona_read_autosave_done = True
+                        conversation_history.append({
+                            "role": "user",
+                            "content": f"Tool Outputs:\n{auto_msg}",
+                        })
+                        ledger_text += f"\n{auto_msg}\n"
+                        if ui_callback:
+                            ui_callback(ledger_text)
+                        if not self.persona_research_lore:
+                            advance_json_state(
+                                task_file,
+                                "OS auto-ingested attachment/user lore into scratchpad.",
+                            )
+                            self.workspace_summary = on_step_advance(
+                                conversation_history=conversation_history,
+                                instance_id=self.instance_id,
+                                task_name=task_name,
+                                advance_summary="OS auto-ingested persona source material.",
+                                client=self.client,
+                                memory=self.memory,
+                            )
+                            recent_tool_signatures = []
+                            step_entry_injected = False
+                            grace_used_this_step = False
+                            tools_succeeded_this_step = set()
+                            outline_logged_this_step = False
+                            path_registry.set_step_index(state["current_step_index"])
+                            continue
 
                 user_msg = self._build_user_message(
                     user_request=user_request,
@@ -587,6 +633,95 @@ class LoopEngine:
                         if path_block and path_block.startswith("❌"):
                             result = path_block
                         elif (
+                            self.mode == "character_build"
+                            and step_kind == "read"
+                            and tool_name == "save_research_note"
+                            and "save_research_note" in tools_succeeded_this_step
+                        ):
+                            result = (
+                                "❌ OS BLOCK: Ingest note already saved for this step. "
+                                "Call mark_objective_complete(summary_of_work="
+                                "'Ingested persona lore from user text and attachments.') "
+                                "— do NOT call save_research_note again."
+                            )
+                        elif (
+                            self.mode == "character_build"
+                            and step_kind == "read"
+                            and tool_name == "read_all_research_notes"
+                        ):
+                            notes = ""
+                            try:
+                                notes = self.memory.get_scratchpad_notes(task_name) or ""
+                            except Exception:
+                                pass
+                            empty = (
+                                not notes.strip()
+                                or "No research notes found" in notes
+                            )
+                            if empty or "read_all_research_notes" in tools_succeeded_this_step:
+                                result = (
+                                    "❌ OS BLOCK: read_all_research_notes is not allowed on "
+                                    "persona ingest. The scratchpad is empty until you "
+                                    "call save_research_note with gathered_data from the "
+                                    "user description and attachments, then "
+                                    "mark_objective_complete."
+                                )
+                            else:
+                                result = (
+                                    "❌ OS BLOCK: On ingest step use save_research_note, not "
+                                    "read_all_research_notes. Reading notes is for the "
+                                    "synthesize step only."
+                                )
+                        elif (
+                            self.mode == "character_build"
+                            and tool_name in CHARACTER_BUILD_FORBIDDEN_FILE_TOOLS
+                        ):
+                            result = (
+                                f"❌ OS BLOCK: {tool_name} cannot create persona files. "
+                                "On the synthesize step use write_persona_file("
+                                "file_path='initialization.md', content='...') with the "
+                                "full character bible (800+ characters)."
+                            )
+                        elif (
+                            self.mode == "character_build"
+                            and tool_name == "summarize_sources"
+                        ):
+                            result = (
+                                "❌ OS BLOCK: summarize_sources is for research mode only. "
+                                "On persona build, use write_persona_file for initialization.md "
+                                "(synthesize step) or save_research_note (ingest step)."
+                            )
+                        elif (
+                            self.mode == "character_build"
+                            and step_kind == "synthesize"
+                            and tool_name == "read_all_research_notes"
+                            and "read_all_research_notes" in tools_succeeded_this_step
+                        ):
+                            result = (
+                                "❌ OS BLOCK: Scratchpad notes already loaded this step. "
+                                "Call write_persona_file for initialization.md now, "
+                                "then mark_objective_complete."
+                            )
+                        elif (
+                            self.mode == "character_build"
+                            and step_kind == "synthesize"
+                            and tool_name in ("save_research_note", "read_webpage", "web_search")
+                        ):
+                            result = (
+                                f"❌ OS BLOCK: {tool_name} is not used on persona synthesize. "
+                                "Call write_persona_file for initialization.md."
+                            )
+                        elif (
+                            self.mode == "character_build"
+                            and step_kind in ("read", "search")
+                            and tool_name == "write_persona_file"
+                        ):
+                            result = (
+                                f"❌ OS BLOCK: {step_kind} step is ingest/research only. Use "
+                                "save_research_note / web_search then mark_objective_complete. "
+                                "write_persona_file belongs on the synthesize step."
+                            )
+                        elif (
                             step_kind in ("explore", "read")
                             and tool_name in ("write_project_markdown", "append_project_markdown")
                         ):
@@ -675,7 +810,8 @@ class LoopEngine:
                                 execution_results[0] if execution_results else "No output."
                             )
                             if (
-                                tool_name == "save_research_note"
+                                self.mode == "research"
+                                and tool_name == "save_research_note"
                                 and research_note
                                 and result
                                 and not str(result).startswith("❌")
@@ -691,6 +827,39 @@ class LoopEngine:
                                         "`final_report` (or call finish_task — the OS will "
                                         "recover this draft if final_report is empty)."
                                     )
+                            if (
+                                self.mode == "character_build"
+                                and step_kind == "read"
+                                and tool_name == "save_research_note"
+                                and result
+                                and not str(result).startswith("❌")
+                            ):
+                                result += (
+                                    "\n✅ OS: Lore saved. Call mark_objective_complete now "
+                                    "(or the OS will auto-advance after this turn)."
+                                )
+                            if (
+                                self.mode == "character_build"
+                                and step_kind == "synthesize"
+                                and tool_name == "read_all_research_notes"
+                                and result
+                                and not str(result).startswith("❌")
+                            ):
+                                result += (
+                                    "\n✅ OS: Notes loaded. Call write_persona_file for "
+                                    "initialization.md now — do NOT call summarize_sources."
+                                )
+                            if (
+                                self.mode == "character_build"
+                                and step_kind == "synthesize"
+                                and tool_name == "write_persona_file"
+                                and result
+                                and result.startswith("✅")
+                            ):
+                                result += (
+                                    "\n✅ OS: initialization.md written. Call "
+                                    "mark_objective_complete (or OS will auto-advance)."
+                                )
                             if tool_name == "read_code_outline":
                                 if outline_logged_this_step:
                                     result = (
@@ -746,6 +915,47 @@ class LoopEngine:
                     if ui_callback:
                         ui_callback(ledger_text)
 
+                if (
+                    not has_advance
+                    and not has_finish
+                    and self.mode == "character_build"
+                    and step_kind == "read"
+                    and "save_research_note" in tools_succeeded_this_step
+                ):
+                    has_advance = True
+                    advance_summary = (
+                        "Ingested persona source material into scratchpad; "
+                        "advancing to synthesize initialization.md."
+                    )
+                    last_tool_output += (
+                        "\n\n✅ OS: Read-step ingest complete. Advancing to synthesize — "
+                        "call write_persona_file once (lore is in scratchpad)."
+                    )
+                    conversation_history[-1] = {
+                        "role": "user",
+                        "content": f"Tool Outputs:{last_tool_output}",
+                    }
+
+                if (
+                    not has_advance
+                    and not has_finish
+                    and self.mode == "character_build"
+                    and step_kind == "synthesize"
+                    and "write_persona_file" in tools_succeeded_this_step
+                ):
+                    has_advance = True
+                    advance_summary = (
+                        "Wrote initialization.md; advancing to finalize_persona."
+                    )
+                    last_tool_output += (
+                        "\n\n✅ OS: Synthesize step complete. Advancing to finalize — "
+                        "call finalize_persona then finish_task."
+                    )
+                    conversation_history[-1] = {
+                        "role": "user",
+                        "content": f"Tool Outputs:{last_tool_output}",
+                    }
+
                 if has_advance:
                     timeout_compress_used = False
                     advance_json_state(task_file, advance_summary)
@@ -767,6 +977,7 @@ class LoopEngine:
                     self._schema_widen_attempts = 0
                     self._parse_failures = 0
                     self._force_full_schema = False
+                    self._persona_read_autosave_done = False
 
                 if has_finish:
                     saved = save_task_deliverable(
@@ -942,8 +1153,13 @@ class LoopEngine:
             all_tool_names=set(self.base_tools.keys()),
             objective=current_objective,
             user_request=getattr(self, "_user_request", ""),
+            persona_research_lore=self.persona_research_lore,
         )
-        if len(allowed) < 8 and self._schema_widen_attempts < 2:
+        if (
+            len(allowed) < 8
+            and self._schema_widen_attempts < 2
+            and self.mode != "character_build"
+        ):
             self._schema_widen_attempts += 1
             routed = self.memory.route_tools(
                 current_objective, max_tools=min(32, profile.routed_tool_cap + 8)
@@ -955,6 +1171,7 @@ class LoopEngine:
                 all_tool_names=set(self.base_tools.keys()),
                 objective=current_objective,
                 user_request=getattr(self, "_user_request", ""),
+                persona_research_lore=self.persona_research_lore,
             )
         subset = {k: self.base_tools[k] for k in allowed if k in self.base_tools}
         if not subset:
@@ -1040,6 +1257,26 @@ class LoopEngine:
             notes = "No research notes found for this task."
         if self.mode == "code" and step_kind == "explore":
             hint = code_explore_hint()
+        elif self.mode == "character_build" and step_kind == "search":
+            hint = (
+                "Web lore research: web_search and read_webpage for authoritative sources; "
+                "save_research_note with distilled lore. No write_persona_file. "
+                "Then mark_objective_complete."
+            )
+        elif self.mode == "character_build" and step_kind == "read":
+            hint = (
+                "Persona ingest only: save_research_note once with user+attachment lore, "
+                "then mark_objective_complete. Do NOT call read_all_research_notes "
+                "(scratchpad is empty until you save). Do NOT call write_persona_file."
+            )
+        elif self.mode == "character_build" and step_kind == "synthesize":
+            hint = (
+                "Lore is in the SCRATCHPAD section below. write_persona_file once for "
+                "initialization.md (800+ chars) including a **Scene agency** section "
+                "(proactive play, minimal questions, no assistant deferral), then "
+                "mark_objective_complete. Do NOT call summarize_sources. "
+                "read_all_research_notes at most once."
+            )
         else:
             hint = get_step_kind_hint(step_kind)
         cwd = os.getcwd()
@@ -1094,7 +1331,21 @@ class LoopEngine:
                     )
             except ImportError:
                 pass
-        if notes and "No research notes found" not in notes:
+        if (
+            notes
+            and "No research notes found" not in notes
+            and not (self.mode == "character_build" and step_kind == "read")
+        ):
+            if self.mode == "character_build" and step_kind == "synthesize":
+                from tool_library.agent_tools import _scratchpad_byte_limit
+
+                cap = _scratchpad_byte_limit() * 4
+                if len(notes) > cap:
+                    notes = (
+                        notes[:cap]
+                        + "\n... [step brief capped — call read_all_research_notes once "
+                        "if you need remaining scratchpad text, then write_persona_file]"
+                    )
             parts.append(f"--- SCRATCHPAD (prior steps) ---\n{notes}\n--- END SCRATCHPAD ---")
         if self.mode == "research" and self.human_research_notes:
             from research_journal import format_journal_context
@@ -1338,6 +1589,51 @@ class LoopEngine:
             est_tokens=est,
         )
         return True
+
+    def _auto_ingest_persona_attachments(
+        self,
+        task_name: str,
+        user_request: str,
+        text_chunks: list | None,
+        *,
+        skip_advance: bool = False,
+    ) -> str | None:
+        """Save user description + attachment chunks to scratchpad; optionally skip LLM ingest."""
+        chunks = [c for c in (text_chunks or []) if c and str(c).strip()]
+        if not chunks:
+            return None
+        try:
+            notes = self.memory.get_scratchpad_notes(task_name) or ""
+        except Exception:
+            notes = ""
+        if notes.strip() and "No research notes found" not in notes:
+            return None
+
+        from main import format_attachment_context
+        from tool_library.agent_tools import save_research_note
+
+        parts: list[str] = []
+        if (user_request or "").strip():
+            parts.append(f"## User description\n{user_request.strip()}")
+        attachment_block = format_attachment_context(chunks).strip()
+        if attachment_block:
+            parts.append(attachment_block)
+        body = "\n\n".join(p for p in parts if p)
+        if not body.strip():
+            return None
+
+        result = save_research_note(task_name, body)
+        if str(result).startswith("❌"):
+            return result
+        advance_line = (
+            "Attachment lore saved — continue this step (web_search if research enabled)."
+            if skip_advance
+            else "Skipping LLM ingest turn — advancing to synthesize step."
+        )
+        return (
+            f"✅ OS: Pre-ingested {len(chunks)} attachment chunk(s) and user description "
+            f"into scratchpad.\n{result}\n{advance_line}"
+        )
 
     @staticmethod
     def _normalize_research_tool_args(

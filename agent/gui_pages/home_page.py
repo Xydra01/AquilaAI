@@ -41,7 +41,9 @@ class HomePage(QWidget):
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("New instance name")
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["chat", "research", "code", "writing", "autonomous"])
+        self.mode_combo.addItems(
+            ["chat", "research", "code", "writing", "character", "autonomous"]
+        )
         form.addWidget(self.name_input, stretch=2)
         form.addWidget(self.mode_combo)
         layout.addLayout(form)

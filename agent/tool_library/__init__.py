@@ -20,8 +20,7 @@ from .git_tools import GIT_TOOLS
 
 from .run_tools import RUN_TOOLS
 
-
-
+from .persona_tools import PERSONA_TOOLS
 
 
 ALL_TOOLS = {
@@ -47,6 +46,8 @@ ALL_TOOLS = {
     **GIT_TOOLS,
 
     **RUN_TOOLS,
+
+    **PERSONA_TOOLS,
 
 }
 

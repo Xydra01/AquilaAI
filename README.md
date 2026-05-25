@@ -2,7 +2,7 @@
 
 **Aquila OS** is a **local-first autonomous AI agent** that runs on your machine, talks to **[Ollama](https://ollama.com)** with a custom fine-tuned workflow model (`aquila`), and executes real work through **strict JSON tool-calling** — file I/O, web research, coding, email, and long-form writing — without sending your data to a cloud LLM.
 
-Version **3.4** ships **dedicated workspace GUIs** per mode (Chat, Task, Research, Writing, Code), **multi-instance** profiles with isolated memory, per-step **tool routing**, and an **editable Code IDE** with patch review. Built on **3.3** (Code Mode canvas, TurboQuant up to **96k**, context-budget web enrichment, `loop_engine.py`). The **PySide6** desktop app is the primary interface; **pytest** (~70 modules, 260+ tests) covers core and GUI behavior.
+Version **3.4** ships **dedicated workspace GUIs** per mode (Chat, Task, Research, Writing, Code, **Character AI**), **multi-instance** profiles with isolated memory, per-step **tool routing**, and an **editable Code IDE** with patch review. **Character AI (CAI)** adds local-first roleplay personas—build a character bible from notes and PDFs, optional web lore research, then chat in character with per-persona memory. Built on **3.3** (Code Mode canvas, TurboQuant up to **96k**, context-budget web enrichment, `loop_engine.py`). The **PySide6** desktop app is the primary interface; **pytest** (~70 modules, 260+ tests) covers core and GUI behavior.
 
 For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
@@ -16,7 +16,7 @@ For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.
 4. [System requirements](#system-requirements)
 5. [Installation](#installation)
 6. [Quick start](#quick-start)
-7. [Operational modes](#operational-modes)
+7. [Operational modes](#operational-modes) (includes [Character AI](#character-ai-cai--roleplay-workspace))
 8. [How the agent loop works](#how-the-agent-loop-works)
 9. [Filesystem layout](#filesystem-layout)
 10. [Tools reference](#tools-reference)
@@ -33,7 +33,16 @@ For a line-by-line architecture deep dive, see **[ARCHITECTURE.md](ARCHITECTURE.
 
 ## What Aquila does
 
-Aquila is not a chat wrapper. It is a small **operating system for an agent**:
+Aquila is not a chat wrapper. It is a small **operating system for an agent**—one framework for **research**, **coding**, **long-form writing**, **autonomous tasks**, and **in-character roleplay**, all local and tool-driven:
+
+| Use case | Mode |
+|----------|------|
+| Quick Q&A with memory | Chat |
+| Multi-step projects | Autonomous Task |
+| Web research + reports | Research |
+| Drafts and documents | Writing |
+| TDD and repo edits | Code |
+| Personas and roleplay | **Character AI** |
 
 | Layer | Responsibility |
 |-------|----------------|
@@ -61,6 +70,7 @@ Compared to **Aquila 3.3**:
 - **Editable Code IDE** — user edits in tabs, **Save buffer** (`apply_user_buffer_edit`), tree→tab navigation, patch Accept/Reject with conflict warning.
 - **Shared UI kit** — `gui_widgets/` (`AgentRail`, `ExecutionLogPanel`), `gui_theme.py`, rich-text ledger formatting.
 - **Instance home** — `home_page.py` picker; per-instance scratchpad/episodic isolation (`instance_registry.py`).
+- **Character AI (CAI)** — persona home, create/build flow, in-character chat; per-persona `initialization.md` bible and isolated `chat_history.json` ([docs/cai-mode.md](docs/cai-mode.md)).
 
 ### Agent core
 
@@ -82,7 +92,7 @@ Compared to **Aquila 3.2** (PySide6 stabilization, Writing Mode):
 ### User-facing
 
 - **Code Mode** — dedicated IDE workspace (`gui_pages/code_ide_page.py`): import or attach a repo, file tree, TDD step validation, pytest/flake8 rail.
-- **Mode workspaces** — dedicated `gui_pages/` per mode (Chat, Task, Research, Writing, Code); Learn stub until 3.5.
+- **Mode workspaces** — dedicated `gui_pages/` per mode (Chat, Task, Research, Writing, Code, **Character AI**); Learn stub until 3.5.
 - **TurboQuant models** — `aquila-tq-32k`, `aquila-tq-64k`, `aquila-tq-96k` on a separate Ollama port (see [docs/ollama-turboquant.md](docs/ollama-turboquant.md)).
 - **Research bibliographies** — visited/scraped URLs appended to deliverables when research mode completes.
 
@@ -152,7 +162,17 @@ pip install openpyxl>=3.1.0
 
 ### 4. Install and build the Ollama model
 
-Install [Ollama](https://ollama.com), pull the base model, then create `aquila`:
+**Recommended (portable stock + optional TurboQuant):** see **[docs/ollama-dual-setup.md](docs/ollama-dual-setup.md)**.
+
+```powershell
+.\scripts\install-ollama-stock.ps1
+.\scripts\ollama-serve-stock.ps1          # terminal 1 — port 11434
+.\scripts\ollama-create-heretic.ps1      # terminal 2 — HauhauCS → aquila_heretic
+```
+
+`.env`: `OLLAMA_BASE_URL=http://127.0.0.1:11434` and `OLLAMA_MODEL=aquila_heretic` (or `aquila` from `Modelfile`).
+
+Classic path (system tray Ollama) still works if you use a **0.30+** build — quit tray Ollama 0.24.x first; it cannot load Qwen 3.5.
 
 ```bash
 ollama pull qwen3.5:9b
@@ -251,13 +271,16 @@ flowchart LR
         Research[Research Mode]
         Writing[Writing Mode]
         Code[Code Mode]
+        Character[Character AI]
         Learn[Learn stub]
     end
     Chat -->|no ledger| Ollama[Ollama aquila]
+    Character -->|no tool JSON| Ollama
     Task --> LedgerTasks[Agent-Tasks JSON]
     Research --> LedgerPlans[Agent-Plans JSON]
     Writing --> LedgerTasks
     Code --> LedgerTasks
+    Character -->|persona_build| LedgerTasks
     Code --> CodeBuf[Agent-Code buffer]
     LedgerTasks --> Loop[run_unified_task]
     LedgerPlans --> Loop
@@ -271,10 +294,11 @@ flowchart LR
 | **Research** | `Agent-Plans/{task_name}.json` | `Agent-Research/{task_name}.md` | `finish_task` + `final_report` |
 | **Writing** | `Agent-Tasks/{task_name}.json` | `Agent-Drafts/` via `compile_final_document` | `finish_task` + brief summary in `final_report` |
 | **Code** | `Agent-Tasks/{task_name}.json` + `Agent-Code/active_code_state.json` | Workspace via `sync_project_to_disk` | `finish_task` after TDD verify |
+| **Character AI** | `Agent-Tasks/persona_build_{id}.json` (build only) | `Agent-Instances/{instance}/personas/{id}/` | Build: `finalize_persona`; chat: streaming (no tools) |
 
 **Code Mode (3.3):** Python-first TDD with `run_pytest` / `run_linter`; patch-first editing (`replace_lines`, `apply_unified_patch`). JS/TS/Rust/Go: read/write + basic lint when CLIs are installed. Required: `pytest`, `flake8` (recommended).
 
-**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`, `get_code_prompt`.
+**Prompt sources:** `agent/prompts.py` — `get_chat_prompt`, `get_autonomous_prompt`, `get_research_prompt`, `get_writing_prompt`, `get_code_prompt`, `get_character_prompt`, `get_persona_build_prompt`.
 
 ### Mode workspaces (3.4)
 
@@ -287,7 +311,20 @@ The desktop UI switches **dedicated layouts** per mode (`agent/gui_pages/` + `QS
 | **Research** | SearXNG search panel, reader, human journal (injectable), agent rail |
 | **Writing** | Document home (`Agent-Drafts`) + markdown canvas with preview |
 | **Code** | IDE: editable tabs, file tree, buffer save, patch review, agent rail |
+| **Character AI** | Persona home / create / in-character chat ([docs/cai-mode.md](docs/cai-mode.md)) |
 | **Learn** | Placeholder (classroom UI planned for **3.5**) |
+
+### Character AI (CAI) — roleplay workspace
+
+Character AI is a first-class workspace for **local roleplay and persona-driven chat**, not a bolt-on chat skin:
+
+- **Per-instance personas** — each Aquila instance has its own cast under `Agent-Instances/{instance_id}/personas/`.
+- **Build pipeline** — describe the character, attach PDFs/images, optionally enable **Research lore** (SearXNG web search → 4-step build). Output: `initialization.md` (injected as the CHARACTER BIBLE), `persona.json` (greeting, tagline), optional `sources/`.
+- **In-character chat** — `run_character_chat()` uses a dedicated prompt (`get_character_prompt`): no tool JSON, no assistant-mode roster; scene-agency rules encourage proactive roleplay.
+- **Separate history** — `chat_history.json` per persona; global Chat Mode history is not mixed in.
+- **User memory** — editable “Notes about you” → `user_preferences.md`; periodic summarization into bullets the character remembers.
+
+Full guide: **[docs/cai-mode.md](docs/cai-mode.md)** · QA: **[docs/workspace-qa-cai.md](docs/workspace-qa-cai.md)** · Release notes: **[docs/release-3.4-cai.md](docs/release-3.4-cai.md)**
 
 **Code project open:** toolbar **Open in-place** (`attach_existing_repo`) or **Import sandbox** (`import_codebase` copy under `Agent-Code/{project}/`). For large repos the agent uses **manifest + search + regions**, not full directory trees in context.
 
@@ -319,7 +356,9 @@ agent-projects/
 │   ├── main.py            # Agent brain, loop, Ollama client
 │   ├── loop_engine.py     # Reflect/act task loop
 │   ├── gui.py             # PySide6 UI (primary)
-│   ├── gui_pages/         # Per-mode workspaces (chat, task, research, writing, code)
+│   ├── gui_pages/         # Per-mode workspaces (chat, task, research, writing, code, character)
+│   ├── persona_registry.py
+│   ├── tool_library/persona_tools.py
 │   ├── gui_widgets/       # Shared AgentRail, ExecutionLogPanel
 │   ├── gui_theme.py       # Stylesheets + mode accents
 │   ├── gui_state.py       # Ledger path + HTML renderers
@@ -338,6 +377,10 @@ agent-projects/
 │   └── legacy/            # Unmaintained Streamlit app
 ├── docs/
 │   ├── workspace-qa-3.4.md
+│   ├── workspace-qa-cai.md
+│   ├── cai-mode.md
+│   ├── release-3.4-cai.md
+│   ├── roadmap-3.5.md
 │   └── ollama-turboquant.md
 ├── requirements.txt
 ├── Modelfile              # Ollama aquila model (32k)
@@ -361,7 +404,7 @@ agent-projects/
 | `Agent-Research/` | Research markdown deliverables |
 | `Agent-Research/.journal/` | Per-instance human research notes (GUI) |
 | `Agent-Creations/` | Task markdown deliverables |
-| `Agent-Instances/` | Instance profiles + workspace summaries |
+| `Agent-Instances/` | Instance profiles, workspace summaries, **`personas/`** (Character AI) |
 | `Agent-Drafts/` | Writing-mode draft state + compiled docs |
 | `Agent-Code/` | Code Mode buffer (`active_code_state.json`) + synced workspace files |
 | `Agent-Logs/` | Per-run execution logs |
@@ -573,9 +616,10 @@ Defense in depth for a tool-using agent:
 
 ## Known limitations and 3.5 direction
 
-Documented in [ARCHITECTURE.md](ARCHITECTURE.md):
+Documented in [ARCHITECTURE.md](ARCHITECTURE.md). **3.5 roadmap:** [docs/roadmap-3.5.md](docs/roadmap-3.5.md).
 
-- **Learn mode** — stub UI only; classroom/LMS layout planned for **3.5**.
+- **Learn mode** — stub UI only; classroom/LMS layout planned for **3.5** (see roadmap).
+- **Character AI (3.4)** — complete; see [docs/cai-mode.md](docs/cai-mode.md) and [docs/release-3.4-cai.md](docs/release-3.4-cai.md).
 - **Inter-modal orchestration** — Task workspace shows a placeholder mode stack; single-agent loops today.
 - **Embedded browser** — Research uses SearXNG JSON search panel, not an in-app browser (WebEngine deferred).
 - Streamlit (`agent/legacy/streamlit_app.py`) not maintained.
@@ -618,4 +662,4 @@ python -c "from main import initiate_sleep_cycle; print(initiate_sleep_cycle())"
 - Web search: **SearXNG** (Docker).
 - Desktop UI: **Qt for Python (PySide6)**.
 
-For questions about internals, start with [ARCHITECTURE.md](ARCHITECTURE.md) §17 (key files to read first).
+For questions about internals, start with [ARCHITECTURE.md](ARCHITECTURE.md) §20 (key files to read first). Character AI: [docs/cai-mode.md](docs/cai-mode.md).

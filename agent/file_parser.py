@@ -5,7 +5,10 @@ import io
 import mimetypes
 from pathlib import Path
 
-import fitz
+from pdf_text import configure_mupdf_quiet, extract_pdf_text
+
+configure_mupdf_quiet()
+
 import docx
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -41,8 +44,13 @@ def _parse_image(file_bytes: bytes, mime_type: str) -> dict:
 
 
 def _parse_pdf(file_bytes: bytes, file_name: str) -> str:
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    extracted = "".join(page.get_text() for page in doc)
+    extracted = extract_pdf_text(file_bytes)
+    if not extracted.strip():
+        return _wrap_text(
+            file_name,
+            "[System: PDF opened but no extractable text was found "
+            "(may be scan-only or heavily image-based).]",
+        )
     return _wrap_text(file_name, extracted)
 
 
