@@ -7,6 +7,7 @@ from gui_pages.code_ide_page import CodeIdePage
 from gui_pages.stub_page import StubModePage
 from gui_pages.home_page import HomePage
 from gui_pages.character_page import CharacterPage
+from gui_pages.learn_page import LearnPage
 
 __all__ = [
     "BaseModePage",
@@ -18,4 +19,5 @@ __all__ = [
     "StubModePage",
     "HomePage",
     "CharacterPage",
+    "LearnPage",
 ]

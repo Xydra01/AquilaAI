@@ -13,7 +13,7 @@ agent-projects/
 ├── agent/                    # Entire application (Python package by convention)
 │   ├── main.py               # Brain: Agent, OllamaClient, tool loop, sleep cycle
 │   ├── gui.py                # Primary UI (PySide6), AgentWorker, ChatSubcallWorker
-│   ├── gui_pages/            # Chat, Task, Research, Writing, Code, Character, Home, Learn stub
+│   ├── gui_pages/            # Chat, Task, Research, Writing, Code, Character, Learn, Home
 │   ├── persona_registry.py   # CAI personas, chat history, preferences
 │   ├── tool_library/persona_tools.py  # write_persona_file, finalize_persona
 │   ├── gui_widgets/          # AgentRail, ExecutionLogPanel
@@ -149,7 +149,7 @@ Aquila exposes **six operational modes** (+ Learn stub in GUI):
 | **Writing** | `writing` | `get_writing_prompt` | `Agent-Tasks/{name}.json` + `Agent-Drafts/active_draft_state.json` | `compile_final_document` → `Agent-Drafts/*.md` |
 | **Code** | `code` | `get_code_prompt` | `Agent-Tasks/{name}.json` + `Agent-Code/active_code_state.json` | `sync_project_to_disk` → project tree |
 | **Character AI** | `character` / `character_build` | `get_character_prompt` / `get_persona_build_prompt` | Build: `Agent-Tasks/persona_build_{id}.json` | `Agent-Instances/{instance}/personas/{id}/` |
-| **Learn** | `learn` | _(none — stub)_ | None | Planned 3.5 |
+| **Learn** | `learn` / `learn_syllabus_build` / `learn_tutor` / `learn_archive_chat` | `get_syllabus_build_prompt` / tutor / archive prompts | Build: `Agent-Tasks/syllabus_build_{id}.json` | `Agent-Instances/{instance}/learn/` |
 
 **Character AI** splits into two runtime paths:
 
@@ -481,7 +481,7 @@ Mode-specific rules:
 | Writing | `writing_page.py` | Home (doc list) ↔ Canvas (markdown + preview + rail) |
 | Code | `code_ide_page.py` | Toolbar, tree, **editable** tabs, rail, patches, lint/pytest strip |
 | Character AI | `character_page.py` | Persona home, create/build log, in-character chat + user prefs panel |
-| Learn | `stub_page.py` | Placeholder (3.5) |
+| Learn | `learn_page.py`, `learn_registry.py`, `learn_index.py`, `learn_tools.py` | Courses + archives, syllabus build, tutor, RAG chat |
 
 Shared: [`gui_widgets/agent_rail.py`](agent/gui_widgets/agent_rail.py), [`execution_log_panel.py`](agent/gui_widgets/execution_log_panel.py), [`gui_formatting.py`](agent/gui_formatting.py), [`gui_richtext.py`](agent/gui_richtext.py) (`SmartScrollTextEdit`, stream finalize).
 
@@ -756,7 +756,7 @@ Personas live at `Agent-Instances/{instance_id}/personas/{persona_id}/`. Chat te
 
 Docs: [`docs/cai-mode.md`](docs/cai-mode.md), [`docs/release-3.4-cai.md`](docs/release-3.4-cai.md), QA [`docs/workspace-qa-cai.md`](docs/workspace-qa-cai.md).
 
-**Future:** Learn (LMS-style) — **3.5**.
+**Learn Mode (3.5):** `learn_page.py`, `learn_registry.py`, `learn_index.py`, `learn_tools.py` — see [docs/learn-mode.md](docs/learn-mode.md).
 
 ---
 

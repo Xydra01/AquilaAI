@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from gui_modes import INSTANCE_DEFAULT_MODE_IDS, normalize_default_mode_id
 from instance_registry import (
     create_instance,
     ensure_default_instance,
@@ -41,9 +42,7 @@ class HomePage(QWidget):
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("New instance name")
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(
-            ["chat", "research", "code", "writing", "character", "autonomous"]
-        )
+        self.mode_combo.addItems(list(INSTANCE_DEFAULT_MODE_IDS))
         form.addWidget(self.name_input, stretch=2)
         form.addWidget(self.mode_combo)
         layout.addLayout(form)
@@ -80,7 +79,7 @@ class HomePage(QWidget):
         inst = create_instance(
             display_name=name,
             specialty="",
-            default_mode=self.mode_combo.currentText(),
+            default_mode=normalize_default_mode_id(self.mode_combo.currentText()),
         )
         self.name_input.clear()
         self.refresh_list()

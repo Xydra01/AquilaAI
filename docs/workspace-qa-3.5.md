@@ -1,34 +1,46 @@
 # Workspace QA — Aquila 3.5 (Learn mode)
 
-Run when Learn workspace moves beyond stub. Until then, verify stub only.
+Dual MVP: **Classroom** (courses, syllabus, Socratic tutor, assessments) + **Archives** (sources, index, RAG chat, quiz/study export).
 
 ## Prerequisites
 
 - [ ] 3.4 QA complete ([workspace-qa-3.4.md](workspace-qa-3.4.md), [workspace-qa-cai.md](workspace-qa-cai.md))
 - [ ] `pytest agent/tests -q` passes on `Aquila-3.5` branch
 
-## Learn stub (3.4 baseline)
+## Learn home
 
-- [x] Learn Mode shows 3.5 placeholder (no task execution)
-- [x] No agent worker started from Learn page
-
-## Learn home (M1 — when implemented)
-
-- [ ] Learn Mode opens course home (not stub text only)
-- [ ] Course list loads from instance storage
+- [ ] Learn Mode opens dual home (courses + archives), not stub
+- [ ] Course and archive lists load per instance
 - [ ] Switching instances preserves Learn data per instance
+- [ ] New course / new archive flows open create views
 
-## Course model (M2 — when implemented)
+## Classroom — syllabus build
 
-- [ ] Create / open / delete course
-- [ ] Assignments visible with status (pending / submitted)
+- [ ] Create course: files intake builds `syllabus.json` (≥8 nodes, ≥5 sub-units — see [workspace-qa-learn.md](workspace-qa-learn.md))
+- [ ] Topic + web intake runs 4-step plan when web enabled
+- [ ] Placement intake completes (MVP topic-weighted syllabus)
+- [ ] `finalize_course` marks course active; classroom opens
 
-## Tutor agent (M3 — when implemented)
+## Classroom — tutor & mastery
 
-- [ ] Optional “Ask tutor” uses read-only tools
-- [ ] No writes outside Learn data directory
+- [ ] Syllabus tree shows tier badges; locked children when parent below gate
+- [ ] Tutor chat streams; replies are Socratic (questions, no direct answers)
+- [ ] Generate assessment → take/submit score → tier increases on pass
+- [ ] `tutor_history.json` persists per course
 
-## Regression
+## Archives
 
+- [ ] Upload sources auto-indexes; Re-index still works; see [workspace-qa-learn.md](workspace-qa-learn.md) section D
+- [ ] Archive chat cites grounded content after index
+- [ ] Generate quiz / study doc writes markdown under `outputs/`
+
+## Agent / data safety
+
+- [ ] Syllabus build writes only under `Agent-Instances/.../learn/courses/`
+- [ ] No `MODES_ROSTER` or tool JSON in tutor/archive chat
 - [ ] Character AI, Chat, Research, Writing, Code, Task workspaces unchanged
-- [ ] `pytest agent/tests -q` passes
+
+## Automated
+
+- [ ] `pytest agent/tests/test_learn_*.py -q` passes
+- [ ] `pytest agent/tests -q` passes (full suite)

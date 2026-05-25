@@ -113,6 +113,7 @@ def build_allowed_tool_names(
     objective: str = "",
     user_request: str = "",
     persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
 ) -> set[str]:
     try:
         return _catalog_allowed(
@@ -123,6 +124,7 @@ def build_allowed_tool_names(
             objective=objective,
             user_request=user_request,
             persona_research_lore=persona_research_lore,
+            learn_syllabus_web=learn_syllabus_web,
         )
     except Exception:
         pass

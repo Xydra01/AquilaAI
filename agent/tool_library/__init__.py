@@ -22,6 +22,8 @@ from .run_tools import RUN_TOOLS
 
 from .persona_tools import PERSONA_TOOLS
 
+from .learn_tools import LEARN_TOOLS
+
 
 ALL_TOOLS = {
 
@@ -48,6 +50,8 @@ ALL_TOOLS = {
     **RUN_TOOLS,
 
     **PERSONA_TOOLS,
+
+    **LEARN_TOOLS,
 
 }
 

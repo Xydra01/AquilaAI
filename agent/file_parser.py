@@ -191,3 +191,30 @@ def process_local_attachments(file_paths):
             text_chunks.append(combined_text[i : i + MAX_CHARS_PER_CHUNK])
 
     return text_chunks, image_payloads
+
+
+def _strip_file_wrapper(text: str) -> str:
+    """Remove --- START/END FILE --- wrappers from parsed attachment text."""
+    raw = (text or "").strip()
+    if "--- START FILE:" not in raw:
+        return raw
+    if "--- END FILE ---" in raw:
+        inner = raw.split("--- START FILE:", 1)[-1]
+        inner = inner.split("\n", 1)[-1] if "\n" in inner else inner
+        inner = inner.rsplit("--- END FILE ---", 1)[0]
+        return inner.strip()
+    return raw
+
+
+def extract_indexable_text(path: str | Path) -> str:
+    """Extract plain text from a local file for Learn archive/course indexing."""
+    path = Path(path)
+    result = _read_bytes(str(path))
+    if result is None:
+        return ""
+    file_bytes, file_name = result
+    mime_type, _ = mimetypes.guess_type(str(path))
+    parsed = _dispatch_parse(str(path), file_bytes, file_name, mime_type)
+    if parsed.get("type") != "text":
+        return ""
+    return _strip_file_wrapper(parsed.get("payload", ""))

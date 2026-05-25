@@ -36,6 +36,7 @@ from gui_formatting import (
 from gui_pages import (
     ChatPage,
     CharacterPage,
+    LearnPage,
     CodeIdePage,
     ResearchPage,
     StubModePage,
@@ -45,6 +46,7 @@ from gui_pages import (
     HomePage,
 )
 from gui_theme import main_window_stylesheet
+from gui_modes import WORKSPACE_MODE_FLAGS, workspace_label_for_default_mode
 
 # Import Aquila's Brain and Tools
 from main import get_agent, get_active_instance_id, initiate_sleep_cycle
@@ -52,15 +54,7 @@ from workspace_paths import agent_data_path, ensure_repo_cwd
 from instance_registry import get_instance
 from tool_library import agent_tools
 
-MODE_FLAGS = {
-    "Chat Mode": "chat",
-    "Autonomous Task": "autonomous",
-    "Code Mode": "code",
-    "Writing Mode": "writing",
-    "Research Mode": "research",
-    "Character Mode": "character",
-    "Learn Mode": "learn",
-}
+MODE_FLAGS = WORKSPACE_MODE_FLAGS
 
 
 class AgentWorker(QThread):
@@ -79,6 +73,11 @@ class AgentWorker(QThread):
         instance_id=None,
         persona_id=None,
         persona_research_lore: bool = False,
+        learn_syllabus_web: bool = False,
+        course_id: str | None = None,
+        archive_id: str | None = None,
+        archive_title: str = "",
+        node_id: str = "root",
     ):
         super().__init__()
         self.task_name = task_name
@@ -91,6 +90,11 @@ class AgentWorker(QThread):
         self.instance_id = instance_id or get_active_instance_id()
         self.persona_id = persona_id
         self.persona_research_lore = persona_research_lore
+        self.learn_syllabus_web = learn_syllabus_web
+        self.course_id = course_id
+        self.archive_id = archive_id
+        self.archive_title = archive_title
+        self.node_id = node_id
         self.cancel_flag = False
         self.user_reply = ""
         self.reply_event = threading.Event()
@@ -155,6 +159,40 @@ class AgentWorker(QThread):
                     full_text += token
                     self.ledger_signal.emit(token)
                 self.finished_signal.emit(full_text)
+            elif self.mode.lower() == "learn_tutor":
+                generator = agent.run_learn_tutor_chat(
+                    self.course_id or "",
+                    user_input=self.prompt,
+                    chat_history=self.chat_history,
+                    node_id=self.node_id or "root",
+                    text_chunks=self.attached_chunks,
+                    stream=True,
+                )
+                full_text = ""
+                for chunk in generator:
+                    if self.cancel_flag:
+                        break
+                    token = chunk.get("message", {}).get("content", "")
+                    full_text += token
+                    self.ledger_signal.emit(token)
+                self.finished_signal.emit(full_text)
+            elif self.mode.lower() == "learn_archive_chat":
+                generator = agent.run_learn_archive_chat(
+                    self.archive_id or "",
+                    self.archive_title or "Archive",
+                    user_input=self.prompt,
+                    chat_history=self.chat_history,
+                    text_chunks=self.attached_chunks,
+                    stream=True,
+                )
+                full_text = ""
+                for chunk in generator:
+                    if self.cancel_flag:
+                        break
+                    token = chunk.get("message", {}).get("content", "")
+                    full_text += token
+                    self.ledger_signal.emit(token)
+                self.finished_signal.emit(full_text)
             else:
                 res = agent.run_unified_task(
                     self.task_name,
@@ -165,6 +203,7 @@ class AgentWorker(QThread):
                     text_chunks=self.attached_chunks,
                     image_payloads=self.attached_images,
                     persona_research_lore=self.persona_research_lore,
+                    learn_syllabus_web=self.learn_syllabus_web,
                 )
                 self.finished_signal.emit(f"✅ Task Completed:\n{res}")
         except Exception as e:
@@ -215,6 +254,7 @@ class AquilaOS(QMainWindow):
         self.attached_chunks = []
         self.attached_images = []
         self.attached_file_names: list[str] = []
+        self.attached_file_paths: list[str] = []
         self._chat_history_messages = []
         self.worker = None
         self.active_instance_id = get_active_instance_id()
@@ -264,13 +304,7 @@ class AquilaOS(QMainWindow):
         self.writing_page = WritingPage(self)
         self.code_page = CodeIdePage(self)
         self.character_page = CharacterPage(self)
-        self.learn_stub = StubModePage(
-            self,
-            "Learn Workspace",
-            "A classroom-style layout (courses, assignments, progress) is planned for Aquila 3.5.",
-            "learn",
-            "Learn Mode",
-        )
+        self.learn_page = LearnPage(self)
 
         self._page_by_mode_label = {
             "Chat Mode": self.chat_page,
@@ -279,7 +313,7 @@ class AquilaOS(QMainWindow):
             "Writing Mode": self.writing_page,
             "Research Mode": self.research_page,
             "Character Mode": self.character_page,
-            "Learn Mode": self.learn_stub,
+            "Learn Mode": self.learn_page,
         }
         for page in (
             self.chat_page,
@@ -288,7 +322,7 @@ class AquilaOS(QMainWindow):
             self.writing_page,
             self.code_page,
             self.character_page,
-            self.learn_stub,
+            self.learn_page,
         ):
             self.page_stack.addWidget(page)
 
@@ -304,6 +338,7 @@ class AquilaOS(QMainWindow):
             self.writing_page,
             self.code_page,
             self.character_page,
+            self.learn_page,
         ):
             if hasattr(page, "refresh_theme"):
                 page.refresh_theme(dark=self.dark_mode)
@@ -327,19 +362,14 @@ class AquilaOS(QMainWindow):
         self._update_instance_label()
         inst = get_instance(instance_id)
         if inst:
-            mode_map = {
-                "chat": "Chat Mode",
-                "autonomous": "Autonomous Task",
-                "code": "Code Mode",
-                "writing": "Writing Mode",
-                "research": "Research Mode",
-                "character": "Character Mode",
-                "learn": "Learn Mode",
-            }
-            label = mode_map.get(inst.default_mode, "Chat Mode")
+            label = workspace_label_for_default_mode(inst.default_mode)
             idx = self.mode_selector.findText(label)
             if idx >= 0:
                 self.mode_selector.setCurrentIndex(idx)
+            else:
+                self._select_mode_for_flag(
+                    inst.default_mode if inst.default_mode in MODE_FLAGS.values() else "chat"
+                )
         self.main_stack.setCurrentIndex(1)
         self.chat_page.append_chat_html(
             format_system_message_html(
@@ -397,6 +427,7 @@ class AquilaOS(QMainWindow):
         if file_paths:
             self.attached_chunks, self.attached_images = process_local_attachments(file_paths)
             self.attached_file_names = [Path(p).name for p in file_paths]
+            self.attached_file_paths = list(file_paths)
             msg = f"Successfully attached and parsed {len(file_paths)} file(s).\n"
             msg += (
                 f"Resulted in {len(self.attached_chunks)} text chunk(s) and "
@@ -525,6 +556,11 @@ class AquilaOS(QMainWindow):
                 return
             if not page.is_streaming_character_chat():
                 return
+        if mode_flag == "learn" and isinstance(page, LearnPage):
+            if page.is_course_build_view() or page.is_archive_build_view():
+                return
+            if not page.is_streaming_learn_chat():
+                return
         mode_selection = self.mode_selector.currentText()
         clean_prefix = re.sub(r"[^a-zA-Z0-9]", "", "_".join(user_prompt.split()[:3]).lower())
         task_name = f"{clean_prefix}_{int(time.time())}"
@@ -554,30 +590,51 @@ class AquilaOS(QMainWindow):
         self._reset_live_scroll_panels(page)
         if hasattr(page, "on_task_started"):
             page.on_task_started()
-        self._chat_streaming = mode_flag in ("chat", "character")
+        learn_worker_mode = mode_flag
+        if mode_flag == "learn" and isinstance(page, LearnPage):
+            learn_worker_mode = page.learn_chat_mode()
+        self._chat_streaming = mode_flag in ("chat", "character", "learn")
         chunks = list(self.attached_chunks)
         if hasattr(page, "get_extra_text_chunks"):
             chunks.extend(page.get_extra_text_chunks())
         chat_history = self._chat_history_messages.copy()
         persona_id = None
+        course_id = None
+        archive_id = None
+        archive_title = ""
+        node_id = "root"
         if mode_flag == "character" and isinstance(page, CharacterPage):
             chat_history = page.get_persona_chat_history()
             persona_id = page.active_persona_id()
+        if mode_flag == "learn" and isinstance(page, LearnPage):
+            chat_history = page.get_learn_chat_history()
+            course_id = page.active_course_id()
+            archive_id = page.active_archive_id()
+            node_id = page.active_node_id()
+            if page._active_archive:
+                archive_title = page._active_archive.title
         self.worker = AgentWorker(
             task_name,
             user_prompt,
-            mode_flag,
+            learn_worker_mode if mode_flag == "learn" else mode_flag,
             chunks,
             self.attached_images,
             chat_history=chat_history,
             instance_id=self.active_instance_id,
             persona_id=persona_id,
+            course_id=course_id,
+            archive_id=archive_id,
+            archive_title=archive_title,
+            node_id=node_id,
         )
         self.attached_chunks = []
         self.attached_images = []
         self.attached_file_names = []
+        self.attached_file_paths = []
         if hasattr(page, "attach_button"):
-            page.attach_button.setText("📎 Attach" if mode_flag in ("chat", "character") else "📎")
+            page.attach_button.setText(
+                "📎 Attach" if mode_flag in ("chat", "character", "learn") else "📎"
+            )
         self._wire_worker(self.worker, page)
 
     def _start_character_build(
@@ -605,7 +662,43 @@ class AquilaOS(QMainWindow):
         self.attached_chunks = []
         self.attached_images = []
         self.attached_file_names = []
+        self.attached_file_paths = []
         self._wire_worker(self.worker, page)
+
+    def _start_learn_syllabus_build(
+        self,
+        *,
+        task_name: str,
+        prompt: str,
+        chunks: list,
+        images: list,
+        page: LearnPage,
+        learn_syllabus_web: bool = False,
+    ) -> None:
+        page.set_run_buttons_running(True)
+        page.update_ledger("", clear=True)
+        self._chat_streaming = False
+        self.worker = AgentWorker(
+            task_name,
+            prompt,
+            "learn_syllabus_build",
+            chunks,
+            images,
+            instance_id=self.active_instance_id,
+            learn_syllabus_web=learn_syllabus_web,
+        )
+        self.attached_chunks = []
+        self.attached_images = []
+        self.attached_file_names = []
+        self.attached_file_paths = []
+        self._wire_worker(self.worker, page)
+
+    def _run_learn_subcall(self, prompt: str, on_done) -> None:
+        """One-shot LLM call for assessment / archive generation."""
+        worker = ChatSubcallWorker(prompt, instance_id=self.active_instance_id)
+        worker.finished_signal.connect(on_done)
+        worker.start()
+        self._learn_subcall_worker = worker
 
     def _wire_worker(self, worker: AgentWorker, page: BaseModePage) -> None:
         page.bind_worker(worker)
@@ -640,6 +733,11 @@ class AquilaOS(QMainWindow):
                 page, CharacterPage
             ):
                 page.persist_character_turn(user_content, result)
+            elif self.worker.mode.lower() in (
+                "learn_tutor",
+                "learn_archive_chat",
+            ) and isinstance(page, LearnPage):
+                page.persist_learn_turn(user_content, result)
             else:
                 self._chat_history_messages.append(
                     {"role": "user", "content": user_content}

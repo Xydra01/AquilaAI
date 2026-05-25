@@ -72,6 +72,7 @@ class LoopEngine:
         base_tools: dict | None = None,
         human_research_notes: str = "",
         persona_research_lore: bool = False,
+        learn_syllabus_web: bool = False,
     ):
         self.client = client
         self.executor = executor
@@ -94,6 +95,7 @@ class LoopEngine:
         self._force_full_schema = False
         self.human_research_notes = (human_research_notes or "").strip()
         self.persona_research_lore = bool(persona_research_lore)
+        self.learn_syllabus_web = bool(learn_syllabus_web)
 
     @staticmethod
     def _use_legacy_loop() -> bool:
@@ -245,16 +247,19 @@ class LoopEngine:
                     step_entry_injected = True
 
                 if (
-                    self.mode == "character_build"
+                    self.mode in ("character_build", "learn_syllabus_build")
                     and step_kind in ("read", "search")
                     and episode_count == 0
                     and not self._persona_read_autosave_done
                 ):
+                    skip_adv = self.persona_research_lore or (
+                        self.mode == "learn_syllabus_build" and self.learn_syllabus_web
+                    )
                     auto_msg = self._auto_ingest_persona_attachments(
                         task_name,
                         user_request,
                         text_chunks,
-                        skip_advance=self.persona_research_lore,
+                        skip_advance=skip_adv,
                     )
                     if auto_msg:
                         self._persona_read_autosave_done = True
@@ -265,7 +270,7 @@ class LoopEngine:
                         ledger_text += f"\n{auto_msg}\n"
                         if ui_callback:
                             ui_callback(ledger_text)
-                        if not self.persona_research_lore:
+                        if not skip_adv:
                             advance_json_state(
                                 task_file,
                                 "OS auto-ingested attachment/user lore into scratchpad.",
@@ -673,15 +678,21 @@ class LoopEngine:
                                     "synthesize step only."
                                 )
                         elif (
-                            self.mode == "character_build"
+                            self.mode in ("character_build", "learn_syllabus_build")
                             and tool_name in CHARACTER_BUILD_FORBIDDEN_FILE_TOOLS
                         ):
-                            result = (
-                                f"❌ OS BLOCK: {tool_name} cannot create persona files. "
-                                "On the synthesize step use write_persona_file("
-                                "file_path='initialization.md', content='...') with the "
-                                "full character bible (800+ characters)."
-                            )
+                            if self.mode == "learn_syllabus_build":
+                                result = (
+                                    f"❌ OS BLOCK: {tool_name} cannot write syllabus. "
+                                    "On synthesize use write_syllabus_file(JSON) once."
+                                )
+                            else:
+                                result = (
+                                    f"❌ OS BLOCK: {tool_name} cannot create persona files. "
+                                    "On the synthesize step use write_persona_file("
+                                    "file_path='initialization.md', content='...') with the "
+                                    "full character bible (800+ characters)."
+                                )
                         elif (
                             self.mode == "character_build"
                             and tool_name == "summarize_sources"
@@ -712,6 +723,15 @@ class LoopEngine:
                                 "Call write_persona_file for initialization.md."
                             )
                         elif (
+                            self.mode == "learn_syllabus_build"
+                            and step_kind == "synthesize"
+                            and tool_name in ("save_research_note", "read_webpage", "web_search")
+                        ):
+                            result = (
+                                f"❌ OS BLOCK: {tool_name} is not used on syllabus synthesize. "
+                                "Call write_syllabus_file with JSON."
+                            )
+                        elif (
                             self.mode == "character_build"
                             and step_kind in ("read", "search")
                             and tool_name == "write_persona_file"
@@ -720,6 +740,15 @@ class LoopEngine:
                                 f"❌ OS BLOCK: {step_kind} step is ingest/research only. Use "
                                 "save_research_note / web_search then mark_objective_complete. "
                                 "write_persona_file belongs on the synthesize step."
+                            )
+                        elif (
+                            self.mode == "learn_syllabus_build"
+                            and step_kind in ("read", "search")
+                            and tool_name == "write_syllabus_file"
+                        ):
+                            result = (
+                                f"❌ OS BLOCK: {step_kind} step is ingest/research only. "
+                                "write_syllabus_file belongs on the synthesize step."
                             )
                         elif (
                             step_kind in ("explore", "read")
@@ -939,6 +968,26 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
+                    and self.mode == "learn_syllabus_build"
+                    and step_kind == "read"
+                    and "save_research_note" in tools_succeeded_this_step
+                ):
+                    has_advance = True
+                    advance_summary = (
+                        "Ingested course material; advancing to write_syllabus_file."
+                    )
+                    last_tool_output += (
+                        "\n\n✅ OS: Read-step ingest complete. Advancing to synthesize — "
+                        "call write_syllabus_file once (JSON syllabus)."
+                    )
+                    conversation_history[-1] = {
+                        "role": "user",
+                        "content": f"Tool Outputs:{last_tool_output}",
+                    }
+
+                if (
+                    not has_advance
+                    and not has_finish
                     and self.mode == "character_build"
                     and step_kind == "synthesize"
                     and "write_persona_file" in tools_succeeded_this_step
@@ -950,6 +999,24 @@ class LoopEngine:
                     last_tool_output += (
                         "\n\n✅ OS: Synthesize step complete. Advancing to finalize — "
                         "call finalize_persona then finish_task."
+                    )
+                    conversation_history[-1] = {
+                        "role": "user",
+                        "content": f"Tool Outputs:{last_tool_output}",
+                    }
+
+                if (
+                    not has_advance
+                    and not has_finish
+                    and self.mode == "learn_syllabus_build"
+                    and step_kind == "synthesize"
+                    and "write_syllabus_file" in tools_succeeded_this_step
+                ):
+                    has_advance = True
+                    advance_summary = "Wrote syllabus.json; advancing to finalize_course."
+                    last_tool_output += (
+                        "\n\n✅ OS: Synthesize complete. Advancing to finalize — "
+                        "call finalize_course then finish_task."
                     )
                     conversation_history[-1] = {
                         "role": "user",
@@ -1154,11 +1221,12 @@ class LoopEngine:
             objective=current_objective,
             user_request=getattr(self, "_user_request", ""),
             persona_research_lore=self.persona_research_lore,
+            learn_syllabus_web=self.learn_syllabus_web,
         )
         if (
             len(allowed) < 8
             and self._schema_widen_attempts < 2
-            and self.mode != "character_build"
+            and self.mode not in ("character_build", "learn_syllabus_build")
         ):
             self._schema_widen_attempts += 1
             routed = self.memory.route_tools(
@@ -1172,6 +1240,7 @@ class LoopEngine:
                 objective=current_objective,
                 user_request=getattr(self, "_user_request", ""),
                 persona_research_lore=self.persona_research_lore,
+                learn_syllabus_web=self.learn_syllabus_web,
             )
         subset = {k: self.base_tools[k] for k in allowed if k in self.base_tools}
         if not subset:
@@ -1277,6 +1346,24 @@ class LoopEngine:
                 "mark_objective_complete. Do NOT call summarize_sources. "
                 "read_all_research_notes at most once."
             )
+        elif self.mode == "learn_syllabus_build" and step_kind == "search":
+            hint = (
+                "Web research for syllabus: web_search and read_webpage; save_research_note. "
+                "No write_syllabus_file on this step."
+            )
+        elif self.mode == "learn_syllabus_build" and step_kind == "read":
+            hint = (
+                "Course ingest: save_research_note once with user topic and attachments, "
+                "then mark_objective_complete."
+            )
+        elif self.mode == "learn_syllabus_build" and step_kind == "synthesize":
+            hint = (
+                "SCRATCHPAD below. write_syllabus_file once with valid JSON: ≥8 nodes, "
+                "≥5 sub-units with parent_id (module/lesson tree), specific titles, "
+                "mastery_tier 0 per node. Shallow 3-node outlines are rejected."
+            )
+        elif self.mode == "learn_syllabus_build" and step_kind == "finalize":
+            hint = "Call finalize_course then finish_task."
         else:
             hint = get_step_kind_hint(step_kind)
         cwd = os.getcwd()
@@ -1334,9 +1421,12 @@ class LoopEngine:
         if (
             notes
             and "No research notes found" not in notes
-            and not (self.mode == "character_build" and step_kind == "read")
+            and not (
+                self.mode in ("character_build", "learn_syllabus_build")
+                and step_kind == "read"
+            )
         ):
-            if self.mode == "character_build" and step_kind == "synthesize":
+            if self.mode in ("character_build", "learn_syllabus_build") and step_kind == "synthesize":
                 from tool_library.agent_tools import _scratchpad_byte_limit
 
                 cap = _scratchpad_byte_limit() * 4

@@ -32,6 +32,9 @@ from prompts import (
     get_chat_prompt,
     get_character_prompt,
     get_persona_build_prompt,
+    get_syllabus_build_prompt,
+    get_learn_tutor_prompt,
+    get_learn_archive_prompt,
 )
 
 # Tools imports
@@ -859,6 +862,7 @@ class Agent:
         self.WRITING_PROMPT = get_writing_prompt(tool_docs) + addendum
         self.CODE_PROMPT = get_code_prompt(tool_docs) + addendum
         self.PERSONA_BUILD_PROMPT = get_persona_build_prompt(tool_docs) + addendum
+        self.LEARN_SYLLABUS_BUILD_PROMPT = get_syllabus_build_prompt(tool_docs) + addendum
         self.action_schema = build_strict_schema(tools)
 
     def _system_prompt_for_mode(self, mode: str) -> str:
@@ -870,6 +874,8 @@ class Agent:
             return self.CODE_PROMPT
         if mode == "character_build":
             return self.PERSONA_BUILD_PROMPT
+        if mode == "learn_syllabus_build":
+            return self.LEARN_SYLLABUS_BUILD_PROMPT
         return self.master_prompt
 
     def run_character_chat(
@@ -912,6 +918,69 @@ class Agent:
         messages.append(user_msg)
 
         temp = float(os.getenv("AQUILA_CHARACTER_TEMP", "0.8"))
+        return self.client.chat(messages, temperature=temp, stream=stream)
+
+    def run_learn_tutor_chat(
+        self,
+        course_id: str,
+        user_input: str,
+        chat_history: list,
+        *,
+        node_id: str = "root",
+        text_chunks=None,
+        stream: bool = True,
+    ):
+        from learn_index import search_index, format_retrieval_block
+        from learn_registry import load_syllabus, get_node, syllabus_excerpt
+
+        syllabus = load_syllabus(self.instance_id, course_id) or {}
+        node = get_node(syllabus, node_id) or {}
+        hits = search_index(
+            self.instance_id, "course", course_id, user_input, top_k=5
+        )
+        retrieved = format_retrieval_block(hits, "COURSE SOURCES")
+        system_prompt = get_learn_tutor_prompt(
+            syllabus_excerpt(syllabus),
+            str(node.get("title", "Unit")),
+            node_id,
+            int(node.get("mastery_tier", 0)),
+            retrieved,
+        )
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(chat_history)
+        full_text = user_input
+        block = format_attachment_context(text_chunks)
+        if block:
+            full_text = f"{user_input}{block}"
+        messages.append({"role": "user", "content": full_text})
+        temp = float(os.getenv("AQUILA_LEARN_TUTOR_TEMP", "0.7"))
+        return self.client.chat(messages, temperature=temp, stream=stream)
+
+    def run_learn_archive_chat(
+        self,
+        archive_id: str,
+        archive_title: str,
+        user_input: str,
+        chat_history: list,
+        *,
+        text_chunks=None,
+        stream: bool = True,
+    ):
+        from learn_index import search_index, format_retrieval_block
+
+        hits = search_index(
+            self.instance_id, "archive", archive_id, user_input, top_k=8
+        )
+        retrieved = format_retrieval_block(hits, "ARCHIVE SOURCES")
+        system_prompt = get_learn_archive_prompt(archive_title, retrieved)
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(chat_history)
+        full_text = user_input
+        block = format_attachment_context(text_chunks)
+        if block:
+            full_text = f"{user_input}{block}"
+        messages.append({"role": "user", "content": full_text})
+        temp = float(os.getenv("AQUILA_LEARN_ARCHIVE_TEMP", "0.6"))
         return self.client.chat(messages, temperature=temp, stream=stream)
 
     def summarize_user_preferences(self, history_snippet: str) -> str:
@@ -978,6 +1047,7 @@ class Agent:
         *,
         explore_brief_ran: bool = False,
         persona_research_lore: bool = False,
+        learn_syllabus_web: bool = False,
     ) -> str:
         from plan_validator import BUDGET_RUBRIC, STEP_KINDS
 
@@ -1039,6 +1109,38 @@ class Agent:
                 '{"status": "pending", "description": "Draft section 1", '
                 '"step_kind": "write", "max_iterations": 5}'
             )
+        elif mode == "learn_syllabus_build":
+            role_desc = "You are Aquila's Learn Mode syllabus planner."
+            if learn_syllabus_web:
+                objectives = (
+                    "Produce exactly 4 steps: search (web lore) → read (ingest files) → "
+                    "synthesize (write_syllabus_file JSON once) → finalize (finalize_course). "
+                    "Syllabus must have ≥8 nodes and ≥5 sub-units in a hierarchy."
+                )
+                example_step = (
+                    '{"status": "pending", "description": "Web search for topic", '
+                    '"step_kind": "search", "max_iterations": 5}, '
+                    '{"status": "pending", "description": "Ingest attachments", '
+                    '"step_kind": "read", "max_iterations": 4}, '
+                    '{"status": "pending", "description": "write_syllabus_file JSON", '
+                    '"step_kind": "synthesize", "max_iterations": 5}, '
+                    '{"status": "pending", "description": "finalize_course", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
+            else:
+                objectives = (
+                    "Produce exactly 3 steps: read (ingest) → synthesize (write_syllabus_file) → "
+                    "finalize (finalize_course). Syllabus must have ≥8 nodes and ≥5 sub-units "
+                    "(parent_id set) in a module/lesson tree."
+                )
+                example_step = (
+                    '{"status": "pending", "description": "Ingest sources", '
+                    '"step_kind": "read", "max_iterations": 4}, '
+                    '{"status": "pending", "description": "write_syllabus_file", '
+                    '"step_kind": "synthesize", "max_iterations": 5}, '
+                    '{"status": "pending", "description": "finalize_course", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
         elif mode == "character_build":
             role_desc = "You are Aquila's Character AI persona build planner."
             if persona_research_lore:
@@ -1215,6 +1317,7 @@ class Agent:
                     user_request,
                     explore_brief_ran=explore_brief_ran,
                     persona_research_lore=persona_research_lore,
+                    learn_syllabus_web=learn_syllabus_web,
                 )
                 if tune_notes:
                     console.print("[cyan]📋 Plan tuning:[/cyan]")
@@ -1237,10 +1340,19 @@ class Agent:
         image_payloads: list = None,
         *,
         persona_research_lore: bool = False,
+        learn_syllabus_web: bool = False,
     ) -> str:
         system_prompt = self._system_prompt_for_mode(mode)
         persona_build_id = None
-        if mode == "character_build":
+        learn_course_id = None
+        if mode == "learn_syllabus_build":
+            from learn_registry import course_dir
+            from tool_library.learn_tools import set_active_syllabus_build
+
+            learn_course_id = task_name.replace("syllabus_build_", "", 1)
+            set_active_syllabus_build(self.instance_id, learn_course_id)
+            working_dir = course_dir(self.instance_id, learn_course_id)
+        elif mode == "character_build":
             from persona_registry import persona_dir
             from tool_library.persona_tools import set_active_persona_build
 
@@ -1270,6 +1382,8 @@ class Agent:
             mode_label = "Code Mode (TDD)"
         elif mode == "character_build":
             mode_label = "Character AI — Persona Build"
+        elif mode == "learn_syllabus_build":
+            mode_label = "Learn Mode — Syllabus Build"
         else:
             mode_label = "Autonomous Task"
         
@@ -1278,8 +1392,8 @@ class Agent:
         
         ledger_text = f"Initializing {mode.title()} Engine for: {task_name}\n"
         
-        if not os.path.exists(task_file) or mode == "character_build":
-            if mode == "character_build" and os.path.exists(task_file):
+        if not os.path.exists(task_file) or mode in ("character_build", "learn_syllabus_build"):
+            if mode in ("character_build", "learn_syllabus_build") and os.path.exists(task_file):
                 try:
                     os.remove(task_file)
                 except OSError:
@@ -1329,6 +1443,7 @@ class Agent:
                 image_payloads,
                 explore_brief_ran=explore_brief_ran,
                 persona_research_lore=persona_research_lore,
+                learn_syllabus_web=learn_syllabus_web,
             )
             with open(task_file, "w", encoding="utf-8") as f:
                 f.write(plan_json)
@@ -1372,6 +1487,7 @@ class Agent:
             base_tools=self.base_tools,
             human_research_notes=human_notes,
             persona_research_lore=persona_research_lore,
+            learn_syllabus_web=learn_syllabus_web,
         )
         result = engine.run(
             task_name=task_name,
@@ -1386,6 +1502,10 @@ class Agent:
             from tool_library.persona_tools import clear_active_persona_build
 
             clear_active_persona_build()
+        if mode == "learn_syllabus_build":
+            from tool_library.learn_tools import clear_active_syllabus_build
+
+            clear_active_syllabus_build()
         return result
 
 _agent_instances: dict[str, Agent] = {}

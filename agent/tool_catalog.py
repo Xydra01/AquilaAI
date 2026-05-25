@@ -121,11 +121,11 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "finish_task": _spec("finish_task", "meta", "End entire task", modes=ALL_MODES),
     "web_search": _spec(
         "web_search", "web", "Web search",
-        modes=frozenset({"research", "task", "autonomous", "character_build"}),
+        modes=frozenset({"research", "task", "autonomous", "character_build", "learn_syllabus_build"}),
     ),
     "read_webpage": _spec(
         "read_webpage", "web", "Fetch URL",
-        modes=frozenset({"research", "task", "autonomous", "character_build"}),
+        modes=frozenset({"research", "task", "autonomous", "character_build", "learn_syllabus_build"}),
     ),
     "write_persona_file": _spec(
         "write_persona_file", "persona",
@@ -136,6 +136,41 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         "finalize_persona", "persona",
         "Save greeting and complete persona build",
         modes=frozenset({"character_build"}),
+    ),
+    "write_syllabus_file": _spec(
+        "write_syllabus_file", "learn",
+        "Write syllabus.json for active course build",
+        modes=frozenset({"learn_syllabus_build"}),
+    ),
+    "finalize_course": _spec(
+        "finalize_course", "learn",
+        "Complete course build after syllabus written",
+        modes=frozenset({"learn_syllabus_build"}),
+    ),
+    "generate_assessment": _spec(
+        "generate_assessment", "learn",
+        "Create tier-scaled assessment for a syllabus node",
+        modes=frozenset({"learn_syllabus_build", "learn_tutor"}),
+    ),
+    "index_archive_sources": _spec(
+        "index_archive_sources", "learn",
+        "Index archive source files for semantic search",
+        modes=frozenset({"learn_archive"}),
+    ),
+    "search_archive_sources": _spec(
+        "search_archive_sources", "learn",
+        "Search indexed archive sources",
+        modes=frozenset({"learn_archive"}),
+    ),
+    "generate_archive_quiz": _spec(
+        "generate_archive_quiz", "learn",
+        "Write quiz markdown to archive outputs",
+        modes=frozenset({"learn_archive"}),
+    ),
+    "generate_archive_study_doc": _spec(
+        "generate_archive_study_doc", "learn",
+        "Write study guide markdown to archive outputs",
+        modes=frozenset({"learn_archive"}),
     ),
 }
 
@@ -195,7 +230,24 @@ MODE_REQUIRED: dict[str, frozenset[str]] = {
         "web_search", "read_webpage", "save_research_note",
         "write_persona_file", "finalize_persona",
     }),
+    "learn_syllabus_build": frozenset({
+        "web_search", "read_webpage", "save_research_note",
+        "write_syllabus_file", "finalize_course", "generate_assessment",
+    }),
+    "learn_archive": frozenset({
+        "index_archive_sources", "search_archive_sources",
+        "generate_archive_quiz", "generate_archive_study_doc",
+    }),
 }
+
+LEARN_SYLLABUS_READ_TOOLS = frozenset({"save_research_note"})
+LEARN_SYLLABUS_SEARCH_TOOLS = frozenset({"web_search", "read_webpage", "save_research_note"})
+LEARN_SYLLABUS_SYNTHESIZE_TOOLS = frozenset({
+    "read_all_research_notes",
+    "write_syllabus_file",
+    "generate_assessment",
+})
+LEARN_SYLLABUS_FINALIZE_TOOLS = frozenset({"finalize_course"})
 
 # Persona build: strict per-step tool sets (ignore semantic router extras).
 CHARACTER_BUILD_READ_TOOLS = frozenset({
@@ -271,6 +323,11 @@ def get_mode_playbook(mode: str) -> str:
             "Ingest attachments via save_research_note; optional web_search. "
             "write_persona_file initialization.md (rich character bible), then finalize_persona."
         )
+    elif mode == "learn_syllabus_build":
+        lines.append(
+            "Build syllabus.json: ingest sources, optional web_search, "
+            "write_syllabus_file once, finalize_course."
+        )
     else:
         lines.append("grep_repo and read_file_smart for files; save_research_note for progress.")
     lines.append("Work continuously across tool results until the step objective is done.")
@@ -308,6 +365,7 @@ def allowed_tools_for_step(
     objective: str = "",
     user_request: str = "",
     persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
 ) -> set[str]:
     from recon_policy import pinned_tools_for_code_step
 
@@ -322,6 +380,19 @@ def allowed_tools_for_step(
             pool = CHARACTER_BUILD_SYNTHESIZE_TOOLS | meta
         elif step_kind == "finalize":
             pool = CHARACTER_BUILD_FINALIZE_TOOLS | meta
+        else:
+            pool = set(routed) | MODE_REQUIRED.get(mode, frozenset()) | meta
+        return {n for n in pool if n in all_names or n in TOOL_ALIASES}
+
+    if mode == "learn_syllabus_build":
+        if step_kind == "search" and learn_syllabus_web:
+            pool = LEARN_SYLLABUS_SEARCH_TOOLS | meta
+        elif step_kind == "read":
+            pool = LEARN_SYLLABUS_READ_TOOLS | meta
+        elif step_kind == "synthesize":
+            pool = LEARN_SYLLABUS_SYNTHESIZE_TOOLS | meta
+        elif step_kind == "finalize":
+            pool = LEARN_SYLLABUS_FINALIZE_TOOLS | meta
         else:
             pool = set(routed) | MODE_REQUIRED.get(mode, frozenset()) | meta
         return {n for n in pool if n in all_names or n in TOOL_ALIASES}

@@ -4,20 +4,25 @@
 
 3.4 workspace QA complete, including Character AI ([workspace-qa-cai.md](workspace-qa-cai.md)) and core workspaces ([workspace-qa-3.4.md](workspace-qa-3.4.md)).
 
-## Primary goal: Learn mode
+## Primary goal: Learn mode (dual MVP — shipped in 3.5 alpha)
 
-Replace the Learn stub ([`agent/gui_pages/stub_page.py`](../agent/gui_pages/stub_page.py)) with a classroom-style workspace:
+Replace the Learn stub with **Classroom + Archives** ([`docs/learn-mode.md`](learn-mode.md)):
 
-- Course list / enrollment home
-- Assignments and due dates
-- Progress tracking per learner
-- Integration with Aquila instances (each class may map to an instance or profile)
+- **Classroom:** courses, `syllabus.json` ledger, mastery tiers 0–5, Socratic tutor, assessments
+- **Archives:** source upload, Chroma index, grounded chat, quiz/study markdown export
 
-### Suggested milestones
+### Delivered
 
-1. **M1 — Learn shell** — `LearnPage` with home layout (courses grid, placeholder data), wire `gui.py` stack (no agent tasks yet).
-2. **M2 — Course model** — filesystem or JSON under `Agent-Instances/{id}/learn/` (courses, modules, assignments).
-3. **M3 — Agent hooks** — optional tutor task mode (read-only recon + explain, no destructive tools).
+1. `LearnPage` — home, course create (3 intakes), classroom tree + tutor + assessment, archive workspace
+2. `learn_registry.py` / `learn_index.py` / `learn_tools.py` — instance-scoped storage and indexing
+3. Agent modes: `learn_syllabus_build`, `learn_tutor`, `learn_archive_chat`
+
+### Post-MVP (3.5b / 3.6)
+
+- Assignment calendar / due dates
+- Rich placement diagnostic
+- Writing Mode subcall for polished exports
+- Slides / images
 
 ## Out of scope for 3.5
 

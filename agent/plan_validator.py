@@ -74,6 +74,7 @@ MODE_MIN_STEPS: dict[str, int] = {
     "autonomous": 2,
     "code": 4,
     "character_build": 3,
+    "learn_syllabus_build": 3,
 }
 
 TDD_KEYWORDS = ("implement", "build", "feature", "fix bug", "add ", "create ", "tdd", "pytest")
@@ -82,6 +83,8 @@ MAX_STEP_DESCRIPTION_CHARS = 600
 _RESEARCH_STEP_KINDS = ("search", "read", "synthesize", "finalize")
 _CHARACTER_BUILD_STEP_KINDS = ("read", "synthesize", "finalize")
 _CHARACTER_BUILD_LORE_STEP_KINDS = ("search", "read", "synthesize", "finalize")
+_LEARN_SYLLABUS_STEP_KINDS = ("read", "synthesize", "finalize")
+_LEARN_SYLLABUS_WEB_STEP_KINDS = ("search", "read", "synthesize", "finalize")
 
 _FALLBACK_DESCRIPTIONS: dict[str, str] = {
     "explore": "Reconnaissance: survey sources and codebase before deeper work.",
@@ -324,6 +327,66 @@ def expand_character_build_plan(
     return plan, note
 
 
+def expand_learn_syllabus_plan(
+    plan: dict[str, Any],
+    user_request: str,
+    *,
+    learn_syllabus_web: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Replace under-sized learn syllabus build plan with standard template."""
+    steps = plan.get("steps") or []
+    req = (user_request or "the course").strip()[:500]
+    if learn_syllabus_web:
+        template: list[tuple[str, str]] = [
+            (
+                "search",
+                f"Web research for course topic: web_search, read_webpage, save_research_note. {req}",
+            ),
+            (
+                "read",
+                f"Ingest uploaded sources via save_research_note. {req}",
+            ),
+            (
+                "synthesize",
+                "read_all_research_notes then write_syllabus_file (JSON with nodes, mastery tiers). "
+                "Add generate_assessment for key nodes.",
+            ),
+            (
+                "finalize",
+                "finalize_course then finish_task.",
+            ),
+        ]
+    else:
+        template = [
+            (
+                "read",
+                f"Ingest topic and attachments via save_research_note. {req}",
+            ),
+            (
+                "synthesize",
+                "read_all_research_notes then write_syllabus_file once (JSON syllabus).",
+            ),
+            (
+                "finalize",
+                "finalize_course then finish_task.",
+            ),
+        ]
+    new_steps: list[dict[str, Any]] = []
+    for kind, desc in template:
+        _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
+        new_steps.append({
+            "status": "pending",
+            "description": desc,
+            "step_kind": kind,
+            "max_iterations": default,
+        })
+    old_count = len(steps)
+    plan["steps"] = new_steps
+    plan["current_step_index"] = 0
+    plan["status"] = "in_progress"
+    return plan, f"Expanded learn_syllabus_build plan from {old_count} to {len(new_steps)} steps."
+
+
 def validate_and_tune_plan(
     plan: dict[str, Any],
     mode: str,
@@ -331,6 +394,7 @@ def validate_and_tune_plan(
     *,
     explore_brief_ran: bool = False,
     persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     """
     Ensure step_kind and realistic max_iterations; cap steps and total budget.
@@ -364,6 +428,15 @@ def validate_and_tune_plan(
             lore_kinds = _CHARACTER_BUILD_LORE_STEP_KINDS
             std_kinds = _CHARACTER_BUILD_STEP_KINDS
             kinds = lore_kinds if persona_research_lore else std_kinds
+            if total_steps >= len(kinds) and i < len(kinds):
+                kind = kinds[i]
+                step["step_kind"] = kind
+        elif mode_key == "learn_syllabus_build":
+            kinds = (
+                _LEARN_SYLLABUS_WEB_STEP_KINDS
+                if learn_syllabus_web
+                else _LEARN_SYLLABUS_STEP_KINDS
+            )
             if total_steps >= len(kinds) and i < len(kinds):
                 kind = kinds[i]
                 step["step_kind"] = kind
@@ -416,6 +489,12 @@ def validate_and_tune_plan(
     min_steps = MODE_MIN_STEPS.get(mode_key, 2)
     if mode_key == "character_build" and persona_research_lore:
         min_steps = len(_CHARACTER_BUILD_LORE_STEP_KINDS)
+    if mode_key == "learn_syllabus_build":
+        min_steps = (
+            len(_LEARN_SYLLABUS_WEB_STEP_KINDS)
+            if learn_syllabus_web
+            else len(_LEARN_SYLLABUS_STEP_KINDS)
+        )
     if mode_key == "character_build" and len(steps) != min_steps:
         plan, expand_note = expand_character_build_plan(
             plan, user_request, persona_research_lore=persona_research_lore
@@ -427,6 +506,27 @@ def validate_and_tune_plan(
             _CHARACTER_BUILD_LORE_STEP_KINDS
             if persona_research_lore
             else _CHARACTER_BUILD_STEP_KINDS
+        )
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            kind = kinds[i] if i < len(kinds) else "code"
+            step["step_kind"] = kind
+            step["max_iterations"] = _clamp_budget(kind, step.get("max_iterations"))
+            if step.get("status") is None:
+                step["status"] = "pending"
+
+    if mode_key == "learn_syllabus_build" and len(steps) != min_steps:
+        plan, expand_note = expand_learn_syllabus_plan(
+            plan, user_request, learn_syllabus_web=learn_syllabus_web
+        )
+        notes.append(expand_note)
+        steps = plan["steps"]
+        total_steps = len(steps)
+        kinds = (
+            _LEARN_SYLLABUS_WEB_STEP_KINDS
+            if learn_syllabus_web
+            else _LEARN_SYLLABUS_STEP_KINDS
         )
         for i, step in enumerate(steps):
             if not isinstance(step, dict):

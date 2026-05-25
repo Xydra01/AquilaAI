@@ -81,7 +81,7 @@ Compared to **Aquila 3.3**:
 
 **QA:** manual checklist in **[docs/workspace-qa-3.4.md](docs/workspace-qa-3.4.md)**.
 
-**Deferred to 3.5:** Learn mode classroom UI (stub only in 3.4).
+**3.5:** Learn Mode dual MVP — Classroom (syllabus, Socratic tutor, assessments) + Archives (NotebookLM-style index/chat/generate). See [docs/learn-mode.md](docs/learn-mode.md).
 
 ---
 
@@ -92,7 +92,7 @@ Compared to **Aquila 3.2** (PySide6 stabilization, Writing Mode):
 ### User-facing
 
 - **Code Mode** — dedicated IDE workspace (`gui_pages/code_ide_page.py`): import or attach a repo, file tree, TDD step validation, pytest/flake8 rail.
-- **Mode workspaces** — dedicated `gui_pages/` per mode (Chat, Task, Research, Writing, Code, **Character AI**); Learn stub until 3.5.
+- **Mode workspaces** — dedicated `gui_pages/` per mode (Chat, Task, Research, Writing, Code, **Character AI**, **Learn**).
 - **TurboQuant models** — `aquila-tq-32k`, `aquila-tq-64k`, `aquila-tq-96k` on a separate Ollama port (see [docs/ollama-turboquant.md](docs/ollama-turboquant.md)).
 - **Research bibliographies** — visited/scraped URLs appended to deliverables when research mode completes.
 
@@ -272,7 +272,7 @@ flowchart LR
         Writing[Writing Mode]
         Code[Code Mode]
         Character[Character AI]
-        Learn[Learn stub]
+        Learn[Learn Mode]
     end
     Chat -->|no ledger| Ollama[Ollama aquila]
     Character -->|no tool JSON| Ollama
@@ -312,7 +312,7 @@ The desktop UI switches **dedicated layouts** per mode (`agent/gui_pages/` + `QS
 | **Writing** | Document home (`Agent-Drafts`) + markdown canvas with preview |
 | **Code** | IDE: editable tabs, file tree, buffer save, patch review, agent rail |
 | **Character AI** | Persona home / create / in-character chat ([docs/cai-mode.md](docs/cai-mode.md)) |
-| **Learn** | Placeholder (classroom UI planned for **3.5**) |
+| **Learn** | Classroom courses + source archives ([docs/learn-mode.md](docs/learn-mode.md)) |
 
 ### Character AI (CAI) — roleplay workspace
 
@@ -618,7 +618,7 @@ Defense in depth for a tool-using agent:
 
 Documented in [ARCHITECTURE.md](ARCHITECTURE.md). **3.5 roadmap:** [docs/roadmap-3.5.md](docs/roadmap-3.5.md).
 
-- **Learn mode** — stub UI only; classroom/LMS layout planned for **3.5** (see roadmap).
+- **Learn mode** — dual MVP in **3.5** ([docs/learn-mode.md](docs/learn-mode.md)).
 - **Character AI (3.4)** — complete; see [docs/cai-mode.md](docs/cai-mode.md) and [docs/release-3.4-cai.md](docs/release-3.4-cai.md).
 - **Inter-modal orchestration** — Task workspace shows a placeholder mode stack; single-agent loops today.
 - **Embedded browser** — Research uses SearXNG JSON search panel, not an in-app browser (WebEngine deferred).
