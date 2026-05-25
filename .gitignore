@@ -31,3 +31,6 @@ tools/*.log
 
 # Cursor plans (local)
 .cursor/
+
+pr-3.*
+pr-4.*
