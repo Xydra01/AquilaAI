@@ -17,12 +17,9 @@ def workspace(tmp_path, monkeypatch):
     """
     workspace_dir = tmp_path / "sandbox"
     workspace_dir.mkdir()
-    
-    # Monkeypatch the current working directory to force tools into the sandbox!
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(workspace_dir))
     monkeypatch.chdir(workspace_dir)
-    
-    with patch('tools.AGENT_ROOT_DIR', workspace_dir):
-        yield workspace_dir
+    yield workspace_dir
 
 # --- 1. Testing write_file ---
 

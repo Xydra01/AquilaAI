@@ -18,12 +18,15 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QFileDialog,
     QMessageBox,
+    QInputDialog,
     QWidget,
 )
 from PySide6.QtGui import QFont
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
+from gui_formatting import format_ledger_html
 from gui_pages.base import BaseModePage
+from gui_richtext import SmartScrollTextEdit, apply_panel_style
 from gui_state import render_code_canvas_html
 from tools import is_ignored_code_path
 
@@ -44,15 +47,21 @@ class CodeIdePage(BaseModePage):
         self.import_sandbox_btn.clicked.connect(self._import_sandbox)
         self.new_project_btn = QPushButton("New project")
         self.new_project_btn.clicked.connect(self._new_project)
+        self.save_buffer_btn = QPushButton("Save buffer")
+        self.save_buffer_btn.clicked.connect(self._save_buffer)
         self.sync_btn = QPushButton("Sync to disk")
         self.sync_btn.clicked.connect(self._sync_disk)
+        self.quick_edit_btn = QPushButton("Edit selection (chat)")
+        self.quick_edit_btn.clicked.connect(self._quick_edit_selection)
         self.status_label = QLabel("No project open")
         self.status_label.setStyleSheet("color: #7f8c8d;")
         for w in (
             self.open_inplace_btn,
             self.import_sandbox_btn,
             self.new_project_btn,
+            self.save_buffer_btn,
             self.sync_btn,
+            self.quick_edit_btn,
         ):
             toolbar.addWidget(w)
         toolbar.addStretch()
@@ -65,6 +74,7 @@ class CodeIdePage(BaseModePage):
         self.file_tree = QTreeWidget()
         self.file_tree.setHeaderLabel("Files")
         self.file_tree.setMinimumWidth(180)
+        self.file_tree.itemClicked.connect(self._on_tree_click)
         main_split.addWidget(self.file_tree)
 
         center = QWidget()
@@ -77,8 +87,8 @@ class CodeIdePage(BaseModePage):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
+        self.chat_history = SmartScrollTextEdit()
+        apply_panel_style(self.chat_history, "chat", dark=main_window.dark_mode)
         right_layout.addWidget(self.chat_history, stretch=2)
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Code task (TDD, implement, fix)...")
@@ -97,13 +107,28 @@ class CodeIdePage(BaseModePage):
         for w in (self.attach_button, self.run_btn, self.resume_btn, self.stop_btn):
             btn_row.addWidget(w)
         right_layout.addLayout(btn_row)
-        self.ledger_view = QTextEdit()
-        self.ledger_view.setReadOnly(True)
-        self.ledger_view.setFont(QFont("Consolas", 9))
+        self.ledger_view = SmartScrollTextEdit()
+        apply_panel_style(self.ledger_view, "ledger", dark=main_window.dark_mode)
         right_layout.addWidget(QLabel("Execution log"))
         right_layout.addWidget(self.ledger_view, stretch=2)
         main_split.addWidget(right)
         main_split.setSizes([200, 550, 350])
+
+        pending_row = QHBoxLayout()
+        self.pending_view = QPlainTextEdit()
+        self.pending_view.setReadOnly(True)
+        self.pending_view.setMaximumHeight(100)
+        self.pending_view.setPlaceholderText("Pending diffs (review queue)")
+        pending_row.addWidget(self.pending_view, stretch=1)
+        self.accept_patch_btn = QPushButton("Accept")
+        self.accept_patch_btn.clicked.connect(self._accept_patch)
+        self.accept_all_btn = QPushButton("Accept all")
+        self.accept_all_btn.clicked.connect(self._accept_all_patches)
+        self.reject_patch_btn = QPushButton("Reject")
+        self.reject_patch_btn.clicked.connect(self._reject_patch)
+        for w in (self.accept_patch_btn, self.accept_all_btn, self.reject_patch_btn):
+            pending_row.addWidget(w)
+        root_layout.addLayout(pending_row)
 
         bottom_split = QSplitter(Qt.Horizontal)
         self.problems_view = QTextEdit()
@@ -123,6 +148,13 @@ class CodeIdePage(BaseModePage):
         root_layout.addWidget(bottom_split, stretch=0)
 
         self._last_pytest_summary = ""
+        self._tab_paths: list[str] = []
+        self._user_edited_paths: set[str] = set()
+        self._editor_save_timer = QTimer(self)
+        self._editor_save_timer.setSingleShot(True)
+        self._editor_save_timer.setInterval(400)
+        self._pending_editor_path: str | None = None
+        self._editor_save_timer.timeout.connect(self._flush_editor_save)
 
     def _open_in_place(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Open codebase in-place")
@@ -160,11 +192,128 @@ class CodeIdePage(BaseModePage):
         QMessageBox.information(self, "Sync", result[:2000])
         self.refresh_state()
 
+    def _save_buffer(self) -> None:
+        path = self._current_editor_path()
+        if not path:
+            QMessageBox.information(self, "Code", "Open a file tab first.")
+            return
+        editor = self.editor_tabs.currentWidget()
+        if not isinstance(editor, QPlainTextEdit):
+            return
+        from tool_library import code_canvas_tools
+
+        result = code_canvas_tools.apply_user_buffer_edit(path, editor.toPlainText())
+        self._user_edited_paths.discard(path)
+        QMessageBox.information(self, "Save buffer", result[:1500])
+        self.refresh_state()
+
+    def _current_editor_path(self) -> str | None:
+        idx = self.editor_tabs.currentIndex()
+        if 0 <= idx < len(self._tab_paths):
+            return self._tab_paths[idx]
+        return None
+
+    def _on_tree_click(self, item: QTreeWidgetItem, _column: int) -> None:
+        path = item.data(0, Qt.UserRole)
+        if not path:
+            return
+        for i, p in enumerate(self._tab_paths):
+            if p == path:
+                self.editor_tabs.setCurrentIndex(i)
+                return
+
+    def _schedule_editor_save(self, path: str) -> None:
+        self._pending_editor_path = path
+        self._editor_save_timer.start()
+
+    def _flush_editor_save(self) -> None:
+        path = self._pending_editor_path
+        if not path:
+            return
+        idx = self._tab_paths.index(path) if path in self._tab_paths else -1
+        if idx < 0:
+            return
+        editor = self.editor_tabs.widget(idx)
+        if not isinstance(editor, QPlainTextEdit):
+            return
+        from tool_library import code_canvas_tools
+
+        code_canvas_tools.apply_user_buffer_edit(path, editor.toPlainText())
+        self._user_edited_paths.add(path)
+
+    def _quick_edit_selection(self) -> None:
+        editor = self.editor_tabs.currentWidget()
+        if not isinstance(editor, QPlainTextEdit):
+            return
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            QMessageBox.information(self.main, "Code", "Highlight code first.")
+            return
+        instruction, ok = QInputDialog.getMultiLineText(
+            self.main, "Edit selection", "Instruction for the agent:"
+        )
+        if not ok or not instruction.strip():
+            return
+        selection = cursor.selectedText()
+        path = self._current_editor_path() or "file"
+        self.main.run_chat_subcall(
+            f"Refactor this code snippet from {path}.\n"
+            f"Instruction: {instruction.strip()}\n\n```\n{selection}\n```\n"
+            "Return only the revised code, no fences or explanation.",
+            on_result=lambda revised: self._apply_code_selection(cursor, revised),
+        )
+
+    def _apply_code_selection(self, cursor, revised: str) -> None:
+        text = (revised or "").strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines)
+        if text:
+            cursor.insertText(text)
+            path = self._current_editor_path()
+            if path:
+                self._schedule_editor_save(path)
+
+    def _accept_patch(self) -> None:
+        from tool_library import code_canvas_tools
+
+        patches = code_canvas_tools.list_pending_patches()
+        if patches:
+            p0 = patches[0].get("path", "")
+            if p0 in self._user_edited_paths:
+                ans = QMessageBox.question(
+                    self,
+                    "Conflict",
+                    f"You edited {p0} locally. Accept agent patch anyway?",
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    return
+        QMessageBox.information(self, "Pending patch", code_canvas_tools.accept_pending_patch(0))
+        self.refresh_state()
+
+    def _reject_patch(self) -> None:
+        from tool_library import code_canvas_tools
+
+        QMessageBox.information(self, "Pending patch", code_canvas_tools.reject_pending_patch(0))
+        self.refresh_state()
+
+    def _accept_all_patches(self) -> None:
+        from tool_library import code_canvas_tools
+
+        QMessageBox.information(self, "Pending patches", code_canvas_tools.accept_all_pending_patches())
+        self.refresh_state()
+
     def append_chat_html(self, html: str) -> None:
-        self.chat_history.append(html)
+        self.chat_history.append_smart(html)
 
     def clear_chat_display(self) -> None:
         self.chat_history.clear()
+        self.chat_history.reset_scroll_follow()
+        self.ledger_view.reset_scroll_follow()
 
     def get_chat_input_text(self) -> str:
         return self.chat_input.text().strip()
@@ -177,15 +326,23 @@ class CodeIdePage(BaseModePage):
         self.resume_btn.setDisabled(running)
         self.stop_btn.setDisabled(not running)
 
+    def refresh_theme(self, *, dark: bool) -> None:
+        apply_panel_style(self.chat_history, "chat", dark=dark)
+        apply_panel_style(self.ledger_view, "ledger", dark=dark)
+
     def update_ledger(self, text: str, *, clear: bool = False) -> None:
+        html = format_ledger_html(text)
         if clear:
-            self.ledger_view.clear()
-        self.ledger_view.append(text)
+            self.ledger_view.set_html_smart(html)
+        else:
+            self.ledger_view.append_smart(html)
         if "run_pytest" in text.lower() or "pytest" in text.lower():
             self._last_pytest_summary = text[-800:]
 
     def refresh_state(self) -> None:
-        buf_path = Path("Agent-Code/active_code_state.json")
+        from workspace_paths import agent_data_path
+
+        buf_path = agent_data_path("Agent-Code", "active_code_state.json")
         if not buf_path.exists():
             self.status_label.setText("No project open")
             return
@@ -211,7 +368,7 @@ class CodeIdePage(BaseModePage):
 
         task_ledger = None
         if self._worker:
-            task_path = Path(f"Agent-Tasks/{self._worker.task_name}.json")
+            task_path = agent_data_path("Agent-Tasks", f"{self._worker.task_name}.json")
             if task_path.exists():
                 try:
                     raw = task_path.read_text(encoding="utf-8").strip()
@@ -229,6 +386,17 @@ class CodeIdePage(BaseModePage):
                     }
 
         self.state_view.setHtml(render_code_canvas_html(state_data, task_ledger))
+        patches = code_canvas_tools.list_pending_patches()
+        if patches:
+            lines = []
+            for i, patch in enumerate(patches):
+                lines.append(f"[{i}] {patch.get('path', '?')}")
+                diff = patch.get("unified_diff", "")
+                if diff:
+                    lines.append(diff[:600])
+            self.pending_view.setPlainText("\n\n".join(lines))
+        else:
+            self.pending_view.clear()
         self._populate_file_tree(state_data)
         self._populate_editors(state_data)
         self._populate_problems(state_data)
@@ -262,8 +430,10 @@ class CodeIdePage(BaseModePage):
         root_item.setExpanded(True)
 
     def _populate_editors(self, state_data: dict) -> None:
+        current_path = self._current_editor_path()
         while self.editor_tabs.count() > 0:
             self.editor_tabs.removeTab(0)
+        self._tab_paths = []
         mono = QFont("Courier New", 10)
         for f in state_data.get("files", []):
             path = f.get("path", "file")
@@ -271,7 +441,7 @@ class CodeIdePage(BaseModePage):
                 continue
             editor = QPlainTextEdit()
             editor.setFont(mono)
-            editor.setReadOnly(True)
+            editor.setReadOnly(False)
             content = f.get("content", "")
             if not content and f.get("indexed_only"):
                 disk = Path(state_data.get("root", ".")) / path
@@ -281,10 +451,19 @@ class CodeIdePage(BaseModePage):
                     except Exception:
                         content = "(unable to read from disk)"
             editor.setPlainText(content or "")
+            rel = path
+
+            def _on_change(p=rel, ed=editor) -> None:
+                self._schedule_editor_save(p)
+
+            editor.textChanged.connect(_on_change)
             label = Path(path).name
             if f.get("dirty"):
                 label += " *"
+            self._tab_paths.append(rel)
             self.editor_tabs.addTab(editor, label)
+        if current_path and current_path in self._tab_paths:
+            self.editor_tabs.setCurrentIndex(self._tab_paths.index(current_path))
 
     def _populate_problems(self, state_data: dict) -> None:
         lines = []

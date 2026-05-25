@@ -1,5 +1,6 @@
 #!/bin/bash
 # start.sh - Unified Cross-Platform Startup
+cd "$(dirname "$0")" || exit 1
 
 # Determine the correct activation path
 if [ -d "ai-agent-env/Scripts" ]; then

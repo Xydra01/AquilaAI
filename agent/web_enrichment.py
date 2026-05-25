@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
 from context_budget import ContextProfile, get_context_profile
+from web_content_quality import PageQuality, analyze_fetched_page
+
+if TYPE_CHECKING:
+    from url_visit_registry import UrlVisitRegistry
 
 SourceVia = Literal["auto_scrape", "read_webpage"]
 
@@ -117,6 +121,17 @@ def score_url(url: str) -> int:
         score += 2
     if any(x in lower for x in ("/login", "/signup", "/cart", "utm_source=")):
         score -= 10
+    if any(
+        d in lower
+        for d in (
+            "springer.com",
+            "link.springer.com",
+            "sciencedirect.com",
+            "elsevier.com",
+            "jstor.org",
+        )
+    ):
+        score -= 15
     return score
 
 
@@ -158,7 +173,20 @@ def _is_successful_page_content(text: str) -> bool:
         return False
     if str(text).strip().startswith("❌"):
         return False
+    if "(OS Note: Page classified as paywall" in text:
+        return False
     return True
+
+
+def quality_from_tool_result(text: str, url: str) -> PageQuality:
+    if not _is_successful_page_content(text):
+        return "error"
+    if "classified as paywall" in text:
+        return "paywall"
+    if "classified as thin" in text:
+        return "thin"
+    analysis = analyze_fetched_page(url, text)
+    return analysis.quality
 
 
 def enrich_search_result(
@@ -169,6 +197,9 @@ def enrich_search_result(
     *,
     step_index: int | None = None,
     console=None,
+    url_registry: "UrlVisitRegistry | None" = None,
+    scrape_budget_remaining: list[int] | None = None,
+    run_logger=None,
 ) -> str:
     profile = profile or get_context_profile()
     if not profile.auto_scrape_enabled:
@@ -178,16 +209,33 @@ def enrich_search_result(
     if not urls:
         return result
 
+    seen = url_registry.seen_normalized() if url_registry else scrape_seen
     titles = extract_titles_by_url(result)
-    picks = pick_urls_to_scrape(urls, scrape_seen, profile.auto_scrape_urls)
+    picks = pick_urls_to_scrape(urls, seen, profile.auto_scrape_urls)
     if not picks:
         result += "\n\n(OS Note: No new high-quality URLs found to auto-scrape.)"
         return result
 
     from tool_library import web_tools
 
+    budget = scrape_budget_remaining
+    if budget is not None and budget[0] <= 0:
+        result += "\n\n(OS Note: Per-turn auto-scrape character budget exhausted.)"
+        if run_logger:
+            run_logger.event("scrape_budget_exhausted", step_index=step_index)
+        return result
+
     for url, url_score in picks:
+        if budget is not None and budget[0] <= 0:
+            result += "\n\n(OS Note: Per-turn auto-scrape character budget exhausted.)"
+            if run_logger:
+                run_logger.event("scrape_budget_exhausted", step_index=step_index)
+            break
+
         normalized = normalize_url(url)
+        if url_registry and url_registry.already_scraped(url):
+            result += f"\n\n(OS Note: Skipping auto-scrape for already-visited {url})"
+            continue
         scrape_seen.add(normalized)
         if console:
             console.print(
@@ -198,6 +246,37 @@ def enrich_search_result(
             scrape_data = web_tools.read_webpage(url, max_chars=profile.scrape_char_cap)
         except Exception as exc:
             result += f"\n\n(OS Auto-Scrape failed for {url}: {exc})"
+            if url_registry:
+                url_registry.register_visit(
+                    url, via="auto_scrape", quality="error", body=str(exc)
+                )
+            continue
+
+        quality = quality_from_tool_result(scrape_data, url)
+        if url_registry:
+            url_registry.register_visit(
+                url, via="auto_scrape", quality=quality, body=scrape_data, step_index=step_index
+            )
+
+        if run_logger:
+            run_logger.event(
+                "scrape",
+                url=url,
+                page_quality=quality,
+                char_count=len(scrape_data),
+                body=scrape_data,
+                extra={"score": url_score},
+            )
+
+        if budget is not None:
+            budget[0] -= len(scrape_data)
+
+        if quality == "paywall":
+            analysis = analyze_fetched_page(url, scrape_data)
+            result += (
+                f"\n\n(OS Auto-Scrape: paywall detected for {url} — "
+                f"{analysis.log_summary}. Full body withheld.)"
+            )
             continue
 
         if _is_successful_page_content(scrape_data):
@@ -209,11 +288,11 @@ def enrich_search_result(
                     step_index=step_index,
                 )
             result += (
-                f"\n\n--- OS AUTO-SCRAPED TEXT FROM {url} (score={url_score}) ---\n"
+                f"\n\n--- OS AUTO-SCRAPED TEXT FROM {url} (score={url_score}, quality={quality}) ---\n"
                 f"{scrape_data}\n--- END AUTO-SCRAPE ---"
             )
         else:
-            result += f"\n\n(OS Auto-Scrape failed for {url}: {scrape_data})"
+            result += f"\n\n(OS Auto-Scrape failed for {url}: {scrape_data[:500]})"
 
     return result
 

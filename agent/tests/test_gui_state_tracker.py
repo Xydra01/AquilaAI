@@ -71,7 +71,7 @@ def test_render_code_canvas_html():
 
 
 def test_resolve_ledger_path_code(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
     code_dir = tmp_path / "Agent-Code"
     code_dir.mkdir()
     buf = code_dir / "active_code_state.json"
@@ -91,9 +91,9 @@ def test_refresh_state_tracker_autonomous(qtbot, qapp, tmp_agent_dirs, write_led
     qtbot.addWidget(window)
     window.mode_selector.setCurrentText("Autonomous Task")
     window.worker = gui.AgentWorker("demo_task", "test", "autonomous")
-    window.autonomous_page.bind_worker(window.worker)
-    window.autonomous_page.refresh_state()
-    html = window.autonomous_page.state_view.toHtml()
+    window.task_page.bind_worker(window.worker)
+    window.task_page.refresh_state()
+    html = window.task_page.state_view.toHtml()
     assert "Implement core module" in html or "Create project scaffold" in html
 
 
@@ -108,7 +108,7 @@ def test_refresh_state_tracker_research(qtbot, qapp, tmp_agent_dirs, write_ledge
     qtbot.addWidget(window)
     window.mode_selector.setCurrentText("Research Mode")
     window.worker = gui.AgentWorker("research_job", "test", "research")
-    window.autonomous_page.bind_worker(window.worker)
-    window.autonomous_page.refresh_state()
-    html = window.autonomous_page.state_view.toHtml()
+    window.research_page.bind_worker(window.worker)
+    window.research_page.refresh_state()
+    html = window.research_page.log_panel.state_view.toHtml()
     assert "Search for primary sources" in html

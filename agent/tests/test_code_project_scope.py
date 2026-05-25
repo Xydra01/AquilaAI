@@ -16,9 +16,8 @@ def code_workspace(tmp_path, monkeypatch):
     code_dir = tmp_path / "Agent-Code"
     code_dir.mkdir()
     active = code_dir / "active_code_state.json"
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(code_canvas_tools, "CODE_DIR", code_dir)
-    monkeypatch.setattr(code_canvas_tools, "ACTIVE_CODE_FILE", active)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("AQUILA_DIFF_REVIEW", "0")
     yield tmp_path
 
 
@@ -65,8 +64,8 @@ def test_loop_step_entry_includes_code_project_root(code_workspace):
     assert "SCOPE:" in body
 
 
-def test_resolve_tool_path_and_read_file_in_place(code_workspace, tmp_path):
-    proj = tmp_path / "TheProject"
+def test_resolve_tool_path_and_read_file_in_place(code_workspace):
+    proj = code_workspace / "TheProject"
     (proj / "backend").mkdir(parents=True)
     (proj / "backend" / "main.py").write_text("print('hi')\n", encoding="utf-8")
     code_canvas_tools._save_state({
@@ -83,11 +82,11 @@ def test_resolve_tool_path_and_read_file_in_place(code_workspace, tmp_path):
     assert "print('hi')" in read_file("backend/main.py")
 
 
-def test_search_files_scoped_to_project(code_workspace, tmp_path):
-    proj = tmp_path / "scoped_repo"
+def test_search_files_scoped_to_project(code_workspace):
+    proj = code_workspace / "scoped_repo"
     (proj / "src").mkdir(parents=True)
     (proj / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
-    (tmp_path / "distractor.py").write_text("y = 2\n", encoding="utf-8")
+    (code_workspace / "distractor.py").write_text("y = 2\n", encoding="utf-8")
     code_canvas_tools._save_state({
         "project_name": "scoped_repo",
         "root": str(proj),
@@ -103,8 +102,8 @@ def test_search_files_scoped_to_project(code_workspace, tmp_path):
     assert "distractor.py" not in result
 
 
-def test_write_file_blocked_outside_project(code_workspace, tmp_path):
-    proj = tmp_path / "proj"
+def test_write_file_blocked_outside_project(code_workspace):
+    proj = code_workspace / "proj"
     proj.mkdir()
     code_canvas_tools._save_state({
         "project_name": "proj",
@@ -122,8 +121,8 @@ def test_write_file_blocked_outside_project(code_workspace, tmp_path):
     assert (proj / "ARCHITECTURE.md").read_text(encoding="utf-8") == "# Doc"
 
 
-def test_write_project_markdown(code_workspace, tmp_path):
-    proj = tmp_path / "proj"
+def test_write_project_markdown(code_workspace):
+    proj = code_workspace / "proj"
     proj.mkdir()
     code_canvas_tools._save_state({
         "project_name": "proj",
@@ -132,6 +131,8 @@ def test_write_project_markdown(code_workspace, tmp_path):
         "files": [],
         "test_targets": [],
     })
-    result = code_canvas_tools.write_project_markdown("ARCHITECTURE.md", "# Pink Sapphire Cove\n")
+    body = "# Pink Sapphire Cove\n\n" + ("Overview of the cove project.\n" * 80)
+    assert len(body) >= 1500
+    result = code_canvas_tools.write_project_markdown("ARCHITECTURE.md", body)
     assert "✅" in result
     assert (proj / "ARCHITECTURE.md").read_text(encoding="utf-8").startswith("# Pink Sapphire Cove")

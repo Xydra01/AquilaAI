@@ -52,8 +52,13 @@ def is_ignored_code_path(path: str) -> bool:
     return any(should_skip_dir(p) for p in parts)
 
 """env and root path loading"""
-AGENT_ROOT_DIR = Path.cwd().resolve()
-AGENT_CORE_DIR = Path(__file__).parent.resolve()
+from workspace_paths import (
+    AGENT_CORE_DIR,
+    get_data_root,
+    resolve_under_data_root,
+)
+
+AGENT_ROOT_DIR = get_data_root()
 
 root_env = Path(__file__).parent.parent / ".env"
 agent_env = Path(__file__).parent / ".env"
@@ -70,7 +75,11 @@ def get_code_project_root() -> Path | None:
 
         scope = get_active_project_scope()
         if scope:
-            return Path(scope["root"]).resolve()
+            root = scope["root"]
+            p = Path(root)
+            if p.is_absolute():
+                return p.resolve()
+            return resolve_under_data_root(root)
     except Exception:
         pass
     return None
@@ -81,14 +90,42 @@ def resolve_tool_path(file_path: str, *, for_write: bool = False) -> Path:
     Resolve a path for filesystem tools. When a code project is open, relative paths
     are under CODE_PROJECT_ROOT (may be outside process cwd for in-place repos).
     """
+    code_root = get_code_project_root()
     norm = normalize_workspace_path(file_path or ".")
+
+    if code_root:
+        root = code_root.resolve()
+        rel = norm.replace("\\", "/").strip().lstrip("./")
+        if not rel or rel == "/":
+            return root
+
+        p = Path(norm)
+        if p.is_absolute():
+            resolved = p.resolve()
+            try:
+                resolved.relative_to(root)
+                return resolved
+            except ValueError:
+                # Windows absolute paths outside data_root normalization (e.g. F:/.../README.md)
+                if resolved.name and (root / resolved.name).resolve().is_file():
+                    return (root / resolved.name).resolve()
+                for parent in resolved.parents:
+                    if parent.resolve() == root:
+                        return resolved
+        else:
+            parts = [x for x in rel.split("/") if x]
+            if len(parts) >= 2 and parts[0].lower() == "agent-code":
+                if parts[1].lower() == root.name.lower():
+                    parts = parts[2:]
+            elif parts and parts[0].lower() == root.name.lower():
+                parts = parts[1:]
+            rel = "." if not parts else "/".join(parts)
+            return (root / rel).resolve()
+
     p = Path(norm)
     if p.is_absolute():
         return p.resolve()
-    code_root = get_code_project_root()
-    if code_root:
-        return (code_root / norm).resolve()
-    return (Path.cwd() / norm).resolve()
+    return resolve_under_data_root(norm)
 
 
 def normalize_workspace_path(file_path: str) -> str:
@@ -103,10 +140,10 @@ def normalize_workspace_path(file_path: str) -> str:
     try:
         path_obj = Path(p)
         if path_obj.is_absolute():
-            cwd = Path.cwd().resolve()
+            root = get_data_root()
             resolved = path_obj.resolve()
             try:
-                p = resolved.relative_to(cwd).as_posix()
+                p = resolved.relative_to(root).as_posix()
             except ValueError:
                 p = resolved.as_posix()
     except OSError:
@@ -136,9 +173,10 @@ def write_file(file_path: str, content: str) -> str:
     """Creates a new file or completely overwrites an existing one."""
     code_root = get_code_project_root()
     if code_root:
-        target = resolve_tool_path(file_path, for_write=True)
+        root = code_root.resolve()
+        target = (root / Path(normalize_workspace_path(file_path))).resolve()
         try:
-            target.relative_to(code_root)
+            target.relative_to(root)
         except ValueError:
             return (
                 f"❌ CODE MODE: Cannot write outside the open project ({code_root}). "
@@ -225,9 +263,53 @@ def read_file(file_path: str) -> str:
         return f"❌ Error: File {file_path} not found."
     except Exception as e:
         return f"❌ Error reading file: {e}"
-    
+
+
+def read_file_smart(file_path: str, max_lines: int = 200) -> str:
+    """
+    Read a file with automatic size cap. Prefer read_file_region for targeted edits.
+    USE WHEN: quick peek at a small/medium file in task or code mode.
+    DO NOT USE: huge files — use read_file_region with line ranges.
+    """
+    from tool_result import format_tool_result
+
+    try:
+        max_lines = int(max_lines)
+    except (TypeError, ValueError):
+        max_lines = 200
+    max_lines = max(20, min(max_lines, 500))
+
+    path_obj = resolve_tool_path(file_path)
+    if not is_safe_path(path_obj):
+        return format_tool_result("ERROR", f"Security block: {file_path}")
+    if not path_obj.exists():
+        return format_tool_result("ERROR", f"File not found: {file_path}")
+    if path_obj.is_dir():
+        return format_tool_result("ERROR", f"Not a file: {file_path}")
+
+    try:
+        lines = path_obj.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as e:
+        return format_tool_result("ERROR", str(e))
+
+    if len(lines) <= max_lines:
+        body = "\n".join(f"{i+1}: {ln}" for i, ln in enumerate(lines))
+        return format_tool_result("OK", f"{path_obj.name} ({len(lines)} lines)", body)
+
+    body = "\n".join(f"{i+1}: {ln}" for i, ln in enumerate(lines[:max_lines]))
+    body += (
+        f"\n... [{len(lines) - max_lines} more lines — use read_file_region("
+        f'"{file_path}", start_line, end_line)]'
+    )
+    return format_tool_result("OK", f"{path_obj.name} (first {max_lines}/{len(lines)} lines)", body)
+
+
 def list_directory(path="."):
-    """Lists all files and folders in a specific directory."""
+    """
+    Lists files and folders in ONE directory (non-recursive).
+    USE WHEN: inspecting a single known folder after get_directory_tree or read_code_outline.
+    Do NOT use repeatedly to map the repo — use get_directory_tree instead (max 2 calls per step).
+    """
     try:
         target = resolve_tool_path(path or ".")
         if not target.exists():
@@ -250,7 +332,7 @@ def replace_in_file(file_path: str, target_text: str, replacement_text: str) -> 
     if not is_safe_path(Path(file_path)):
         return f"❌ SECURITY BLOCK: Access to '{file_path}' is strictly forbidden by the system admin. Do not attempt to modify this file."
 
-    full_path = AGENT_ROOT_DIR / file_path
+    full_path = get_data_root() / file_path
     
     if not full_path.exists():
         return f"❌ Error: File {file_path} not found."
@@ -355,11 +437,10 @@ def finish_task(message_to_user: str) -> str:
 
 def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
     """
-    Generates a visual tree structure of a directory. 
-    Automatically ignores massive bloat folders like .git, venv, and __pycache__.
-    Use this to understand project architecture in one single tool call instead of listing directories manually.
+    Generates a visual tree of a directory (recursive, depth-limited).
+    USE WHEN: first layout recon on CODE_PROJECT_ROOT; one call replaces many list_directory calls.
+    Prefer max_depth=2 on project root. Do NOT run on parent agent-projects folder.
     """
-    import os
     from pathlib import Path
 
     try:
@@ -368,8 +449,11 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
         max_depth = 3
 
     ignore_dirs = {'.git', '__pycache__', 'node_modules', 'venv', 'env', 'ai-agent-env', '.pytest_cache', 'vector_db'}
-    
-    target_path = Path(path).expanduser().resolve()
+
+    try:
+        target_path = resolve_tool_path(path or ".")
+    except Exception as e:
+        return f"❌ Error resolving path: {e}"
     if not target_path.exists():
         return f"❌ Error: Directory '{target_path}' does not exist."
     
@@ -391,8 +475,11 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
         except PermissionError:
             tree_str += f"{prefix}└── [PERMISSION DENIED]\n"
             return
-            
-        items = [item for item in items if not (item.is_dir() and item.name in ignore_dirs)]
+
+        items = [
+            item for item in items
+            if not (item.is_dir() and (item.name in ignore_dirs or should_skip_dir(item.name)))
+        ]
         
         for i, item in enumerate(items):
             if len(tree_str) > tree_cap:
@@ -419,6 +506,10 @@ def get_directory_tree(path: str = ".", max_depth: int = 3) -> str:
 
 SURVIVAL_TOOLS = {
     "read_file": {"func": read_file, "description": inspect.getdoc(read_file)},
+    "read_file_smart": {
+        "func": read_file_smart,
+        "description": inspect.getdoc(read_file_smart),
+    },
     "read_file_lines": {"func": read_file_lines, "description": inspect.getdoc(read_file_lines)},
     "write_file": {"func": write_file, "description": inspect.getdoc(write_file)},
     "replace_in_file": {"func": replace_in_file, "description": inspect.getdoc(replace_in_file)},

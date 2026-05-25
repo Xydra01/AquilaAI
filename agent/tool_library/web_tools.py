@@ -10,7 +10,7 @@ import io
 
 import cloudscraper
 
-import fitz
+from pdf_text import extract_pdf_text
 
 import markdownify
 
@@ -21,6 +21,8 @@ from bs4 import BeautifulSoup
 
 
 from context_budget import get_context_profile
+from web_content_quality import analyze_fetched_page, format_tool_result_for_quality
+from web_search_query import clean_research_query, low_quality_results_note
 
 
 
@@ -54,7 +56,23 @@ def web_search(query: str, max_results: int = 5) -> str:
 
         limit = int(max_results)
 
-        clean_query = query.replace('"', '').replace("'", "")
+        stripped = query.replace('"', '').replace("'", "")
+        clean_query, rewrite_note = clean_research_query(stripped)
+        if rewrite_note:
+            try:
+                from run_logger import get_active_run_logger
+
+                logger = get_active_run_logger()
+                if logger:
+                    logger.event(
+                        "tool_start",
+                        tool="web_search",
+                        query_original=stripped[:200],
+                        query_cleaned=clean_query[:200],
+                        rewrite_note=rewrite_note,
+                    )
+            except Exception:
+                pass
 
 
 
@@ -100,6 +118,9 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 
 
+        quality_note = low_quality_results_note(output)
+        if quality_note:
+            output += f"\n{quality_note}\n"
         return output
 
     except ValueError:
@@ -148,17 +169,7 @@ def read_webpage(url: str, max_chars: int | None = None) -> str:
 
         if "application/pdf" in content_type or url.lower().endswith(".pdf"):
 
-            pdf_stream = io.BytesIO(response.content)
-
-            doc = fitz.open(stream=pdf_stream, filetype="pdf")
-
-            pdf_text = ""
-
-            for page in doc:
-
-                pdf_text += page.get_text()
-
-
+            pdf_text = extract_pdf_text(response.content)
 
             if len(pdf_text) > cap:
 
@@ -194,9 +205,11 @@ def read_webpage(url: str, max_chars: int | None = None) -> str:
 
 
 
+        analysis = analyze_fetched_page(url, clean_markdown, raw_html=response.text)
+
         if len(clean_markdown) > cap:
 
-            return (
+            full_body = (
 
                 f"Content of {url} (Truncated):\n\n"
 
@@ -204,7 +217,15 @@ def read_webpage(url: str, max_chars: int | None = None) -> str:
 
             )
 
-        return f"Content of {url}:\n\n{clean_markdown}"
+        else:
+
+            full_body = f"Content of {url}:\n\n{clean_markdown}"
+
+        if analysis.quality != "full":
+
+            return format_tool_result_for_quality(url, full_body, analysis)
+
+        return full_body
 
 
 

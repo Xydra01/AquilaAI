@@ -44,3 +44,22 @@ def test_agent_run_chat_streaming_and_vision(mock_chat):
     assert last_msg_content[0] == {"type": "text", "text": "Look at this"}
     assert last_msg_content[1]["type"] == "image_url"
     assert last_msg_content[1]["image_url"]["url"] == "data:image/jpeg;base64,fake_b64_string"
+
+
+@patch('main.client.chat')
+def test_agent_run_chat_includes_text_attachments(mock_chat):
+    """Chat mode must inject text_chunks like unified tasks (3.4 QA fix)."""
+    mock_chat.return_value = iter([{"message": {"content": "ok"}}])
+    agent = Agent()
+    list(
+        agent.run_chat(
+            user_input="Summarize this",
+            chat_history=[],
+            text_chunks=["SECRET_FILE_BODY"],
+            stream=True,
+        )
+    )
+    messages_sent = mock_chat.call_args[0][0]
+    last = messages_sent[-1]["content"]
+    assert "SECRET_FILE_BODY" in last
+    assert "ATTACHED CONTEXT" in last

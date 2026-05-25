@@ -6,9 +6,11 @@ import inspect
 from chromadb.utils import embedding_functions
 
 # Firewall Import
-from tools import AGENT_CORE_DIR, should_skip_dir
+from tools import should_skip_dir
+from workspace_paths import get_vector_db_path
 
-chroma_client = chromadb.PersistentClient(path=str(AGENT_CORE_DIR / "vector_db"))
+get_vector_db_path().mkdir(parents=True, exist_ok=True)
+chroma_client = chromadb.PersistentClient(path=str(get_vector_db_path()))
 sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
 
 def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):

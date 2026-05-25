@@ -14,9 +14,8 @@ def code_workspace(tmp_path, monkeypatch):
     code_dir = tmp_path / "Agent-Code"
     code_dir.mkdir()
     active = code_dir / "active_code_state.json"
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(code_canvas_tools, "CODE_DIR", code_dir)
-    monkeypatch.setattr(code_canvas_tools, "ACTIVE_CODE_FILE", active)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("AQUILA_DIFF_REVIEW", "0")
     yield tmp_path
 
 
@@ -24,8 +23,8 @@ def test_init_code_project(code_workspace):
     result = code_canvas_tools.init_code_project("hello_api", ".", "python")
     assert "✅ Code project 'hello_api' initialized" in result
     assert "Agent-Code/hello_api" in result
-    assert code_canvas_tools.ACTIVE_CODE_FILE.exists()
-    data = json.loads(code_canvas_tools.ACTIVE_CODE_FILE.read_text(encoding="utf-8"))
+    assert code_canvas_tools.active_code_file().exists()
+    data = json.loads(code_canvas_tools.active_code_file().read_text(encoding="utf-8"))
     assert data["project_name"] == "hello_api"
     assert data["root"] == "Agent-Code/hello_api"
     assert data["language_primary"] == "python"
@@ -37,7 +36,7 @@ def test_create_and_replace_lines(code_workspace):
     code_canvas_tools.create_buffer_file("src/a.py", "line1\nline2\nline3\n")
     result = code_canvas_tools.replace_lines("src/a.py", 2, 2, "LINE2\n")
     assert "✅ Replaced lines" in result
-    data = json.loads(code_canvas_tools.ACTIVE_CODE_FILE.read_text(encoding="utf-8"))
+    data = json.loads(code_canvas_tools.active_code_file().read_text(encoding="utf-8"))
     content = data["files"][0]["content"]
     assert "LINE2" in content
     assert "line2" not in content
@@ -49,7 +48,7 @@ def test_sync_project_to_disk(code_workspace):
     result = code_canvas_tools.sync_project_to_disk()
     assert "✅ Synced" in result
     assert (code_workspace / "Agent-Code" / "sync_proj" / "out.py").exists()
-    data = json.loads(code_canvas_tools.ACTIVE_CODE_FILE.read_text(encoding="utf-8"))
+    data = json.loads(code_canvas_tools.active_code_file().read_text(encoding="utf-8"))
     assert data["files"][0]["dirty"] is False
 
 
@@ -72,7 +71,7 @@ def test_apply_unified_patch(code_workspace):
 """
     result = code_canvas_tools.apply_unified_patch("f.py", patch)
     assert "✅ Patched" in result
-    data = json.loads(code_canvas_tools.ACTIVE_CODE_FILE.read_text(encoding="utf-8"))
+    data = json.loads(code_canvas_tools.active_code_file().read_text(encoding="utf-8"))
     assert "gamma" in data["files"][0]["content"]
     assert "beta" not in data["files"][0]["content"]
 
@@ -88,5 +87,5 @@ def test_run_pytest_updates_state(code_workspace):
         code_canvas_tools.set_test_targets("m.py")
         out = code_canvas_tools.run_pytest("")
         assert "pytest" in out.lower()
-        data = json.loads(code_canvas_tools.ACTIVE_CODE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(code_canvas_tools.active_code_file().read_text(encoding="utf-8"))
         assert data["files"][0]["last_test"] == "passed"

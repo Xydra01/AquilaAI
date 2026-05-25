@@ -19,7 +19,7 @@ def test_resolve_research_ledger():
 
 
 def test_resolve_writing_prefers_draft(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
     draft_dir = tmp_path / "Agent-Drafts"
     draft_dir.mkdir()
     draft_file = draft_dir / "active_draft_state.json"

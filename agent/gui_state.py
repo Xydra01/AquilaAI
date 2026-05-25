@@ -1,21 +1,23 @@
 """GUI helpers for ledger path resolution and state rendering."""
 from pathlib import Path
 
+from workspace_paths import agent_data_path
+
 
 def resolve_ledger_path(mode: str, task_name: str) -> Path | None:
     """Return the filesystem path for the active ledger given mode and task name."""
     mode = (mode or "").lower()
     if mode == "writing":
-        draft = Path("Agent-Drafts/active_draft_state.json")
-        return draft if draft.exists() else Path(f"Agent-Tasks/{task_name}.json")
+        draft = agent_data_path("Agent-Drafts", "active_draft_state.json")
+        return draft if draft.exists() else agent_data_path("Agent-Tasks", f"{task_name}.json")
     if mode == "code":
-        code_buf = Path("Agent-Code/active_code_state.json")
-        return code_buf if code_buf.exists() else Path(f"Agent-Tasks/{task_name}.json")
+        code_buf = agent_data_path("Agent-Code", "active_code_state.json")
+        return code_buf if code_buf.exists() else agent_data_path("Agent-Tasks", f"{task_name}.json")
     if mode == "research":
-        return Path(f"Agent-Plans/{task_name}.json")
+        return agent_data_path("Agent-Plans", f"{task_name}.json")
     if mode in ("autonomous", "task", ""):
-        return Path(f"Agent-Tasks/{task_name}.json")
-    return Path(f"Agent-Tasks/{task_name}.json")
+        return agent_data_path("Agent-Tasks", f"{task_name}.json")
+    return agent_data_path("Agent-Tasks", f"{task_name}.json")
 
 
 def render_step_ledger_html(state: dict) -> str:

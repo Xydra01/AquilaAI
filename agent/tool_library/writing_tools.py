@@ -3,8 +3,10 @@ import json
 import inspect
 from pathlib import Path
 
-DRAFT_DIR = Path("Agent-Drafts")
-DRAFT_DIR.mkdir(exist_ok=True)
+from workspace_paths import agent_data_path
+
+DRAFT_DIR = agent_data_path("Agent-Drafts")
+DRAFT_DIR.mkdir(parents=True, exist_ok=True)
 
 ACTIVE_DRAFT_FILE = DRAFT_DIR / "active_draft_state.json"
 

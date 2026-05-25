@@ -1,34 +1,21 @@
-# Local Ollama / TurboQuant artifacts
+# Local Ollama binaries
 
-This folder holds **local-only** binaries and build outputs. Nothing here is committed to git.
+Portable installs only — not committed to git.
 
-## Keep (required for TurboQuant)
+| Path | Install | Port | Purpose |
+|------|---------|------|---------|
+| `ollama-stock/` | `.\scripts\install-ollama-stock.ps1` | **11434** | **Default** — Qwen 3.5, HauhauCS, `aquila_heretic` |
+| `ollama-turboquant/` | `.\scripts\install-ollama-turboquant-pr.ps1` | **11435** | Optional TurboQuant — `aquila-tq-*` |
 
-| Path | Purpose |
-|------|---------|
-| `ollama-turboquant/` | Portable Ollama built from [PR #15505](https://github.com/ollama/ollama/pull/15505). Install: `.\scripts\install-ollama-turboquant-pr.ps1` |
-
-## Optional (rebuild only)
-
-| Path | Purpose |
-|------|---------|
-| `ollama-pr15505/` | PR source tree after `install-ollama-turboquant-pr.ps1` (large). Safe to delete if you will not rebuild; the install script re-downloads. |
-
-## Safe to delete
-
-These were intermediate installs or logs from setup — remove anytime to reclaim disk space:
-
-- `ollama-v0.30.0-rc17/` — stock rc17 zip (TQ does not work on Windows)
-- `ollama-tq/` — old experimental copy
-- `pr15505-build.log`, `pr15505-cuda-rebuild.log` — build logs
-
-## Models (in `~/.ollama/models`, not here)
-
-Create from repo root with TurboQuant serve on port 11435:
+**Start servers**
 
 ```powershell
-$env:OLLAMA_HOST = "http://127.0.0.1:11435"
-.\scripts\ollama-create-tq-models.ps1
+.\scripts\ollama-serve-stock.ps1              # 11434
+.\scripts\ollama-serve-turboquant-port.ps1    # 11435
 ```
 
-See [docs/ollama-turboquant.md](../docs/ollama-turboquant.md).
+Quit **system tray Ollama** (0.24.x) before using 11434.
+
+Models live in `%USERPROFILE%\.ollama\models` (shared by both servers).
+
+See [docs/ollama-dual-setup.md](../docs/ollama-dual-setup.md).

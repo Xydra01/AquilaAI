@@ -21,6 +21,13 @@ def test_format_attachment_context_includes_chunk():
     assert "File content here" in result
 
 
+def test_format_attachment_context_multiple_chunks():
+    chunks = ["part one", "part two"]
+    result = format_attachment_context(chunks)
+    assert "part one" in result
+    assert "part two" in result
+
+
 def test_generate_plan_includes_attachment(monkeypatch):
     import main as main_mod
 

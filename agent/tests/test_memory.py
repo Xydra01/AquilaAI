@@ -16,10 +16,9 @@ def safe_memory(tmp_path):
     """
     db_dir = tmp_path / "Agent-Memory"
     db_dir.mkdir()
-    
-    with patch('memory.Path.cwd', return_value=tmp_path):
-        mem = DualMemorySystem(storage_dir=str(db_dir))
-        yield mem
+    chroma_dir = tmp_path / "vector_db"
+    mem = DualMemorySystem(storage_dir=str(db_dir), chroma_path=chroma_dir)
+    yield mem
 
 def test_empty_episodic_memory(safe_memory):
     """TDD Goal: Ensure safe fallbacks when the database is completely empty."""
