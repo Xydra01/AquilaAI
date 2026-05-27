@@ -72,3 +72,44 @@ def test_oversize_file_skipped(tmp_path):
     chunks, images = process_local_attachments([str(big)])
     assert len(chunks) == 1
     assert "exceeds" in chunks[0].lower() or "skipped" in chunks[0].lower()
+
+
+def test_matlab_m_script(tmp_path):
+    m_file = tmp_path / "controller.m"
+    m_file.write_text("function y = controller(x)\ny = x + 1;\nend\n", encoding="utf-8")
+    chunks, images = process_local_attachments([str(m_file)])
+    assert len(images) == 0
+    assert len(chunks) == 1
+    assert "controller" in chunks[0]
+    assert "function" in chunks[0]
+
+
+def test_r_script(tmp_path):
+    r_file = tmp_path / "analysis.R"
+    r_file.write_text("mean <- function(x) sum(x)/length(x)\n", encoding="utf-8")
+    chunks, _ = process_local_attachments([str(r_file)])
+    assert "mean" in chunks[0]
+
+
+def test_extensionless_dockerfile(tmp_path):
+    df = tmp_path / "Dockerfile"
+    df.write_text("FROM python:3.12\n", encoding="utf-8")
+    chunks, _ = process_local_attachments([str(df)])
+    assert "python:3.12" in chunks[0]
+
+
+def test_is_attachment_text_path_matlab():
+    from file_parser import is_attachment_text_path
+
+    assert is_attachment_text_path("foo.m")
+    assert is_attachment_text_path("script.mlx")
+    assert is_attachment_text_path("Dockerfile")
+    assert not is_attachment_text_path("data.mat")
+
+
+def test_attachment_dialog_filter_includes_matlab():
+    from file_parser import attachment_dialog_filter
+
+    filt = attachment_dialog_filter()
+    assert "*.m" in filt
+    assert "MATLAB" in filt

@@ -104,7 +104,18 @@ class CodeIdePage(BaseModePage):
         self.stop_btn = QPushButton("🛑")
         self.stop_btn.clicked.connect(main_window.stop_task)
         self.stop_btn.setDisabled(True)
-        for w in (self.attach_button, self.run_btn, self.resume_btn, self.stop_btn):
+        self.eject_btn = QPushButton("⏏️")
+        self.eject_btn.setToolTip(
+            "Unload Ollama model from VRAM (Shift+click on top bar ejects all loaded)."
+        )
+        self.eject_btn.clicked.connect(main_window.eject_ollama_model)
+        for w in (
+            self.attach_button,
+            self.run_btn,
+            self.resume_btn,
+            self.stop_btn,
+            self.eject_btn,
+        ):
             btn_row.addWidget(w)
         right_layout.addLayout(btn_row)
         self.ledger_view = SmartScrollTextEdit()

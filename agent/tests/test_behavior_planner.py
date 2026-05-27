@@ -12,12 +12,18 @@ GARBAGE_RESPONSE_1 = {"message": {"content": "Sure! Here is the plan you asked f
 
 GARBAGE_RESPONSE_2 = {"message": {"content": chr(96)*3 + "json\n \"status\":\"broken_json\", \"steps\":[ \n" + chr(96)*3}}
 
-# FIXED: Since the engine now pre-fills the beginning of the JSON array, 
-# our mock response must only provide the continuation of that array!
-VALID_PLAN_RESPONSE = {"message": {"content": """
-        {"status": "pending", "description": "Step 1", "max_iterations": 2}
-    ]
-}"""}}
+# Engine uses strict json_schema for plans (no assistant prefill). Provide full JSON.
+VALID_PLAN_RESPONSE = {
+    "message": {
+        "content": """{
+  "status": "in_progress",
+  "current_step_index": 0,
+  "steps": [
+    {"status": "pending", "description": "Step 1", "max_iterations": 2, "step_kind": "code"}
+  ]
+}"""
+    }
+}
 
 SEVERED_RESPONSE = {"message": {"content": "*(System Note: Generation forcibly severed.)*"}}
 

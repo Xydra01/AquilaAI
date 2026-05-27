@@ -48,13 +48,18 @@ def test_finish_task_saves_report_from_arguments(tmp_agent_dirs, write_ledger, m
         },
     )
 
-    suffix = (
-        'Done.", "final_report": "# My Report\\n\\nFindings here.", '
-        '"tools": [{"name": "finish_task", "arguments": {"message_to_user": "Done"}}]}'
-    )
+    # Loop engine uses strict json_schema tool turns (no assistant JSON prefill), so
+    # provide a complete JSON object matching the agent-action schema.
+    response = """{
+  "reasoning": "Finish the research task and write the report.",
+  "final_report": "# My Report\\n\\nFindings here.",
+  "tools": [
+    {"name": "finish_task", "arguments": {"message_to_user": "Done"}}
+  ]
+}"""
 
     def fake_chat(*args, **kwargs):
-        return {"message": {"content": suffix}}
+        return {"message": {"content": response}, "format_mode_used": "strict_schema"}
 
     monkeypatch.setattr(main_mod.client, "chat", fake_chat)
     monkeypatch.setattr(main_mod.aquila_memory, "store_experience", lambda *a, **k: None)

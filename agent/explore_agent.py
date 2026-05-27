@@ -6,12 +6,9 @@ from dataclasses import dataclass, field
 from context_budget import get_context_profile
 from context_manager import estimate_messages_tokens
 from main import (
-    JSON_REASONING_PREFILL,
-    assemble_agent_response,
     build_strict_schema,
     parse_agent_response,
     get_executable_tools,
-    validate_tool_arguments,
     validate_tool_calls,
 )
 from tool_policy import EXPLORE_TOOLS, META_TOOLS
@@ -40,6 +37,25 @@ class ExplorationBrief:
         if self.suggested_plan_sketch:
             lines.append(f"**Plan sketch:** {self.suggested_plan_sketch}")
         return "\n".join(lines)
+
+
+def _normalize_raw_tool_json(raw: str) -> str:
+    """Coerce malformed tool entries (e.g. string names) before strict schema parse."""
+    import json
+
+    from structured_parse import extract_json_text, try_parse_json
+
+    clean = extract_json_text(raw)
+    data = try_parse_json(clean)
+    if not isinstance(data, dict):
+        return raw
+    tools = data.get("tools")
+    if isinstance(tools, list) and any(isinstance(item, str) for item in tools):
+        from main import normalize_tool_calls_list
+
+        data["tools"] = normalize_tool_calls_list(tools)
+        return json.dumps(data)
+    return raw
 
 
 def _explore_tool_subset() -> dict:
@@ -101,8 +117,7 @@ def run_brief(
 
     explore_names = set(tools.keys())
     schema = build_strict_schema(tools)
-    bt = chr(96) * 3
-    prefill = f"{bt}json\n{JSON_REASONING_PREFILL}"
+    prefill = ""
 
     code_recon = (
         " For code mode: first tool call SHOULD be get_directory_tree(path='.', max_depth=2) "
@@ -132,7 +147,7 @@ def run_brief(
 
         while parse_retries <= MAX_PARSE_RETRIES_PER_TURN:
             use_schema = schema if schema_failures < 2 else None
-            turn_messages = messages + [{"role": "assistant", "content": prefill}]
+            turn_messages = list(messages)
             est = estimate_messages_tokens(turn_messages)
             result = client.chat(
                 turn_messages,
@@ -142,8 +157,10 @@ def run_brief(
                 estimated_prompt_tokens=est,
             )
             raw = ""
+            format_mode = "strict_schema"
             if isinstance(result, dict):
                 raw = result.get("message", {}).get("content", "") or ""
+                format_mode = str(result.get("format_mode_used", "strict_schema"))
 
             if _os_error_text(raw):
                 if _unreachable_text(raw):
@@ -163,8 +180,14 @@ def run_brief(
                     continue
                 break
 
-            response_text = assemble_agent_response(prefill, raw)
-            parsed = parse_agent_response(response_text, quiet=True)
+            response_text = _normalize_raw_tool_json(raw)
+            parsed = parse_agent_response(
+                response_text,
+                quiet=True,
+                tool_names=explore_names,
+                format_mode=format_mode,
+                registry=tools,
+            )
 
             from main import normalize_tool_calls_list
 
@@ -208,16 +231,7 @@ def run_brief(
                     continue
                 break
 
-            args_ok, args_err = validate_tool_arguments(tool_calls)
-            if not args_ok:
-                parse_retries += 1
-                if parse_retries <= MAX_PARSE_RETRIES_PER_TURN:
-                    messages.append({
-                        "role": "user",
-                        "content": f"Tool Outputs:\n❌ OS ARGUMENT VIOLATION: {args_err}",
-                    })
-                    continue
-                break
+            # Explore is read-only recon — allow empty/partial args; executor validates at runtime.
 
             reasoning = parsed.get("reasoning", "")
             if reasoning:

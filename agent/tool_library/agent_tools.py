@@ -168,12 +168,42 @@ def save_task_deliverable_tool(
     return "❌ Failed to save deliverable."
 
 
-def read_all_research_notes(task_name: str) -> str:
+def read_all_research_notes(
+    task_name: str,
+    max_chars: int | None = None,
+    tail: bool = True,
+) -> str:
     """
-    Retrieves all the research notes you have saved for the current task.
-    Use this right before you write your final report so you have all your gathered facts.
+    Retrieve research notes from the scratchpad for the current task.
+
+    Guardrail: by default this returns a capped view to prevent prompt blowups on 32k.
+    Use max_chars to explicitly request a larger window when needed.
     """
-    return get_active_memory().get_scratchpad_notes(task_name)
+    from context_budget import get_context_profile
+
+    notes = get_active_memory().get_scratchpad_notes(task_name) or ""
+    if not notes.strip() or "No research notes found" in notes:
+        return notes
+
+    profile = get_context_profile()
+    default_cap = max(4000, int(profile.scratchpad_bytes * 2))
+    cap = default_cap
+    if max_chars is not None:
+        try:
+            cap = int(max_chars)
+        except (TypeError, ValueError):
+            cap = default_cap
+    cap = max(1000, cap)
+
+    if len(notes) <= cap:
+        return notes
+
+    slice_text = notes[-cap:] if tail else notes[:cap]
+    marker = (
+        f"\n... [truncated to {cap} chars; call read_all_research_notes(task_name, max_chars=...) "
+        "for more]"
+    )
+    return slice_text + marker
 
 AGENT_TOOLS = {
     "query_past_experience": {"func": query_past_experience, "description": inspect.getdoc(query_past_experience)},

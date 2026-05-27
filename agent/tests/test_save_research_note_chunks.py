@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from tool_library.agent_tools import (
     MAX_SCRATCHPAD_NOTE_BYTES,
     _utf8_byte_chunks,
+    read_all_research_notes,
     save_research_note,
 )
 
@@ -38,6 +39,7 @@ def test_save_research_note_multiple_rows_sqlite(tmp_path, monkeypatch):
         "tool_library.agent_tools.get_active_memory",
         lambda: mem,
     )
+    monkeypatch.delenv("AQUILA_CONTEXT_TIER", raising=False)
     set_runtime_context("aquila", 8192)
 
     payload = "z" * (MAX_SCRATCHPAD_NOTE_BYTES + 2000)
@@ -60,3 +62,22 @@ def test_save_research_note_multiple_rows_sqlite(tmp_path, monkeypatch):
         else:
             parts.append(note)
     assert "".join(parts) == payload
+
+
+def test_read_all_research_notes_capped_by_default(tmp_path, monkeypatch):
+    from context_budget import set_runtime_context
+    from memory import DualMemorySystem
+
+    mem = DualMemorySystem(storage_dir=tmp_path, instance_id="test")
+    monkeypatch.setattr(
+        "tool_library.agent_tools.get_active_memory",
+        lambda: mem,
+    )
+    monkeypatch.delenv("AQUILA_CONTEXT_TIER", raising=False)
+    set_runtime_context("aquila-tq-32k", 32768)
+
+    big = "A" * 80_000
+    save_research_note("task_big", big)
+    out = read_all_research_notes("task_big")
+    assert len(out) < len(big)
+    assert "truncated" in out.lower()

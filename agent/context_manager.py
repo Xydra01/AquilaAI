@@ -172,6 +172,52 @@ def build_loop_messages(
 ) -> list[dict]:
     """Assemble messages for one loop turn with summary injection and in-step cap."""
     profile = profile or get_context_profile()
+
+    def _env_int(name: str, default: int) -> int:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return default
+
+    def _truncate(text: str, cap: int, *, tail: bool = False, note: str = "") -> str:
+        if cap <= 0 or len(text) <= cap:
+            return text
+        suffix = note or f"\n... [truncated to {cap} chars]"
+        # Ensure we don't exceed cap by adding the suffix.
+        avail = max(1, cap - len(suffix))
+        clipped = text[-avail:] if tail else text[:avail]
+        return clipped + suffix
+
+    def _truncate_section(
+        text: str,
+        *,
+        start: str,
+        end: str,
+        cap: int,
+        tail: bool = True,
+    ) -> tuple[str, bool]:
+        if cap <= 0:
+            return text, False
+        i = text.find(start)
+        if i < 0:
+            return text, False
+        j = text.find(end, i + len(start))
+        if j < 0:
+            return text, False
+        body = text[i + len(start) : j]
+        if len(body) <= cap:
+            return text, False
+        body_new = _truncate(
+            body,
+            cap,
+            tail=tail,
+            note=f"\n... [section truncated to {cap} chars]",
+        )
+        return text[: i + len(start)] + body_new + text[j:], True
+
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if rolling_summary and profile.workspace_summary_max_chars > 0:
         cap = profile.workspace_summary_max_chars
@@ -188,4 +234,59 @@ def build_loop_messages(
         hist.pop(0)
     messages.extend(_strip_internal_keys(hist))
     messages.append(user_message)
+
+    # Guardrail: enforce an overall prompt budget (step entry + summary + history + user msg),
+    # not just conversation_history. This keeps 32k/standard stable on resume-heavy tasks.
+    total_cap = _env_int("AQUILA_TOTAL_PROMPT_TOKEN_CAP", profile.in_step_token_cap)
+    total_cap = max(2000, total_cap)
+    if estimate_messages_tokens(messages) > total_cap:
+        scratch_cap = max(2000, int(profile.scratchpad_bytes * 2))
+        summary_cap = max(800, min(2000, profile.workspace_summary_max_chars or 2000))
+        step_entry_cap = max(4000, int(profile.scrape_char_cap))
+
+        for _ in range(6):
+            if estimate_messages_tokens(messages) <= total_cap:
+                break
+
+            changed = False
+            for m in messages:
+                c = m.get("content")
+                if not isinstance(c, str):
+                    continue
+
+                # Prefer truncating large embedded sections first.
+                new_c, did = _truncate_section(
+                    c,
+                    start="--- SCRATCHPAD (prior steps) ---\n",
+                    end="\n--- END SCRATCHPAD ---",
+                    cap=scratch_cap,
+                    tail=True,
+                )
+                if did:
+                    m["content"] = new_c
+                    changed = True
+                    continue
+
+                if "WORKSPACE SUMMARY" in c:
+                    capped = _truncate(c, summary_cap, tail=True)
+                    if capped != c:
+                        m["content"] = capped
+                        changed = True
+                        continue
+
+                if "OS HINT:" in c and len(c) > step_entry_cap:
+                    capped = _truncate(c, step_entry_cap, tail=False)
+                    if capped != c:
+                        m["content"] = capped
+                        changed = True
+
+            if changed:
+                continue
+
+            # Last resort: drop oldest non-system, non-current-user messages.
+            if len(messages) > 2:
+                messages.pop(1)
+            else:
+                break
+
     return messages

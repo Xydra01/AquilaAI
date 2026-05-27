@@ -5,7 +5,7 @@ Requires stock Ollama on 11434 and model aquila_heretic:
   .\\scripts\\ollama-serve-stock.ps1
 
 Run:
-  cd agent && python -m pytest tests/test_live_heretic_tools.py -m live -v
+  cd agent && python -m pytest tests/test_live_heretic_tools.py -m heretic -v
 """
 from __future__ import annotations
 
@@ -22,17 +22,16 @@ from main import (
     OllamaClient,
     build_strict_schema,
     get_executable_tools,
-    get_global_agent,
     normalize_tool_calls_list,
     parse_agent_response,
     validate_tool_arguments,
     validate_tool_calls,
 )
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.heretic]
 
-_ASSISTANT_JSON_PREFIX = '```json\n{\n  "reasoning": "'
 _HERETIC_MODEL = os.getenv("OLLAMA_MODEL", "aquila_heretic").strip()
+_PARSE_ATTEMPTS = int(os.getenv("AQUILA_HERETIC_PARSE_ATTEMPTS", "3"))
 
 
 def _base_url() -> str:
@@ -58,10 +57,12 @@ def _model_available(name: str) -> bool:
         return False
 
 
-def _parse_with_prefill(content: str) -> dict:
+def _parse_live_schema_response(content: str, *, format_mode: str | None = None) -> dict:
+    """Parse tool JSON from strict-schema, json_object, or plain replies."""
     text = (content or "").strip()
     if not text:
         return {}
+
     if text.startswith("{"):
         try:
             obj = json.loads(text)
@@ -69,8 +70,9 @@ def _parse_with_prefill(content: str) -> dict:
                 return obj
         except json.JSONDecodeError:
             pass
-    for candidate in (text, _ASSISTANT_JSON_PREFIX + text, f"```json\n{text}"):
-        parsed = parse_agent_response(candidate)
+
+    for candidate in (text, f"```json\n{text}"):
+        parsed = parse_agent_response(candidate, format_mode=format_mode)
         if isinstance(parsed.get("tools"), list):
             return parsed
     return {}
@@ -107,6 +109,65 @@ def _assert_valid_tool_payload(parsed: dict, *, min_tools: int = 1) -> list[dict
     return normalized
 
 
+def _chat_and_parse(
+    client: OllamaClient,
+    messages: list[dict],
+    schema: dict,
+    *,
+    timeout: int = 180,
+) -> tuple[dict, dict]:
+    """Call Ollama with retries until parse yields a tools array."""
+    last_result: dict = {}
+    last_parsed: dict = {}
+    for attempt in range(_PARSE_ATTEMPTS):
+        result = client.chat(
+            messages,
+            temperature=0.1,
+            format=schema,
+            stream=False,
+            timeout=timeout,
+        )
+        content = result["message"]["content"]
+        format_mode = result.get("format_mode_used")
+        parsed = _parse_live_schema_response(content, format_mode=format_mode)
+        last_result = result
+        last_parsed = parsed
+        if isinstance(parsed.get("tools"), list) and parsed.get("tools"):
+            return result, parsed
+        if attempt + 1 < _PARSE_ATTEMPTS:
+            messages = messages + [
+                {
+                    "role": "assistant",
+                    "content": content,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Your reply was not valid JSON with reasoning and tools array. "
+                        "Each tool must be {\"name\": \"...\", \"arguments\": {...}}. "
+                        "Try again."
+                    ),
+                },
+            ]
+    preview = (last_result.get("message") or {}).get("content", "")[:400]
+    fmt = last_result.get("format_mode_used")
+    raise AssertionError(
+        f"failed to parse tools after {_PARSE_ATTEMPTS} attempts; "
+        f"format_mode={fmt!r} keys={list(last_parsed.keys())!r} "
+        f"content_preview={preview!r}"
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_heretic_model():
+    model = os.getenv("OLLAMA_MODEL", "").lower()
+    if "heretic" not in model:
+        pytest.skip(
+            "Heretic live tests require OLLAMA_MODEL containing 'heretic' "
+            "(e.g. aquila_heretic on stock Ollama :11434)"
+        )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def require_heretic_ollama():
     if not _ollama_available():
@@ -122,15 +183,20 @@ def require_heretic_ollama():
 @pytest.fixture(scope="module")
 def heretic_client() -> OllamaClient:
     client = OllamaClient()
-    assert _HERETIC_MODEL in client.model_name or client.model_name == _HERETIC_MODEL
+    assert "heretic" in client.model_name.lower(), (
+        f"expected heretic model, got {client.model_name!r}"
+    )
     return client
 
 
 def test_heretic_client_uses_configured_model(heretic_client: OllamaClient):
+    assert "heretic" in heretic_client.model_name.lower()
     assert heretic_client.model_name == _HERETIC_MODEL
 
 
 def test_heretic_strict_schema_list_directory(heretic_client: OllamaClient):
+    tools = {k: get_executable_tools()[k] for k in ("list_directory",)}
+    schema = build_strict_schema(tools)
     messages = [
         {
             "role": "system",
@@ -144,19 +210,14 @@ def test_heretic_strict_schema_list_directory(heretic_client: OllamaClient):
             "role": "user",
             "content": "List the current directory. Use list_directory with path '.'.",
         },
-        {"role": "assistant", "content": _ASSISTANT_JSON_PREFIX},
     ]
-    result = heretic_client.chat(
-        messages,
-        temperature=0.1,
-        format=get_global_agent().action_schema,
-        stream=False,
-        timeout=180,
+    result, parsed = _chat_and_parse(heretic_client, messages, schema)
+    tools_out = _assert_valid_tool_payload(parsed)
+    names = [t["name"] for t in tools_out]
+    assert "list_directory" in names, (
+        f"expected list_directory in {names!r}; "
+        f"format_mode={result.get('format_mode_used')!r}"
     )
-    parsed = _parse_with_prefill(result["message"]["content"])
-    tools = _assert_valid_tool_payload(parsed)
-    names = [t["name"] for t in tools]
-    assert "list_directory" in names, f"expected list_directory in {names!r}"
 
 
 def test_heretic_strict_schema_save_research_note(heretic_client: OllamaClient):
@@ -177,19 +238,12 @@ def test_heretic_strict_schema_save_research_note(heretic_client: OllamaClient):
                 'gathered_data: "Horror Sans: starving, psychotic watchman."'
             ),
         },
-        {"role": "assistant", "content": _ASSISTANT_JSON_PREFIX},
     ]
-    result = heretic_client.chat(
-        messages,
-        temperature=0.1,
-        format=schema,
-        stream=False,
-        timeout=180,
-    )
-    parsed = _parse_with_prefill(result["message"]["content"])
+    result, parsed = _chat_and_parse(heretic_client, messages, schema)
     tools = _assert_valid_tool_payload(parsed)
     assert all(t.get("name") == "save_research_note" for t in tools), (
-        f"routed schema should only allow save_research_note, got {[t.get('name') for t in tools]!r}"
+        f"routed schema should only allow save_research_note, got {[t.get('name') for t in tools]!r}; "
+        f"format_mode={result.get('format_mode_used')!r}"
     )
     args = tools[0].get("arguments") or {}
     assert str(args.get("task_name", "")).strip()
@@ -222,19 +276,12 @@ def test_heretic_routed_tools_subset(heretic_client: OllamaClient):
                 "task_name: persona_build_heretic_test"
             ),
         },
-        {"role": "assistant", "content": _ASSISTANT_JSON_PREFIX},
     ]
-    result = heretic_client.chat(
-        messages,
-        temperature=0.1,
-        format=schema,
-        stream=False,
-        timeout=180,
-    )
-    parsed = _parse_with_prefill(result["message"]["content"])
+    result, parsed = _chat_and_parse(heretic_client, messages, schema)
     tools = _assert_valid_tool_payload(parsed)
     names = {t["name"] for t in tools}
-    assert names <= allowed, f"unexpected tools outside allowlist: {names!r}"
-    # Heretic models sometimes pick read_all_research_notes before save on ingest;
-    # loop_engine OS rules correct that. Here we only require valid routed JSON tools.
+    assert names <= allowed, (
+        f"unexpected tools outside allowlist: {names!r}; "
+        f"format_mode={result.get('format_mode_used')!r}"
+    )
     assert names, f"expected at least one routed tool, got {names!r}"

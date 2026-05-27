@@ -1,3 +1,5 @@
+import os
+
 from context_budget import resolve_context_profile
 from context_manager import (
     build_loop_messages,
@@ -26,7 +28,33 @@ def test_build_loop_messages_includes_summary():
     assert "do work" in joined
 
 
+def test_build_loop_messages_enforces_total_prompt_cap(monkeypatch):
+    monkeypatch.delenv("AQUILA_CONTEXT_TIER", raising=False)
+    profile = resolve_context_profile(model_name="aquila", num_ctx_override=8192)
+    monkeypatch.setenv("AQUILA_TOTAL_PROMPT_TOKEN_CAP", "2000")
+    big_notes = "n" * 200_000
+    step_entry = [
+        {
+            "role": "user",
+            "content": (
+                f"--- SCRATCHPAD (prior steps) ---\n{big_notes}\n--- END SCRATCHPAD ---"
+            ),
+        }
+    ]
+    msgs = build_loop_messages(
+        system_prompt="sys",
+        rolling_summary="",
+        step_entry=step_entry,
+        conversation_history=[],
+        user_message={"role": "user", "content": "do work"},
+        profile=profile,
+    )
+    assert estimate_messages_tokens(msgs) <= 2500
+
+
 def test_on_step_advance_compact_clears_history():
+    # Ensure tier isn't forced by workspace env (repo .env uses standard).
+    os.environ.pop("AQUILA_CONTEXT_TIER", None)
     profile = resolve_context_profile(model_name="aquila", num_ctx_override=8192)
     history = [
         {"role": "assistant", "content": "a"},

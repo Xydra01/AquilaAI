@@ -19,19 +19,25 @@ def isolated_data(tmp_path, monkeypatch):
 
 
 def test_character_persist_does_not_touch_global_chat_history():
-    import gui
+    # Avoid constructing the full Qt UI (can require a QApplication). We only need the
+    # persistence behavior of CharacterPage.persist_character_turn.
+    class DummyWin:
+        def __init__(self):
+            self._chat_history_messages = [
+                {"role": "user", "content": "global chat"},
+                {"role": "assistant", "content": "global reply"},
+            ]
+            self.active_instance_id = "default"
 
-    win = gui.AquilaOS.__new__(gui.AquilaOS)
-    win._chat_history_messages = [
-        {"role": "user", "content": "global chat"},
-        {"role": "assistant", "content": "global reply"},
-    ]
-    page = CharacterPage(win)
+    win = DummyWin()
+    page = CharacterPage.__new__(CharacterPage)
+    page.main = win
     inst = create_instance("Iso", default_mode="character")
     win.active_instance_id = inst.id
     p = create_persona(inst.id, "IsoChar", build_complete=True)
     page._active_persona = p
     page._persona_history = []
+    page._user_turn_count = 0
 
     page.persist_character_turn("in character", "reply in character")
 

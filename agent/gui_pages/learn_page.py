@@ -834,11 +834,13 @@ class LearnPage(BaseModePage):
     def _upload_archive_sources(self) -> None:
         if not self._active_archive:
             return
+        from file_parser import attachment_dialog_filter
+
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Add sources",
             "",
-            "Documents (*.pdf *.txt *.md *.docx);;All (*.*)",
+            attachment_dialog_filter(),
         )
         if not paths:
             return

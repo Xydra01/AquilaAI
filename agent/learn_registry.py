@@ -396,6 +396,15 @@ def save_tutor_history(
     path.write_text(json.dumps(trimmed, indent=2), encoding="utf-8")
 
 
+def trim_chat_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Keep recent turns within Learn chat caps (archive + tutor)."""
+    trimmed = [m for m in messages if isinstance(m, dict) and m.get("role")]
+    trimmed = trimmed[-MAX_CHAT_TURNS:]
+    while trimmed and sum(len(m.get("content", "")) for m in trimmed) > MAX_CHAT_CHARS:
+        trimmed = trimmed[2:]
+    return trimmed
+
+
 def load_archive_chat_history(instance_id: str, archive_id: str) -> list[dict[str, str]]:
     path = archive_chat_history_path(instance_id, archive_id)
     if not path.is_file():
@@ -403,7 +412,9 @@ def load_archive_chat_history(instance_id: str, archive_id: str) -> list[dict[st
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, list):
-            return [m for m in data if isinstance(m, dict) and m.get("role")]
+            return trim_chat_messages(
+                [m for m in data if isinstance(m, dict) and m.get("role")]
+            )
     except (json.JSONDecodeError, OSError):
         pass
     return []
@@ -414,8 +425,9 @@ def save_archive_chat_history(
 ) -> None:
     path = archive_chat_history_path(instance_id, archive_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    trimmed = messages[-MAX_CHAT_TURNS:]
-    path.write_text(json.dumps(trimmed, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(trim_chat_messages(messages), indent=2), encoding="utf-8"
+    )
 
 
 def load_assessment(instance_id: str, course_id: str, assessment_id: str) -> dict[str, Any] | None:

@@ -12,7 +12,9 @@ from context_budget import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_ctx():
+def _reset_ctx(monkeypatch):
+    # Repo .env often sets AQUILA_CONTEXT_TIER=standard; tests infer tier from model/num_ctx.
+    monkeypatch.delenv("AQUILA_CONTEXT_TIER", raising=False)
     reset_runtime_context()
     yield
     reset_runtime_context()

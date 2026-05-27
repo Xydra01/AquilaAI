@@ -15,12 +15,99 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_CHARS_PER_CHUNK = 90000
 MAX_CSV_ROWS = 200
 
-TEXT_EXTENSIONS = {
-    ".txt", ".py", ".md", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".xml", ".sh",
-    ".bat", ".ps1", ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp",
-    ".sql", ".log", ".rst",
-}
+# Code / config / markup — parsed as UTF-8 text in all modes (chat, tasks, learn, etc.)
+ATTACHMENT_CODE_EXTENSIONS = frozenset({
+    ".py", ".pyw", ".pyi", ".ipynb",
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".java", ".kt", ".kts", ".scala", ".groovy",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
+    ".cs", ".vb", ".fs", ".fsx",
+    ".go", ".rs", ".zig", ".nim", ".d",
+    ".rb", ".rake", ".erb",
+    ".php", ".phtml",
+    ".swift", ".m", ".mm", ".mlx",
+    ".r", ".R", ".jl",
+    ".f", ".f90", ".f95", ".for", ".f77",
+    ".lua", ".pl", ".pm", ".rkt", ".scm", ".ss", ".clj", ".cljs", ".cljc",
+    ".hs", ".lhs", ".ml", ".mli", ".elm", ".ex", ".exs", ".erl", ".hrl",
+    ".dart", ".v", ".sv", ".svh", ".vhd", ".vhdl",
+    ".asm", ".s", ".S",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1", ".bat", ".cmd",
+    ".sql", ".psql",
+    ".html", ".htm", ".xhtml", ".css", ".scss", ".sass", ".less",
+    ".vue", ".svelte", ".astro",
+    ".xml", ".xsl", ".xslt", ".svg",
+    ".json", ".jsonc", ".json5", ".jsonl", ".ndjson",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".config",
+    ".env", ".properties",
+    ".cmake", ".gradle", ".groovy", ".gradle.kts",
+    ".tex", ".bib", ".sty",
+    ".proto", ".thrift",
+    ".gitignore", ".gitattributes", ".editorconfig",
+    ".graphql", ".gql",
+    ".make", ".mk",
+    ".log",
+})
+
+# General text / docs (non-code-specific labels in file dialog)
+ATTACHMENT_DOC_EXTENSIONS = frozenset({
+    ".txt", ".md", ".markdown", ".rst", ".adoc", ".org",
+    ".csv", ".tsv",
+})
+
+TEXT_EXTENSIONS = ATTACHMENT_CODE_EXTENSIONS | ATTACHMENT_DOC_EXTENSIONS
+
+# Extensionless files still treated as text when attached by basename
+EXTENSIONLESS_TEXT_NAMES = frozenset({
+    "dockerfile",
+    "makefile",
+    "gnumakefile",
+    "cmakelists.txt",
+    "gemfile",
+    "procfile",
+    "vagrantfile",
+    "brewfile",
+    "rakefile",
+    "justfile",
+    "license",
+    "readme",
+})
+
+# Register common code MIME guesses (Windows often leaves these unset)
+for _ext, _mime in (
+    (".m", "text/plain"),
+    (".mlx", "application/octet-stream"),
+    (".r", "text/plain"),
+    (".jl", "text/plain"),
+    (".ipynb", "application/json"),
+    (".f90", "text/plain"),
+    (".vhd", "text/plain"),
+):
+    mimetypes.add_type(_mime, _ext)
+
+
+def is_attachment_text_path(path: str | Path) -> bool:
+    """True if this path should be parsed as UTF-8 attachment text."""
+    p = Path(path)
+    ext = p.suffix.lower()
+    if ext in TEXT_EXTENSIONS:
+        return True
+    return p.name.lower() in EXTENSIONLESS_TEXT_NAMES
+
+
+def attachment_dialog_filter() -> str:
+    """Qt QFileDialog filter string for workspace attachments."""
+    code_globs = " ".join(f"*{e}" for e in sorted(ATTACHMENT_CODE_EXTENSIONS))
+    doc_globs = " ".join(f"*{e}" for e in sorted(ATTACHMENT_DOC_EXTENSIONS))
+    return (
+        "All Files (*);;"
+        f"Code & scripts ({code_globs});;"
+        f"Documents ({doc_globs} *.pdf *.docx *.html *.htm);;"
+        "MATLAB & scientific (*.m *.mlx *.r *.R *.jl *.f *.f90 *.f95);;"
+        "Images (*.png *.jpg *.jpeg *.webp *.gif);;"
+        "PDFs (*.pdf);;"
+        "Spreadsheets (*.csv *.tsv *.xlsx)"
+    )
 
 
 def _read_bytes(path: str) -> tuple[bytes, str] | None:
@@ -114,12 +201,43 @@ def _parse_html(file_bytes: bytes, file_name: str) -> str:
     return _wrap_text(file_name, soup.get_text(separator="\n", strip=True))
 
 
+def _parse_mlx(file_bytes: bytes, file_name: str) -> str:
+    """MATLAB live script (.mlx) is a ZIP; extract readable XML/text when possible."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+            names = zf.namelist()
+            parts = [f"[MATLAB live script: {file_name}]"]
+            for name in names:
+                if name.endswith(".xml") or name.endswith(".m"):
+                    try:
+                        raw = zf.read(name).decode("utf-8", errors="replace")
+                        if raw.strip():
+                            parts.append(f"## {name}\n{raw[:50000]}")
+                    except Exception:
+                        continue
+            if len(parts) > 1:
+                return _wrap_text(file_name, "\n\n".join(parts))
+    except Exception as e:
+        return _wrap_text(
+            file_name,
+            f"[System: Could not unpack MLX {file_name} — {e}. "
+            "Export as .m or paste script text.]",
+        )
+    return _wrap_text(
+        file_name,
+        "[System: MLX opened but no extractable text; attach .m script instead.]",
+    )
+
+
 def _parse_text(file_bytes: bytes, file_name: str) -> str:
     return _wrap_text(file_name, file_bytes.decode("utf-8", errors="replace"))
 
 
 def _dispatch_parse(path: str, file_bytes: bytes, file_name: str, mime_type: str | None):
     ext = Path(file_name).suffix.lower()
+    base_lower = Path(file_name).name.lower()
 
     if mime_type and mime_type.startswith("image/"):
         return _parse_image(file_bytes, mime_type)
@@ -136,7 +254,7 @@ def _dispatch_parse(path: str, file_bytes: bytes, file_name: str, mime_type: str
         except Exception as e:
             return {"type": "text", "payload": f"[System: Could not parse DOCX {file_name} - {e}]"}
 
-    if ext == ".csv":
+    if ext in (".csv", ".tsv"):
         try:
             return {"type": "text", "payload": _parse_csv(file_bytes, file_name)}
         except Exception as e:
@@ -145,10 +263,16 @@ def _dispatch_parse(path: str, file_bytes: bytes, file_name: str, mime_type: str
     if ext == ".xlsx":
         return {"type": "text", "payload": _parse_xlsx(file_bytes, file_name)}
 
-    if ext in (".html", ".htm") or (mime_type and "html" in mime_type):
+    if ext == ".mlx":
+        return {"type": "text", "payload": _parse_mlx(file_bytes, file_name)}
+
+    if ext in (".html", ".htm") or (mime_type and "html" in (mime_type or "")):
         return {"type": "text", "payload": _parse_html(file_bytes, file_name)}
 
-    if ext in TEXT_EXTENSIONS or (mime_type and mime_type.startswith("text/")):
+    if is_attachment_text_path(path) or is_attachment_text_path(file_name):
+        return {"type": "text", "payload": _parse_text(file_bytes, file_name)}
+
+    if mime_type and mime_type.startswith("text/"):
         return {"type": "text", "payload": _parse_text(file_bytes, file_name)}
 
     try:

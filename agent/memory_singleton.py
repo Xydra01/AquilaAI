@@ -22,8 +22,39 @@ def get_active_memory() -> DualMemorySystem:
 
 
 def reset_memory_cache() -> None:
+    for mem in list(_memory_cache.values()):
+        try:
+            mem.close()
+        except Exception:
+            pass
     _memory_cache.clear()
 
 
+class _AquilaMemoryProxy:
+    """Always resolve to the current default-instance memory (survives cache resets)."""
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_overrides", {})
+
+    def __getattr__(self, name: str):
+        overrides = object.__getattribute__(self, "_overrides")
+        if name in overrides:
+            return overrides[name]
+        return getattr(get_memory("default"), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+        else:
+            object.__getattribute__(self, "_overrides")[name] = value
+
+    def __delattr__(self, name: str) -> None:
+        overrides = object.__getattribute__(self, "_overrides")
+        if name in overrides:
+            del overrides[name]
+        else:
+            delattr(get_memory("default"), name)
+
+
 # Backward compatibility — default instance memory
-aquila_memory = get_memory("default")
+aquila_memory = _AquilaMemoryProxy()

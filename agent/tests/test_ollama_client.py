@@ -78,7 +78,8 @@ def test_ollama_client_num_ctx_option(mock_post, mock_get):
         client = OllamaClient()
         client.chat([{"role": "user", "content": "Hi"}], stream=False)
 
-    assert mock_post.call_args.kwargs["json"]["options"] == {"num_ctx": 65536}
+    options = mock_post.call_args.kwargs["json"]["options"]
+    assert options["num_ctx"] == 65536
     assert mock_post.call_args.kwargs["json"]["model"] == "aquila-tq-64k"
 
 
@@ -95,17 +96,19 @@ def test_ollama_client_schema_fallback_chain(mock_post, mock_get):
     ok = MagicMock()
     ok.json.return_value = {"choices": [{"message": {"content": '{"reasoning":"hi"}'}}]}
 
-    mock_post.side_effect = [fail, ok]
+    # strict → shrunk strict → json_object
+    mock_post.side_effect = [fail, fail, ok]
 
     client = OllamaClient()
     result = client.chat([{"role": "user", "content": "Hi"}], format=schema, stream=False)
 
     assert result["message"]["content"] == '{"reasoning":"hi"}'
-    assert mock_post.call_count == 2
+    assert result.get("format_mode_used") == "json_object"
+    assert mock_post.call_count >= 2
     first_fmt = mock_post.call_args_list[0].kwargs["json"].get("response_format", {})
-    second_fmt = mock_post.call_args_list[1].kwargs["json"].get("response_format", {})
     assert first_fmt.get("type") == "json_schema"
-    assert second_fmt.get("type") == "json_object"
+    last_fmt = mock_post.call_args_list[-1].kwargs["json"].get("response_format", {})
+    assert last_fmt.get("type") == "json_object"
 
 
 @patch("main.requests.Session.get")
@@ -122,3 +125,47 @@ def test_ollama_client_no_retry_on_connection_refused(mock_post, mock_get):
 
     assert mock_post.call_count == 1
     assert "not reachable" in result["message"]["content"]
+
+
+@patch("main.requests.Session.get")
+@patch("main.requests.Session.post")
+def test_ollama_client_eject_model(mock_post, mock_get):
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": [{"name": "aquila-tq-32k"}]})
+    mock_post.return_value = MagicMock(status_code=200)
+
+    client = OllamaClient()
+    client.model_name = "aquila-tq-32k"
+    ok, msg = client.eject_model()
+
+    assert ok is True
+    assert "Unloaded" in msg
+    assert mock_post.call_args.kwargs["json"] == {
+        "model": "aquila-tq-32k",
+        "prompt": "",
+        "stream": False,
+        "keep_alive": 0,
+    }
+
+
+@patch("main.requests.Session.get")
+@patch("main.requests.Session.post")
+def test_ollama_client_eject_all_loaded(mock_post, mock_get):
+    def get_side_effect(url, **kwargs):
+        resp = MagicMock(status_code=200)
+        if url.endswith("/api/ps"):
+            resp.json.return_value = {
+                "models": [{"name": "aquila-tq-32k"}, {"name": "other:latest"}]
+            }
+        else:
+            resp.json.return_value = {"models": []}
+        return resp
+
+    mock_get.side_effect = get_side_effect
+    mock_post.return_value = MagicMock(status_code=200)
+
+    client = OllamaClient()
+    ok, msg = client.eject_model(all_loaded=True)
+
+    assert ok is True
+    assert mock_post.call_count == 2
+    assert "aquila-tq-32k" in msg and "other:latest" in msg

@@ -284,15 +284,34 @@ SOCRATIC RULES (mandatory):
 """
 
 
-def get_learn_archive_prompt(archive_title: str, retrieved_context: str) -> str:
-    return f"""You are a study assistant for archive "{archive_title}" in Aquila Learn Mode.
+def get_learn_archive_prompt(archive_title: str) -> str:
+    """Short system prompt — sources go in the user message (Chat-mode style)."""
+    return f"""You are Aquila helping the user study archive "{archive_title}".
 
-Answer ONLY from the retrieved source excerpts below. If the material does not support an answer, say so and suggest what to upload or index.
+Use the source excerpts in the user's message. Answer in clear markdown. Cite [source: filename] when possible.
+If sources do not support an answer, say so briefly.
 
-Cite sources inline like [source: filename] when possible.
-
---- RETRIEVED SOURCES ---
-{retrieved_context or "(No passages retrieved — ask the user to index sources first.)"}
-
-Rules: conversational markdown; no tool JSON; no fabricated citations.
+CRITICAL (same as Chat Mode):
+- Respond directly. Do NOT output JSON or tool calls.
+- Do NOT use extended internal reasoning or think/reasoning XML blocks — give the final answer immediately.
 """
+
+
+def build_learn_archive_user_message(
+    user_input: str,
+    retrieved_context: str,
+    *,
+    extra_attachment_block: str = "",
+) -> str:
+    """User turn: question + RAG excerpts (mirrors Chat Mode attachment injection)."""
+    parts = [(user_input or "").strip()]
+    if retrieved_context and retrieved_context.strip():
+        parts.append(
+            "\n\n--- ARCHIVE SOURCES (retrieved; use for your answer) ---\n"
+            f"{retrieved_context.strip()}\n"
+            "--- END ARCHIVE SOURCES ---"
+        )
+    if extra_attachment_block and extra_attachment_block.strip():
+        parts.append(extra_attachment_block.strip())
+    parts.append("\n/no_think")
+    return "\n".join(p for p in parts if p)

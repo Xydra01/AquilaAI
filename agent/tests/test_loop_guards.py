@@ -128,6 +128,24 @@ def test_save_research_note_splits_large_payload_into_chunks(monkeypatch):
     assert len(rejoined) == len(big)
 
 
+def test_normalize_research_tool_args_rewrites_wrong_task_name():
+    args, note = LoopEngine._normalize_research_tool_args(
+        "read_all_research_notes",
+        {"task_name": "sans-au-school"},
+        "syllabus_build_sans-au-school",
+    )
+    assert args["task_name"] == "syllabus_build_sans-au-school"
+    assert note is None
+
+    args2, note2 = LoopEngine._normalize_research_tool_args(
+        "save_research_note",
+        {"task_name": "sans-au-school", "gathered_data": "lore"},
+        "syllabus_build_sans-au-school",
+    )
+    assert args2["task_name"] == "syllabus_build_sans-au-school"
+    assert note2 == "lore"
+
+
 def test_loop_engine_duplicate_warning_at_two():
     sig = '{"arguments": {}, "name": "list_directory"}'
     msg = LoopEngine._duplicate_tool_warning([sig, sig])

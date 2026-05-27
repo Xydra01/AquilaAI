@@ -73,10 +73,13 @@ def test_live_large_context_pong():
 
 def test_live_strict_json_after_filler():
     """Strict JSON tool schema still parses after a large user prefill."""
-    from main import get_global_agent
+    from main import build_strict_schema, get_executable_tools
 
     client = OllamaClient()
     filler = _PREFILL_WORD * _PREFILL_REPEATS
+    # Small schema keeps the health check focused on context size, not 74-tool anyOf size.
+    tools = {k: get_executable_tools()[k] for k in ("list_directory",)}
+    schema = build_strict_schema(tools)
     messages = [
         {"role": "system", "content": "Output JSON only with reasoning and tools array."},
         {
@@ -90,7 +93,7 @@ def test_live_strict_json_after_filler():
     result = client.chat(
         messages,
         temperature=0.1,
-        format=get_global_agent().action_schema,
+        format=schema,
         stream=False,
         timeout=300,
     )
@@ -98,5 +101,6 @@ def test_live_strict_json_after_filler():
     parsed = _parse_live_schema_response(content)
     assert isinstance(parsed.get("tools"), list), (
         f"expected tools array; got keys={list(parsed.keys())!r} "
+        f"format_mode={result.get('format_mode_used')!r} "
         f"content_preview={content[:400]!r}"
     )

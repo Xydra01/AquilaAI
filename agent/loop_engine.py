@@ -93,9 +93,12 @@ class LoopEngine:
         self._schema_widen_attempts = 0
         self._parse_failures = 0
         self._force_full_schema = False
+        self._schema_tool_names: frozenset[str] = frozenset()
+        self._last_format_mode: str = "strict_schema"
         self.human_research_notes = (human_research_notes or "").strip()
         self.persona_research_lore = bool(persona_research_lore)
         self.learn_syllabus_web = bool(learn_syllabus_web)
+        self._scratchpad_injected_this_step: bool = False
 
     @staticmethod
     def _use_legacy_loop() -> bool:
@@ -239,6 +242,7 @@ class LoopEngine:
 
                 step_entry_msgs: list[dict] = []
                 if episode_count == 0 and not step_entry_injected:
+                    self._scratchpad_injected_this_step = False
                     step_entry_msgs = self._build_step_entry_messages(
                         task_name,
                         step_kind,
@@ -379,19 +383,27 @@ class LoopEngine:
                     profile=profile,
                 )
 
-                bt = chr(96) * 3
-                prefill_text = f"{bt}json\n" + '{\n  "reasoning": "'
-                active_memory.append({"role": "assistant", "content": prefill_text})
+                if self._force_full_schema:
+                    schema = self.action_schema
+                    self._schema_tool_names = frozenset(self.base_tools.keys())
+                else:
+                    schema = self._schema_for_step(current_objective, step_kind)
+
+                # Strict json_schema returns a full JSON object; assistant prefill
+                # causes continuation prose instead of JSON on some models (e.g. TQ).
+                prefill_text = ""
+                if not isinstance(schema, dict):
+                    bt = chr(96) * 3
+                    prefill_text = f"{bt}json\n" + '{\n  "reasoning": "'
+                    active_memory.append({
+                        "role": "assistant",
+                        "content": prefill_text,
+                    })
 
                 if ui_callback:
                     ui_callback(
                         f"{ledger_text}\n\n⏳ {step_run.format_progress()} · working..."
                     )
-
-                if self._force_full_schema:
-                    schema = self.action_schema
-                else:
-                    schema = self._schema_for_step(current_objective, step_kind)
                 temperature = 0.2
                 est_tokens = estimate_messages_tokens(active_memory)
 
@@ -403,8 +415,12 @@ class LoopEngine:
                     estimated_prompt_tokens=est_tokens,
                 )
                 raw_response = ""
+                self._last_format_mode = "strict_schema"
                 if isinstance(result_dict, dict):
                     raw_response = result_dict.get("message", {}).get("content", "") or ""
+                    self._last_format_mode = str(
+                        result_dict.get("format_mode_used", "strict_schema")
+                    )
 
                 if is_system_error_response(raw_response):
                     self.console.event(
@@ -447,7 +463,11 @@ class LoopEngine:
                     loop_tick += 1
                     continue
 
-                response_text = assemble_agent_response(prefill_text, raw_response)
+                response_text = (
+                    assemble_agent_response(prefill_text, raw_response)
+                    if prefill_text
+                    else raw_response
+                )
 
                 ep_display = step_run.episode_count + 1
                 if hasattr(self.console, "log_agent_turn"):
@@ -481,7 +501,13 @@ class LoopEngine:
                     "_counts_as_episode": False,
                 })
 
-                parsed_response = parse_agent_response(response_text, quiet=False)
+                parsed_response = parse_agent_response(
+                    response_text,
+                    quiet=False,
+                    tool_names=self._schema_tool_names or None,
+                    format_mode=self._last_format_mode,
+                    registry=self.base_tools,
+                )
                 if not parsed_response:
                     self._parse_failures += 1
                     if self._parse_failures >= 2:
@@ -501,7 +527,8 @@ class LoopEngine:
                     self._pop_last_assistant(conversation_history)
                     retry_msg = (
                         "Tool Outputs:\n❌ OS PARSE ERROR: Your last response was not valid JSON "
-                        "with a 'tools' array. Output ONLY a single JSON object matching the schema."
+                        "with a 'tools' array. Output ONLY a single JSON object matching the schema. "
+                        f"Use tool names from: {sorted(self._schema_tool_names)[:12]}..."
                     )
                     conversation_history.append({"role": "user", "content": retry_msg})
                     ledger_text += f"\n{retry_msg}\n"
@@ -545,7 +572,30 @@ class LoopEngine:
                         ),
                     )
 
-                schema_ok, schema_err = validate_tool_calls(tool_calls)
+                try:
+                    from structured_parse import log_structured_parse_event
+
+                    log_structured_parse_event(
+                        self.console,
+                        ok=bool(parse_ok),
+                        meta={
+                            "format_mode": self._last_format_mode,
+                            "error_kind": "ok" if parse_ok else "empty",
+                            "healed": False,
+                        },
+                        tool_count=len(tool_calls) if parse_ok else 0,
+                    )
+                except Exception:
+                    pass
+
+                schema_ok, schema_err = validate_tool_calls(
+                    tool_calls,
+                    valid_names=(
+                        set(self._schema_tool_names)
+                        if self._schema_tool_names
+                        else None
+                    ),
+                )
                 if not schema_ok:
                     parse_retries += 1
                     self._pop_last_assistant(conversation_history)
@@ -565,7 +615,9 @@ class LoopEngine:
                         tools_succeeded_this_step = set()
                     continue
 
-                args_ok, args_err = validate_tool_arguments(tool_calls)
+                args_ok, args_err = validate_tool_arguments(
+                    tool_calls, registry=self.base_tools
+                )
                 if not args_ok:
                     parse_retries += 1
                     self._pop_last_assistant(conversation_history)
@@ -650,6 +702,49 @@ class LoopEngine:
                                 "— do NOT call save_research_note again."
                             )
                         elif (
+                            self.mode == "learn_syllabus_build"
+                            and step_kind in ("read", "search")
+                            and tool_name == "save_research_note"
+                            and "save_research_note" in tools_succeeded_this_step
+                        ):
+                            result = (
+                                "❌ OS BLOCK: Research note already saved for this step. "
+                                "Call mark_objective_complete — do NOT call "
+                                "save_research_note again."
+                            )
+                        elif (
+                            self.mode == "learn_syllabus_build"
+                            and step_kind in ("read", "search")
+                            and tool_name == "read_all_research_notes"
+                        ):
+                            notes = ""
+                            try:
+                                notes = self.memory.get_scratchpad_notes(task_name) or ""
+                            except Exception:
+                                pass
+                            empty = (
+                                not notes.strip()
+                                or "No research notes found" in notes
+                            )
+                            if empty:
+                                result = (
+                                    "❌ OS BLOCK: Scratchpad is empty. Call "
+                                    "save_research_note with web/attachment findings first, "
+                                    "then mark_objective_complete. read_all_research_notes "
+                                    "is for the synthesize step only."
+                                )
+                            elif "read_all_research_notes" in tools_succeeded_this_step:
+                                result = (
+                                    "❌ OS BLOCK: Notes already loaded this step. "
+                                    "Call mark_objective_complete to advance."
+                                )
+                            else:
+                                result = (
+                                    "❌ OS BLOCK: On ingest/search steps use "
+                                    "save_research_note, not read_all_research_notes. "
+                                    "Reading notes is for the synthesize step."
+                                )
+                        elif (
                             self.mode == "character_build"
                             and step_kind == "read"
                             and tool_name == "read_all_research_notes"
@@ -712,6 +807,16 @@ class LoopEngine:
                                 "❌ OS BLOCK: Scratchpad notes already loaded this step. "
                                 "Call write_persona_file for initialization.md now, "
                                 "then mark_objective_complete."
+                            )
+                        elif (
+                            self.mode == "learn_syllabus_build"
+                            and step_kind == "synthesize"
+                            and tool_name == "read_all_research_notes"
+                            and "read_all_research_notes" in tools_succeeded_this_step
+                        ):
+                            result = (
+                                "❌ OS BLOCK: Scratchpad notes already loaded this step. "
+                                "Call write_syllabus_file with JSON now, then mark_objective_complete."
                             )
                         elif (
                             self.mode == "character_build"
@@ -831,8 +936,7 @@ class LoopEngine:
                             args, research_note = self._normalize_research_tool_args(
                                 tool_name, args, task_name
                             )
-                            if research_note:
-                                tc = {**tc, "arguments": args}
+                            tc = {**tc, "arguments": args}
                             self.console.log_tool_start(tool_name, args)
                             execution_results = self.executor.execute([tc])
                             result = (
@@ -877,6 +981,16 @@ class LoopEngine:
                                 result += (
                                     "\n✅ OS: Notes loaded. Call write_persona_file for "
                                     "initialization.md now — do NOT call summarize_sources."
+                                )
+                            if (
+                                tool_name == "read_all_research_notes"
+                                and self._scratchpad_injected_this_step
+                                and result
+                                and not str(result).startswith("❌")
+                            ):
+                                result = (
+                                    "✅ OS: Research notes are already in the step brief "
+                                    "(SCRATCHPAD section)."
                                 )
                             if (
                                 self.mode == "character_build"
@@ -924,6 +1038,27 @@ class LoopEngine:
                         ) and result and result.startswith("✅"):
                             doc_markdown_writes_this_turn += 1
 
+                    # Guardrail: cap oversized tool outputs before they enter conversation history.
+                    # This prevents single-tool blowups (e.g., large scratchpad reads, scrapes).
+                    try:
+                        raw_text = result if isinstance(result, str) else str(result)
+                    except Exception:
+                        raw_text = ""
+                    if raw_text:
+                        try:
+                            env_cap = int(os.getenv("AQUILA_TOOL_OUTPUT_CHAR_CAP", "").strip() or "0")
+                        except ValueError:
+                            env_cap = 0
+                        default_cap = max(2000, int(get_context_profile().read_file_preview_chars * 2))
+                        cap = env_cap if env_cap > 0 else default_cap
+                        if len(raw_text) > cap:
+                            raw_text = (
+                                raw_text[:cap]
+                                + f"\n... [tool output truncated to {cap} chars; "
+                                "see scratchpad/files or re-run tool with narrower scope]"
+                            )
+                        result = raw_text
+
                     last_tool_output += f"\nTool '{tool_name}' result:\n{result}\n"
                     self.console.log_tool_execution(
                         tool_name, tc.get("arguments", {}), result
@@ -969,16 +1104,16 @@ class LoopEngine:
                     not has_advance
                     and not has_finish
                     and self.mode == "learn_syllabus_build"
-                    and step_kind == "read"
+                    and step_kind in ("read", "search")
                     and "save_research_note" in tools_succeeded_this_step
                 ):
                     has_advance = True
                     advance_summary = (
-                        "Ingested course material; advancing to write_syllabus_file."
+                        "Ingested course research; advancing to syllabus synthesis."
                     )
                     last_tool_output += (
-                        "\n\n✅ OS: Read-step ingest complete. Advancing to synthesize — "
-                        "call write_syllabus_file once (JSON syllabus)."
+                        "\n\n✅ OS: Ingest/search step complete. Advancing — on synthesize "
+                        "call read_all_research_notes at most once, then write_syllabus_file."
                     )
                     conversation_history[-1] = {
                         "role": "user",
@@ -1244,7 +1379,20 @@ class LoopEngine:
             )
         subset = {k: self.base_tools[k] for k in allowed if k in self.base_tools}
         if not subset:
+            self._schema_tool_names = frozenset(self.base_tools.keys())
             return self.action_schema
+        self._schema_tool_names = frozenset(subset.keys())
+        from model_output_profile import resolve_model_output_profile
+
+        profile = resolve_model_output_profile(
+            getattr(self.client, "model_name", None)
+        )
+        if len(self._schema_tool_names) > profile.max_tools_in_schema:
+            allowed_sorted = sorted(self._schema_tool_names)[
+                : profile.max_tools_in_schema
+            ]
+            subset = {k: subset[k] for k in allowed_sorted}
+            self._schema_tool_names = frozenset(subset.keys())
         return build_strict_schema(subset)
 
     def _execute_tool_batch(
@@ -1348,13 +1496,15 @@ class LoopEngine:
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "search":
             hint = (
-                "Web research for syllabus: web_search and read_webpage; save_research_note. "
+                "Web research for syllabus: web_search and read_webpage; "
+                "save_research_note once with distilled findings, then mark_objective_complete. "
+                "Do NOT call read_all_research_notes (use active task name from OS header). "
                 "No write_syllabus_file on this step."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "read":
             hint = (
                 "Course ingest: save_research_note once with user topic and attachments, "
-                "then mark_objective_complete."
+                "then mark_objective_complete. Do NOT call read_all_research_notes on this step."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "synthesize":
             hint = (
@@ -1426,6 +1576,7 @@ class LoopEngine:
                 and step_kind == "read"
             )
         ):
+            self._scratchpad_injected_this_step = True
             if self.mode in ("character_build", "learn_syllabus_build") and step_kind == "synthesize":
                 from tool_library.agent_tools import _scratchpad_byte_limit
 

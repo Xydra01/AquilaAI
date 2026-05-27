@@ -19,7 +19,7 @@ Agent-Plans/
 Agent-Research/
 Agent-Tasks/
 Agent-Code/
-Agent-Instances/learn-test/learn/
+Agent-Instances/
 
 # Ollama TurboQuant — local binaries & build trees (see tools/README.md)
 tools/ollama-turboquant/

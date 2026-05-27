@@ -48,7 +48,14 @@ class AgentRail(QWidget):
         self.stop_btn = QPushButton("🛑" if compact_buttons else "🛑 Stop")
         self.stop_btn.clicked.connect(main_window.stop_task)
         self.stop_btn.setDisabled(True)
-        for w in (self.attach_button, self.run_btn, self.stop_btn):
+        eject_label = "⏏️" if compact_buttons else "⏏️ Eject model"
+        self.eject_btn = QPushButton(eject_label)
+        self.eject_btn.setToolTip(
+            "Unload the Ollama model from VRAM (keep_alive=0). "
+            "Use when Stop does not end a stuck run or to reset GPU state."
+        )
+        self.eject_btn.clicked.connect(main_window.eject_ollama_model)
+        for w in (self.attach_button, self.run_btn, self.stop_btn, self.eject_btn):
             btn_layout.addWidget(w)
         if show_resume:
             btn_layout.addWidget(self.resume_btn)

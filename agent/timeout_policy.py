@@ -41,6 +41,14 @@ def _per_1k_seconds(tier: ContextTier) -> float:
     return float(max(1, base - 3))
 
 
+def cold_start_extra_seconds() -> int:
+    return _env_int("AQUILA_COLD_START_EXTRA_SEC", 90)
+
+
+def read_timeout_cap(profile: ContextProfile) -> int:
+    return _env_int("AQUILA_READ_TIMEOUT_MAX", _TIER_CAP_DEFAULT.get(profile.tier, 300))
+
+
 def compute_read_timeout(
     *,
     estimated_prompt_tokens: int,

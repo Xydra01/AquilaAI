@@ -1,9 +1,33 @@
 import sqlite3
+import sys
+import os
 import chromadb
 from pathlib import Path
 from datetime import datetime
 
 from workspace_paths import agent_data_path, get_vector_db_path
+
+
+def _pytest_running() -> bool:
+    return "pytest" in sys.modules
+
+
+def _make_chroma_client(chroma_path: str | Path | None):
+    """Persistent in production; ephemeral in pytest unless a test passes chroma_path."""
+    if chroma_path is not None:
+        chroma_dir = Path(chroma_path)
+        chroma_dir.mkdir(parents=True, exist_ok=True)
+        return chromadb.PersistentClient(path=str(chroma_dir))
+    persist = os.getenv("AQUILA_TEST_PERSIST_CHROMA", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if _pytest_running() and not persist:
+        return chromadb.EphemeralClient()
+    chroma_dir = get_vector_db_path()
+    chroma_dir.mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=str(chroma_dir))
 
 
 class DualMemorySystem:
@@ -24,15 +48,29 @@ class DualMemorySystem:
         
         self.db_path = self.storage_dir / "fact_graph.db"
         self._init_sqlite()
-        
-        chroma_dir = Path(chroma_path) if chroma_path is not None else get_vector_db_path()
-        chroma_dir.mkdir(parents=True, exist_ok=True)
-        self.chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
+
+        self.chroma_client = _make_chroma_client(chroma_path)
         self.collection = self.chroma_client.get_or_create_collection(name="episodic_experiences")
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in self.instance_id)
         self.tool_collection = self.chroma_client.get_or_create_collection(
             name=f"agent_tools_{safe_id}"
         )
+        self._tools_indexed = False
+
+    def close(self) -> None:
+        """Release Chroma native handles (important during long pytest runs on Windows)."""
+        client = getattr(self, "chroma_client", None)
+        if client is None:
+            return
+        try:
+            reset = getattr(client, "reset", None)
+            if callable(reset):
+                reset()
+        except Exception:
+            pass
+        self.chroma_client = None
+        self.collection = None
+        self.tool_collection = None
         self._tools_indexed = False
 
     def _scratchpad_key(self, task_name: str) -> str:

@@ -9,6 +9,7 @@ Use this after the **3.5 dual MVP** (Classroom + Archives). Product reference: [
 | Shallow syllabus (3 flat units) | `write_syllabus_file` rejects &lt;8 nodes or &lt;5 `parent_id` sub-units; prompts/planner updated |
 | Archive sources not indexed | Auto-index on upload + on open when stale; shared `file_parser.extract_indexable_text` for PDF/DOCX |
 | Quiz/study gen empty | Blocked when no indexed chunks; user prompted to re-index |
+| Archive chat hits 300s with no answer | Qwen `think` blocks + generation kill-switch; fixed: strip think, `AQUILA_LEARN_ARCHIVE_GENERATION_CAP=0`, Chat-style prompts |
 
 ---
 
@@ -114,7 +115,18 @@ python -m pytest tests/test_learn_registry.py tests/test_learn_syllabus_plan.py 
 
 ---
 
-## H. Known limitations (not bugs for this pass)
+## H. Scale expectations (holoscopy-scale archives)
+
+| Metric | Typical meaning |
+|--------|-----------------|
+| **177 chunks / 4 files** | Normal for large PDFs (~2.4k chars/chunk). ≈400k chars total indexed. |
+| **First archive question** | First query may load MiniLM embedder (~10–30s once per app session). |
+| **Follow-up questions** | Should be faster after embedder is cached. |
+| **300s cutoff, no visible answer** | Usually Qwen **thinking** tokens + generation kill-switch. Set `AQUILA_LEARN_ARCHIVE_GENERATION_CAP=0` in `.env` (disables per-token cap; HTTP read timeout still applies). Restart Aquila after pull. |
+
+---
+
+## I. Known limitations (not bugs for this pass)
 
 - Placement intake does not run a full in-GUI diagnostic quiz
 - No assignment calendar / due dates

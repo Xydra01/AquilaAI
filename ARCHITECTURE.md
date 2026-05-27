@@ -164,14 +164,15 @@ Inter-modal automation is noted as **“in development”** in prompts; the Task
 
 ## 5. Core runtime: `main.py`
 
-### 5.1 Strict JSON schema (`build_strict_schema`)
+### 5.1 Strict JSON schema (`build_strict_schema` / `structured_schema.py`)
 
 For every tool in `executable_tools = SURVIVAL_TOOLS ∪ ALL_TOOLS`, the schema builder:
 
-1. Reads `inspect.signature(func)`
-2. Maps each parameter to `{"type": "string"}` (all args treated as strings for the LLM)
-3. Marks parameters without defaults as **required**
-4. Emits an `anyOf` entry per tool: `{ name: const, arguments: { properties, required, additionalProperties: false } }`
+1. Reads `inspect.signature(func)` and builds a **Pydantic** arguments model per tool (`int` / `bool` / `str` from annotations).
+2. Emits an `anyOf` entry per tool: `{ name: const, arguments: { properties, required, additionalProperties: false } }`
+3. Validates responses with the same models after `json.loads` (see `structured_parse.py`).
+
+See **[docs/structured-output.md](docs/structured-output.md)** for model profiles (stock / Heretic / TurboQuant) and env tuning.
 
 Top-level response shape:
 
@@ -224,14 +225,11 @@ Env: `AQUILA_AUTO_SCRAPE`, `AQUILA_CONTEXT_TIER` (see `.env.EXAMPLE`).
 
 ### 5.3 `parse_agent_response`
 
-Multi-stage recovery for model output:
-
 1. Strip markdown fences (`` ```json ``)
-2. `json.loads` with `strict=False`
-3. Fallback: `ast.literal_eval` after normalizing `true`/`false`/`null`
-4. **JSON healer:** Truncate trailing junk, close open strings/brackets/stacks
+2. `json.loads` → **Pydantic `model_validate`** (`AgentAction`, `TaskPlanModel`, or `ReflectTurnModel`)
+3. **JSON healer** only when the request used `json_object` or plain fallback (not strict schema)
 
-Used after every agent iteration in `run_unified_task`.
+Used after every agent iteration in `run_unified_task`. JSONL events: `structured_parse`, `structured_schema_request`.
 
 ### 5.4 `ToolExecutor`
 

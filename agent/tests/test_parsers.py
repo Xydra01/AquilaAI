@@ -15,7 +15,7 @@ def test_perfect_json():
 
 def test_truncated_json_array():
     raw_output = '{"reasoning": "Time ran out", "tools": [{"name": "save_research_note", "arguments": {"gathered_data": "Found some data'
-    result = parse_agent_response(raw_output)
+    result = parse_agent_response(raw_output, format_mode="plain")
     
     assert isinstance(result, dict)
     assert "tools" in result

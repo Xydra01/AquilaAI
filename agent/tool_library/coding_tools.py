@@ -3,15 +3,33 @@
 import os
 import chromadb
 import inspect
-from chromadb.utils import embedding_functions
+from functools import lru_cache
 
 # Firewall Import
 from tools import should_skip_dir
 from workspace_paths import get_vector_db_path
 
 get_vector_db_path().mkdir(parents=True, exist_ok=True)
-chroma_client = chromadb.PersistentClient(path=str(get_vector_db_path()))
-sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+
+
+@lru_cache(maxsize=1)
+def _get_chroma_client() -> chromadb.PersistentClient:
+    return chromadb.PersistentClient(path=str(get_vector_db_path()))
+
+
+@lru_cache(maxsize=1)
+def _get_embedding_function():
+    """
+    Lazily construct the embedding function.
+
+    SentenceTransformerEmbeddingFunction triggers model downloads / weight loads, so we
+    avoid doing that at import time (it can heavily degrade Ollama VRAM stability).
+    """
+    from chromadb.utils import embedding_functions
+
+    return embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="all-MiniLM-L6-v2"
+    )
 
 def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):
     """Hidden helper function to read and embed source files in a directory."""
@@ -22,11 +40,17 @@ def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):
             extensions = tuple(index_extensions())
         except ImportError:
             extensions = (".py",)
-    collection = chroma_client.get_or_create_collection(name="codebase", embedding_function=sentence_transformer_ef)
+    chroma_client = _get_chroma_client()
+    ef = _get_embedding_function()
+    collection = chroma_client.get_or_create_collection(
+        name="codebase", embedding_function=ef
+    )
     try:
         chroma_client.delete_collection("codebase")
-        collection = chroma_client.create_collection(name="codebase", embedding_function=sentence_transformer_ef)
-    except:
+        collection = chroma_client.create_collection(
+            name="codebase", embedding_function=ef
+        )
+    except Exception:
         pass
     documents, metadatas, ids = [], [], []
     chunk_id = 0

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+from functools import lru_cache
 from pathlib import Path
 
 from learn_registry import (
@@ -14,6 +16,34 @@ from workspace_paths import get_vector_db_path
 
 CHUNK_CHARS = 2400
 CHUNK_OVERLAP = 200
+DEFAULT_SEARCH_TOP_K = 5
+DEFAULT_RETRIEVAL_MAX_CHARS = 12_000
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+@lru_cache(maxsize=1)
+def _get_chroma_client():
+    import chromadb
+
+    return chromadb.PersistentClient(path=str(get_vector_db_path()))
+
+
+@lru_cache(maxsize=1)
+def _get_embedding_function():
+    from chromadb.utils import embedding_functions
+
+    return embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="all-MiniLM-L6-v2"
+    )
 
 
 def _collection_name(instance_id: str, scope: str, entity_id: str) -> str:
@@ -52,14 +82,10 @@ def _read_source_file(path: Path) -> str:
 
 
 def _get_collection(name: str):
-    import chromadb
-    from chromadb.utils import embedding_functions
-
-    client = chromadb.PersistentClient(path=str(get_vector_db_path()))
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
+    return _get_chroma_client().get_or_create_collection(
+        name=name,
+        embedding_function=_get_embedding_function(),
     )
-    return client.get_or_create_collection(name=name, embedding_function=ef)
 
 
 def index_directory(
@@ -69,10 +95,8 @@ def index_directory(
     entity_id: str,
 ) -> tuple[int, int, list[str]]:
     """Index all files under sources_root. Returns (file_count, chunk_count, warnings)."""
-    import chromadb
-
     name = _collection_name(instance_id, scope, entity_id)
-    client = chromadb.PersistentClient(path=str(get_vector_db_path()))
+    client = _get_chroma_client()
     try:
         client.delete_collection(name)
     except Exception:
@@ -141,7 +165,8 @@ def search_index(
                 return []
         except Exception:
             pass
-        results = collection.query(query_texts=[query.strip()], n_results=min(top_k, 12))
+        cap = min(top_k, 12)
+        results = collection.query(query_texts=[query.strip()], n_results=cap)
         docs = (results.get("documents") or [[]])[0]
         metas = (results.get("metadatas") or [[]])[0]
         out = []
@@ -153,15 +178,48 @@ def search_index(
         return []
 
 
-def format_retrieval_block(chunks: list[dict], label: str = "SOURCES") -> str:
+def format_retrieval_block(
+    chunks: list[dict],
+    label: str = "SOURCES",
+    *,
+    max_chars: int | None = None,
+) -> str:
     if not chunks:
         return ""
+    limit = max_chars if max_chars is not None else _env_int(
+        "AQUILA_LEARN_RETRIEVAL_MAX_CHARS", DEFAULT_RETRIEVAL_MAX_CHARS
+    )
     parts = [f"\n\n--- {label} (retrieved) ---"]
+    used = 0
+    included = 0
     for i, c in enumerate(chunks, 1):
         src = c.get("source", "?")
-        parts.append(f"\n[{i}] ({src})\n{c.get('text', '')}")
+        text = (c.get("text") or "").strip()
+        if not text:
+            continue
+        if used + len(text) > limit:
+            remain = limit - used
+            if remain > 200:
+                text = text[:remain] + "\n... [passage truncated]"
+                parts.append(f"\n[{i}] ({src})\n{text}")
+                included += 1
+            break
+        parts.append(f"\n[{i}] ({src})\n{text}")
+        used += len(text)
+        included += 1
+    if included < len(chunks):
+        parts.append(
+            f"\n(showing {included} of {len(chunks)} passages; "
+            f"capped at {limit} chars for speed)"
+        )
     parts.append(f"\n--- END {label} ---\n")
     return "".join(parts)
+
+
+def estimate_chars_indexed(chunk_count: int) -> int:
+    """Rough character count represented by chunks (for UI messaging)."""
+    step = max(1, CHUNK_CHARS - CHUNK_OVERLAP)
+    return chunk_count * step
 
 
 def index_archive(instance_id: str, archive_id: str) -> str:
@@ -187,7 +245,11 @@ def index_archive(instance_id: str, archive_id: str) -> str:
             f"✅ Indexed {files} file(s), {chunks} chunk(s). "
             f"Skipped: {'; '.join(warnings[:3])}"
         )
-    return f"✅ Indexed {files} file(s), {chunks} chunk(s) for archive '{archive_id}'."
+    approx = estimate_chars_indexed(chunks)
+    return (
+        f"✅ Indexed {files} file(s), {chunks} chunk(s) "
+        f"(~{approx // 1000}k chars) for archive '{archive_id}'."
+    )
 
 
 def search_archive(instance_id: str, archive_id: str, query: str, top_k: int = 5) -> str:

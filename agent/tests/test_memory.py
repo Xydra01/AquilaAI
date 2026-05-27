@@ -46,3 +46,13 @@ def test_tool_indexing(safe_memory):
     safe_memory.index_tools(mock_tools)
     
     assert safe_memory.tool_collection.count() == 2
+
+
+def test_aquila_memory_proxy_patch_teardown():
+    """@patch('main.aquila_memory.store_experience') must not raise on teardown."""
+    from memory_singleton import aquila_memory
+
+    with patch.object(aquila_memory, "store_experience") as mock_store:
+        mock_store.return_value = None
+        aquila_memory.store_experience("task", "summary")
+        mock_store.assert_called_once_with("task", "summary")

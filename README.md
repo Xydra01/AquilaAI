@@ -505,7 +505,7 @@ Tools are merged from `SURVIVAL_TOOLS` and `tool_library.ALL_TOOLS`. Internal `_
 - **Text chunks** — merged into planner and the first loop turn as `--- ATTACHED CONTEXT ---` (multi-chunk, tier-capped via `format_attachment_context()`)
 - **Images** — base64 payloads for Ollama vision in chat/research
 
-Supported formats include `.pdf`, `.docx`, `.csv`, `.html`, images (`.png`, `.jpg`, `.webp`, `.gif`), and common code/text extensions. Max **5 MB** per file; CSV capped at 200 rows in preview.
+Supported formats include `.pdf`, `.docx`, `.csv`, `.html`, images (`.png`, `.jpg`, `.webp`, `.gif`), and a broad set of code/text extensions (Python, JS/TS, Rust, Go, C/C++, Java, **MATLAB `.m` / `.mlx`**, R, Julia, Fortran, Ruby, PHP, Swift, Kotlin, `.ipynb`, LaTeX, shell, SQL, etc.). Max **5 MB** per file; CSV capped at 200 rows in preview.
 
 **Research journal** (Research workspace): markdown notes saved under `Agent-Research/.journal/{instance_id}.md`. With **Include in next run** enabled, notes are injected on **every** research step (via `LoopEngine.human_research_notes`), so step amnesia does not drop your context.
 
@@ -529,27 +529,42 @@ Supported formats include `.pdf`, `.docx`, `.csv`, `.html`, images (`.png`, `.jp
 
 ## Testing
 
-From `agent/` with venv active:
+From repo root with venv active (`ai-agent-env`). Pytest forces `AQUILA_WARMUP_ON_START=0` and offscreen Qt — see [`agent/tests/conftest.py`](agent/tests/conftest.py).
 
-```bash
-cd agent
-pytest tests/ -q --ignore=tests/test_live_ollama.py --ignore=tests/test_live_prompts.py --ignore=tests/test_live_context_smoke.py
+**Tiered health check** (recommended):
+
+```powershell
+.\scripts\aquila-health-check.ps1 quick    # ~2-5 min, no Ollama/GPU
+.\scripts\aquila-health-check.ps1 smoke    # quick + live Ollama smoke
+.\scripts\aquila-health-check.ps1 full     # full suite ~12 min
+.\scripts\aquila-health-check.ps1 full -Eject   # unload Ollama models after run
+.\scripts\aquila-health-check.ps1 heretic  # stock :11434 + aquila_heretic only
 ```
 
-**Release check** (unit + GUI; live tests need Ollama running):
+**Manual equivalents** (run from `agent/`):
 
 ```bash
 cd agent
+
+# Offline / CI (~350 tests, no GPU)
+pytest tests/ -m "not live" -q
+
+# Release gate — all tests; heretic tests skip unless OLLAMA_MODEL contains "heretic"
 pytest tests/ -v --tb=short
-```
 
-Include live Ollama tests only (requires running Ollama; model from `OLLAMA_MODEL`):
-
-```bash
+# Live Ollama only (model from OLLAMA_MODEL)
 pytest tests/ -m live -v
-# TurboQuant / 64k smoke (set OLLAMA_MODEL=aquila-tq-64k first):
+
+# TurboQuant context smoke (OLLAMA_MODEL=aquila-tq-32k on :11435)
 pytest tests/test_live_context_smoke.py -m live -v
+
+# Heretic persona model (stock Ollama :11434)
+OLLAMA_BASE_URL=http://127.0.0.1:11434 OLLAMA_MODEL=aquila_heretic pytest tests/ -m heretic -v
 ```
+
+**Markers** ([`agent/pytest.ini`](agent/pytest.ini)): `live` (Ollama required), `heretic` (`aquila_heretic` only), `gui` (PySide6).
+
+**Live structured-output metrics** (`test_structured_output_metrics.py`): tune duration with `AQUILA_LIVE_STRUCTURED_TRIALS` (default 20).
 
 GUI and workspace pages:
 

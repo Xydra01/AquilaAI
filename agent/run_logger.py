@@ -34,6 +34,15 @@ def _truncate(text: str, cap: int) -> tuple[str, bool, int]:
     return text[:cap] + f"\n...[truncated {n - cap} bytes]", True, n
 
 
+def _ascii_safe_markup(text: str) -> str:
+    """Fallback when the terminal cannot encode Unicode (Windows cp1252)."""
+    try:
+        return Text.from_markup(str(text)).plain
+    except Exception:
+        raw = str(text)
+        return raw.encode("ascii", errors="replace").decode("ascii")
+
+
 class RunLogger:
     """Rich console + per-task human log + optional JSONL event stream."""
 
@@ -80,8 +89,14 @@ class RunLogger:
             mode=self.mode,
         )
 
+    def _emit_console(self, message: str, **kwargs) -> None:
+        try:
+            self.console.print(message, **kwargs)
+        except UnicodeEncodeError:
+            self.console.print(_ascii_safe_markup(message), **kwargs)
+
     def print(self, message: str, **kwargs) -> None:
-        self.console.print(message, **kwargs)
+        self._emit_console(message, **kwargs)
         if self.log_filename:
             try:
                 clean_text = Text.from_markup(str(message)).plain
@@ -139,15 +154,15 @@ class RunLogger:
             if rt is not None:
                 parts.append(f"timeout={rt}s")
             parts.append("[/dim]")
-            self.console.print(" ".join(parts))
+            self._emit_console(" ".join(parts))
         elif event_type == "tool_end":
             name = record.get("tool_name", "?")
             qual = record.get("page_quality")
             extra = f" quality={qual}" if qual else ""
-            self.console.print(f"[dim]tool_end {name}{extra}[/dim]")
+            self._emit_console(f"[dim]tool_end {name}{extra}[/dim]")
         elif event_type in ("os_warning", "scrape_budget_exhausted", "context_compress"):
             msg = record.get("message", event_type)
-            self.console.print(f"[yellow]{msg}[/yellow]")
+            self._emit_console(f"[yellow]{msg}[/yellow]")
 
     def log_agent_turn(
         self,

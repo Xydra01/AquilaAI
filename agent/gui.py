@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
 
-from file_parser import process_local_attachments
+from file_parser import attachment_dialog_filter, process_local_attachments
 from gui_formatting import (
     format_assistant_message_html,
     format_attachment_notice_html,
@@ -107,6 +107,9 @@ class AgentWorker(QThread):
 
     def run(self):
         agent_tools.USER_INPUT_CALLBACK = self._ask_user_bridge
+        from instance_registry import set_active_instance_id
+
+        set_active_instance_id(self.instance_id)
         agent = get_agent(self.instance_id)
         try:
             if self.mode.lower() == "chat":
@@ -244,6 +247,43 @@ class SleepWorker(QThread):
             self.finished_signal.emit(f"❌ Sleep Cycle Error: {str(e)}")
 
 
+class WarmupModelWorker(QThread):
+    finished_signal = Signal(bool, str)
+
+    def run(self):
+        try:
+            from main import client
+
+            ok, message = client.warmup()
+            self.finished_signal.emit(ok, message)
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+
+
+class EjectModelWorker(QThread):
+    finished_signal = Signal(bool, str)
+
+    def __init__(self, *, all_loaded: bool = False, instance_id: str | None = None):
+        super().__init__()
+        self.all_loaded = all_loaded
+        self.instance_id = instance_id
+
+    def run(self):
+        try:
+            from instance_registry import set_active_instance_id
+            from main import client
+
+            if self.instance_id:
+                set_active_instance_id(self.instance_id)
+                profile = get_instance(self.instance_id)
+                if profile and profile.ollama_model:
+                    client.model_name = profile.ollama_model.strip()
+            ok, message = client.eject_model(all_loaded=self.all_loaded)
+            self.finished_signal.emit(ok, message)
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+
+
 class AquilaOS(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -257,6 +297,7 @@ class AquilaOS(QMainWindow):
         self.attached_file_paths: list[str] = []
         self._chat_history_messages = []
         self.worker = None
+        self._eject_worker = None
         self.active_instance_id = get_active_instance_id()
 
         central_widget = QWidget()
@@ -276,6 +317,13 @@ class AquilaOS(QMainWindow):
         self.sleep_btn = QPushButton("🧠 Initiate Sleep Cycle")
         self.sleep_btn.clicked.connect(self.trigger_sleep_cycle)
         top_bar.addWidget(self.sleep_btn)
+        self.eject_btn = QPushButton("⏏️ Eject model")
+        self.eject_btn.setToolTip(
+            "Unload the configured Ollama model from VRAM (keep_alive=0). "
+            "Also sends Stop if a task is running. Shift+click: unload every loaded model."
+        )
+        self.eject_btn.clicked.connect(self.eject_ollama_model)
+        top_bar.addWidget(self.eject_btn)
         main_layout.addLayout(top_bar)
 
         self.main_stack = QStackedWidget()
@@ -329,6 +377,21 @@ class AquilaOS(QMainWindow):
         self._update_instance_label()
         self.main_stack.setCurrentIndex(0)
         self.toggle_theme()
+        self._maybe_warmup_on_start()
+
+    def _maybe_warmup_on_start(self) -> None:
+        if "pytest" in sys.modules:
+            return
+        raw = os.getenv("AQUILA_WARMUP_ON_START", "1").strip().lower()
+        if raw in ("0", "false", "no", "off"):
+            return
+        self._warmup_worker = WarmupModelWorker(self)
+        self._warmup_worker.finished_signal.connect(self._on_startup_warmup_finished)
+        self._warmup_worker.start()
+
+    def _on_startup_warmup_finished(self, ok: bool, message: str) -> None:
+        prefix = "✅" if ok else "⚠️"
+        print(f"{prefix} Ollama warmup: {message}")
 
     def _apply_page_themes(self) -> None:
         for page in (
@@ -420,9 +483,7 @@ class AquilaOS(QMainWindow):
             self,
             "Select Files to Attach",
             "",
-            "All Files (*);;Images (*.png *.jpg *.jpeg *.webp *.gif);;"
-            "PDFs (*.pdf);;Documents (*.txt *.py *.md *.json *.csv *.html *.htm *.docx);;"
-            "Spreadsheets (*.csv *.xlsx)",
+            attachment_dialog_filter(),
         )
         if file_paths:
             self.attached_chunks, self.attached_images = process_local_attachments(file_paths)
@@ -530,6 +591,64 @@ class AquilaOS(QMainWindow):
             self.worker.cancel_flag = True
             self.current_page().update_ledger("\n🛑 Abort signal sent...\n")
             self.current_page().set_run_buttons_running(False)
+
+    def eject_ollama_model(self):
+        """Unload Ollama model from VRAM; optional unload-all via Shift+click."""
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel_flag = True
+            page = self.current_page()
+            if hasattr(page, "update_ledger"):
+                page.update_ledger("\n⏏️ Eject: stop signal sent; unloading model from VRAM...\n")
+            page.set_run_buttons_running(False)
+
+        all_loaded = bool(
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        )
+        self._eject_all_loaded = all_loaded
+        self.eject_btn.setDisabled(True)
+        for page in (
+            self.chat_page,
+            self.task_page,
+            self.research_page,
+            self.writing_page,
+            self.code_page,
+            self.character_page,
+            self.learn_page,
+        ):
+            rail = getattr(page, "agent_rail", None) or getattr(page, "chat_rail", None)
+            if rail and hasattr(rail, "eject_btn"):
+                rail.eject_btn.setDisabled(True)
+
+        self._eject_worker = EjectModelWorker(
+            all_loaded=all_loaded,
+            instance_id=self.active_instance_id,
+        )
+        self._eject_worker.finished_signal.connect(self._on_eject_finished)
+        self._eject_worker.start()
+
+    def _on_eject_finished(self, ok: bool, message: str) -> None:
+        self.eject_btn.setDisabled(False)
+        for page in (
+            self.chat_page,
+            self.task_page,
+            self.research_page,
+            self.writing_page,
+            self.code_page,
+            self.character_page,
+            self.learn_page,
+        ):
+            for attr in ("agent_rail", "chat_rail", "tutor_rail", "archive_rail"):
+                rail = getattr(page, attr, None)
+                if rail and hasattr(rail, "eject_btn"):
+                    rail.eject_btn.setDisabled(False)
+
+        scope = "all loaded" if getattr(self, "_eject_all_loaded", False) else "configured model"
+        html = format_system_message_html(
+            f"⏏️ Eject ({scope}): {message}" if ok else f"⏏️ Eject failed: {message}"
+        )
+        self.current_page().append_chat_html(html)
+        if not ok:
+            QMessageBox.warning(self, "Eject model", message)
 
     def clear_chat_display(self):
         page = self.current_page()

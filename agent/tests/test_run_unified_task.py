@@ -1,11 +1,14 @@
 import json
 import sys
 import os
-from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+
+def _strict_chat_response(body: str):
+    return {"message": {"content": body}, "format_mode_used": "strict_schema"}
 
 
 def test_finish_task_ends_run(tmp_agent_dirs, write_ledger, monkeypatch):
@@ -20,13 +23,15 @@ def test_finish_task_ends_run(tmp_agent_dirs, write_ledger, monkeypatch):
         },
     )
 
-    suffix = (
-        'Done.", "tools": [{"name": "finish_task", '
-        '"arguments": {"message_to_user": "All done!"}}]}'
-    )
+    response = """{
+  "reasoning": "Complete the final step.",
+  "tools": [
+    {"name": "finish_task", "arguments": {"message_to_user": "All done!"}}
+  ]
+}"""
 
     def fake_chat(*args, **kwargs):
-        return {"message": {"content": suffix}}
+        return _strict_chat_response(response)
 
     monkeypatch.setattr(main_mod.client, "chat", fake_chat)
     monkeypatch.setattr(
@@ -77,21 +82,25 @@ def test_mark_objective_complete_advances(tmp_agent_dirs, write_ledger, monkeypa
     )
 
     responses = [
-        (
-            'Step A.", "tools": [{"name": "mark_objective_complete", '
-            '"arguments": {"summary_of_work": "A done"}}]}'
-        ),
-        (
-            'Done.", "tools": [{"name": "finish_task", '
-            '"arguments": {"message_to_user": "Done"}}]}'
-        ),
+        """{
+  "reasoning": "Step A complete.",
+  "tools": [
+    {"name": "mark_objective_complete", "arguments": {"summary_of_work": "A done"}}
+  ]
+}""",
+        """{
+  "reasoning": "Finish the task.",
+  "tools": [
+    {"name": "finish_task", "arguments": {"message_to_user": "Done"}}
+  ]
+}""",
     ]
     idx = {"i": 0}
 
     def fake_chat(*args, **kwargs):
         payload = responses[min(idx["i"], len(responses) - 1)]
         idx["i"] += 1
-        return {"message": {"content": payload}}
+        return _strict_chat_response(payload)
 
     monkeypatch.setattr(main_mod.client, "chat", fake_chat)
     monkeypatch.setattr(main_mod.aquila_memory, "store_experience", lambda *a, **k: None)
