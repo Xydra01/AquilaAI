@@ -114,6 +114,19 @@ def _dynamic_work_finalize(mode_norm: str, objective: str) -> list[dict[str, Any
 
     _, work_default, _ = BUDGET_RUBRIC.get("work", (8, 14, 24))
     _, fin_default, _ = BUDGET_RUBRIC.get("finalize", (4, 6, 8))
+    finalize_step: dict[str, Any] = {
+        "status": "pending",
+        "description": (
+            "Finalize deliverable report"
+            if mode_norm == "research"
+            else "Finalize and finish_task"
+        ),
+        "step_kind": "finalize",
+        "focus": "deliver",
+        "max_iterations": fin_default,
+    }
+    if mode_norm == "research":
+        finalize_step["capability_id"] = "cap.research.finalize_deliverable@v1"
     return [
         {
             "status": "pending",
@@ -122,13 +135,7 @@ def _dynamic_work_finalize(mode_norm: str, objective: str) -> list[dict[str, Any
             "focus": mode_norm,
             "max_iterations": work_default,
         },
-        {
-            "status": "pending",
-            "description": "Finalize and finish_task",
-            "step_kind": "finalize",
-            "focus": "deliver",
-            "max_iterations": fin_default,
-        },
+        finalize_step,
     ]
 
 
@@ -166,12 +173,14 @@ def _step_for_mode(mode: str, objective: str) -> list[dict[str, Any]]:
                 "status": "pending",
                 "description": f"Search and summarize: {objective[:200]}",
                 "step_kind": "search",
+                "capability_id": "cap.research.gather_web_sources@v1",
                 "max_iterations": 4,
             },
             {
                 "status": "pending",
                 "description": f"Compile findings: {objective[:200]}",
                 "step_kind": "synthesize",
+                "capability_id": "cap.research.synthesize_notes@v1",
                 "max_iterations": 3,
             },
         ]

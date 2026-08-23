@@ -204,6 +204,7 @@ def register_aquila_tools(mcp: FastMCP) -> None:
             file_paths,
             prefer_local=prefer_local or mode_norm == "research",
             context=context,
+            mode=mode_norm,
         )
         agent = brain.get_agent(instance_id or None)
         result = run_mode(

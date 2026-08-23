@@ -37,14 +37,14 @@ def get_persona(instance_id: str, persona_id: str) -> Optional[dict[str, Any]]:
 def build_prompt(persona, description: str, research_lore: bool) -> str:
     """Mirror the GUI's persona-build prompt (character_page._start_persona_build)."""
     lore_line = (
-        "User enabled web research for lore — use web_search when helpful."
+        "User enabled web research for lore — gather lore on the search step."
         if research_lore
-        else "Do NOT use web_search unless attachments are clearly insufficient."
+        else "Files/text-only intake — do not use web research."
     )
     build_steps = (
-        "search (web lore) → read → synthesize initialization.md → finalize_persona"
+        "search (gather lore) → read (ingest) → synthesize (write initialization.md) → finalize"
         if research_lore
-        else "ingest (save_research_note) → synthesize initialization.md → finalize_persona"
+        else "read (ingest) → synthesize (write initialization.md) → finalize"
     )
     return (
         f"Build a roleplay persona.\n"
@@ -52,7 +52,7 @@ def build_prompt(persona, description: str, research_lore: bool) -> str:
         f"User description:\n{description}\n\n"
         f"{lore_line}\n"
         f"Persona id: {persona.id}\n"
-        f"Follow the build steps: {build_steps}."
+        f"Phases: {build_steps}."
     )
 
 

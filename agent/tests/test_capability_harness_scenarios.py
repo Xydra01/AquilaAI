@@ -19,3 +19,18 @@ def test_research_web_chronology_mini_registered():
     assert rubric.get("require_finish") is True
     ids = [r["id"] for r in list_scenarios(mode="research")]
     assert "research_web_chronology_mini" in ids
+
+
+def test_research_harness_scenarios_use_capability_contract():
+    local = get_scenario("research_local_lock")
+    web = get_scenario("research_web_chronology_mini")
+    for spec in (local, web):
+        blob = " ".join(
+            str(spec.get(k, "")) for k in ("objective", "context", "description")
+        ).lower()
+        assert "save_research_note" not in blob
+        assert "finish_task" not in blob
+    assert "cap.research" in web["objective"].lower()
+    assert "cap.research.finalize_deliverable@v1" in web["context"].lower()
+    assert "web_search" not in local["context"].lower()
+    assert "ingest" in local["context"].lower() or "offline" in local["context"].lower()

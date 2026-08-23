@@ -470,22 +470,25 @@ class LearnPage(BaseModePage):
                 pass
         web = self.course_web_cb.isChecked() or intake == "topic_web"
         lore = (
-            "User enabled web research — use web_search on the search step."
+            "User enabled web research — gather topic sources on the search step."
             if web
-            else "Do NOT use web_search unless attachments are insufficient."
+            else "Files-only intake — do not use web research."
         )
         placement_note = (
-            "Placement intake: synthesize syllabus weighted toward typical weak areas "
-            "from user topic (MVP: infer from topic text, no separate quiz UI)."
+            "Placement intake: weight syllabus toward typical weak areas from topic text."
             if intake == "placement"
             else ""
         )
         prompt = (
             f"Build a learning syllabus for course '{course.title}'.\n"
-            f"Topic: {topic}\nIntake: {intake}\ncourse_id={course.id}\n{lore}\n{placement_note}\n"
-            f"Steps: ingest → write_syllabus_file (≥8 nodes, ≥5 sub-units in a module/lesson tree) "
-            f"→ finalize_course."
-        )
+            f"Topic: {topic}\n"
+            f"Intake: {intake}\n"
+            f"course_id={course.id}\n"
+            f"{lore}\n"
+            f"{placement_note}\n"
+            "Phases: read (ingest materials) → synthesize (write syllabus JSON; "
+            "≥8 nodes, ≥5 sub-units with parent_id) → finalize (complete course)."
+        ).strip()
         if dest.is_dir() and any(dest.iterdir()):
             from agent.storage import index_course_sources
 

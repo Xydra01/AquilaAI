@@ -69,6 +69,9 @@ from .plan_validator import (
     expand_dynamic_offline_research_plan,
     is_degenerate_description,
     expand_learn_syllabus_plan,
+    build_fallback_research_plan,
+    build_fallback_persona_plan,
+    build_fallback_learn_plan,
 )
 from .fast_path import (
     fast_path_enabled,

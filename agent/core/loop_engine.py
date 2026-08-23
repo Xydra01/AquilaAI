@@ -660,16 +660,7 @@ class LoopEngine:
                     and self._task_episode_state.at_episode_limit()
                 )
                 if task_at_limit:
-                    if is_final_step:
-                        user_msg += (
-                            "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
-                            "Output `final_report` and call `finish_task` now."
-                        )
-                    else:
-                        user_msg += (
-                            "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
-                            "Call `mark_objective_complete` or `finish_task` if done."
-                        )
+                    user_msg += self._capability_budget_override_msg(is_final_step=is_final_step)
                 elif step_run.at_episode_limit():
                     if step_run.can_apply_grace() and not self._dynamic_loop_active:
                         new_max = step_run.apply_grace(step)
@@ -684,10 +675,7 @@ class LoopEngine:
                         )
                         ledger_text += "\n📊 OS: Grace budget extension (+2 episodes).\n"
                     elif is_final_step:
-                        user_msg += (
-                            "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Output final report "
-                            "into `final_report` and use `finish_task`."
-                        )
+                        user_msg += self._capability_step_budget_final_override()
                     else:
                         user_msg += (
                             "\n\n⚠️ OS: Step episode budget reached (soft). "
@@ -1399,6 +1387,7 @@ class LoopEngine:
                                 f"\n\n✅ OS: {advance_summary} Advancing to next plan step."
                             )
 
+                # Legacy tool-act path; skipped when `_uses_capability_act()` (capability-act modes).
                 for i, tc in enumerate(tool_calls):
                     if self._uses_capability_act():
                         break
@@ -1601,183 +1590,6 @@ class LoopEngine:
                             result = (
                                 f"❌ OS BLOCK: web_search cap ({self._task_web_search_cap}) "
                                 "for this task. Synthesize from saved notes."
-                            )
-                        elif (
-                            self.mode == "character_build"
-                            and step_kind == "read"
-                            and tool_name == "save_research_note"
-                            and "save_research_note" in tools_succeeded_this_step
-                        ):
-                            result = (
-                                "❌ OS BLOCK: Ingest note already saved for this step. "
-                                "Call mark_objective_complete(summary_of_work="
-                                "'Ingested persona lore from user text and attachments.') "
-                                "— do NOT call save_research_note again."
-                            )
-                        elif (
-                            self.mode == "learn_syllabus_build"
-                            and step_kind in ("read", "search")
-                            and tool_name == "save_research_note"
-                            and "save_research_note" in tools_succeeded_this_step
-                        ):
-                            result = (
-                                "❌ OS BLOCK: Research note already saved for this step. "
-                                "Call mark_objective_complete — do NOT call "
-                                "save_research_note again."
-                            )
-                        elif (
-                            self.mode == "research"
-                            and is_final_step
-                            and tool_name == "read_all_research_notes"
-                            and "read_all_research_notes" in tools_succeeded_this_step
-                        ):
-                            result = (
-                                "❌ OS BLOCK: Research notes already loaded this step. "
-                                "Output top-level `final_report` and call `finish_task` "
-                                "with only `message_to_user` in one JSON response."
-                            )
-                        elif (
-                            self.mode == "learn_syllabus_build"
-                            and step_kind in ("read", "search")
-                            and tool_name == "read_all_research_notes"
-                        ):
-                            notes = ""
-                            try:
-                                notes = self.memory.get_scratchpad_notes(task_name) or ""
-                            except Exception:
-                                pass
-                            empty = (
-                                not notes.strip()
-                                or "No research notes found" in notes
-                            )
-                            if empty:
-                                result = (
-                                    "❌ OS BLOCK: Scratchpad is empty. Call "
-                                    "save_research_note with web/attachment findings first, "
-                                    "then mark_objective_complete. read_all_research_notes "
-                                    "is for the synthesize step only."
-                                )
-                            elif "read_all_research_notes" in tools_succeeded_this_step:
-                                result = (
-                                    "❌ OS BLOCK: Notes already loaded this step. "
-                                    "Call mark_objective_complete to advance."
-                                )
-                            else:
-                                result = (
-                                    "❌ OS BLOCK: On ingest/search steps use "
-                                    "save_research_note, not read_all_research_notes. "
-                                    "Reading notes is for the synthesize step."
-                                )
-                        elif (
-                            self.mode == "character_build"
-                            and step_kind == "read"
-                            and tool_name == "read_all_research_notes"
-                        ):
-                            notes = ""
-                            try:
-                                notes = self.memory.get_scratchpad_notes(task_name) or ""
-                            except Exception:
-                                pass
-                            empty = (
-                                not notes.strip()
-                                or "No research notes found" in notes
-                            )
-                            if empty or "read_all_research_notes" in tools_succeeded_this_step:
-                                result = (
-                                    "❌ OS BLOCK: read_all_research_notes is not allowed on "
-                                    "persona ingest. The scratchpad is empty until you "
-                                    "call save_research_note with gathered_data from the "
-                                    "user description and attachments, then "
-                                    "mark_objective_complete."
-                                )
-                            else:
-                                result = (
-                                    "❌ OS BLOCK: On ingest step use save_research_note, not "
-                                    "read_all_research_notes. Reading notes is for the "
-                                    "synthesize step only."
-                                )
-                        elif (
-                            self.mode in ("character_build", "learn_syllabus_build")
-                            and tool_name in CHARACTER_BUILD_FORBIDDEN_FILE_TOOLS
-                        ):
-                            if self.mode == "learn_syllabus_build":
-                                result = (
-                                    f"❌ OS BLOCK: {tool_name} cannot write syllabus. "
-                                    "On synthesize use write_syllabus_file(JSON) once."
-                                )
-                            else:
-                                result = (
-                                    f"❌ OS BLOCK: {tool_name} cannot create persona files. "
-                                    "On the synthesize step use write_persona_file("
-                                    "file_path='initialization.md', content='...') with the "
-                                    "full character bible (800+ characters)."
-                                )
-                        elif (
-                            self.mode == "character_build"
-                            and tool_name == "summarize_sources"
-                        ):
-                            result = (
-                                "❌ OS BLOCK: summarize_sources is for research mode only. "
-                                "On persona build, use write_persona_file for initialization.md "
-                                "(synthesize step) or save_research_note (ingest step)."
-                            )
-                        elif (
-                            self.mode == "character_build"
-                            and step_kind == "synthesize"
-                            and tool_name == "read_all_research_notes"
-                            and "read_all_research_notes" in tools_succeeded_this_step
-                        ):
-                            result = (
-                                "❌ OS BLOCK: Scratchpad notes already loaded this step. "
-                                "Call write_persona_file for initialization.md now, "
-                                "then mark_objective_complete."
-                            )
-                        elif (
-                            self.mode == "learn_syllabus_build"
-                            and step_kind == "synthesize"
-                            and tool_name == "read_all_research_notes"
-                            and "read_all_research_notes" in tools_succeeded_this_step
-                        ):
-                            result = (
-                                "❌ OS BLOCK: Scratchpad notes already loaded this step. "
-                                "Call write_syllabus_file with JSON now, then mark_objective_complete."
-                            )
-                        elif (
-                            self.mode == "character_build"
-                            and step_kind == "synthesize"
-                            and tool_name in ("save_research_note", "read_webpage", "web_search")
-                        ):
-                            result = (
-                                f"❌ OS BLOCK: {tool_name} is not used on persona synthesize. "
-                                "Call write_persona_file for initialization.md."
-                            )
-                        elif (
-                            self.mode == "learn_syllabus_build"
-                            and step_kind == "synthesize"
-                            and tool_name in ("save_research_note", "read_webpage", "web_search")
-                        ):
-                            result = (
-                                f"❌ OS BLOCK: {tool_name} is not used on syllabus synthesize. "
-                                "Call write_syllabus_file with JSON."
-                            )
-                        elif (
-                            self.mode == "character_build"
-                            and step_kind in ("read", "search")
-                            and tool_name == "write_persona_file"
-                        ):
-                            result = (
-                                f"❌ OS BLOCK: {step_kind} step is ingest/research only. Use "
-                                "save_research_note / web_search then mark_objective_complete. "
-                                "write_persona_file belongs on the synthesize step."
-                            )
-                        elif (
-                            self.mode == "learn_syllabus_build"
-                            and step_kind in ("read", "search")
-                            and tool_name == "write_syllabus_file"
-                        ):
-                            result = (
-                                f"❌ OS BLOCK: {step_kind} step is ingest/research only. "
-                                "write_syllabus_file belongs on the synthesize step."
                             )
                         elif (
                             step_kind in ("explore", "read")
@@ -2171,7 +1983,11 @@ class LoopEngine:
                     )
                     last_tool_output += (
                         "\n\n✅ OS: Step milestones satisfied. Advancing ledger — "
-                        "continue on the next step or call finish_task on finalize."
+                        + (
+                            "continue on the next step or finalize via capability on finalize."
+                            if self._uses_capability_act()
+                            else "continue on the next step or call finish_task on finalize."
+                        )
                     )
                     if last_tool_output and conversation_history:
                         conversation_history[-1] = {
@@ -2182,6 +1998,7 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
+                    and not self._uses_capability_act()
                     and not self._dynamic_loop_active
                     and self.mode == "character_build"
                     and step_kind == "search"
@@ -2204,6 +2021,7 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
+                    and not self._uses_capability_act()
                     and not self._dynamic_loop_active
                     and self.mode == "character_build"
                     and step_kind == "read"
@@ -2233,6 +2051,7 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
+                    and not self._uses_capability_act()
                     and self.mode == "learn_syllabus_build"
                     and step_kind in ("read", "search")
                     and "save_research_note" in tools_succeeded_this_step
@@ -2253,6 +2072,7 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
+                    and not self._uses_capability_act()
                     and self.mode == "character_build"
                     and step_kind == "synthesize"
                     and "write_persona_file" in tools_succeeded_this_step
@@ -2273,6 +2093,7 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
+                    and not self._uses_capability_act()
                     and self.mode == "learn_syllabus_build"
                     and step_kind == "synthesize"
                     and "write_syllabus_file" in tools_succeeded_this_step
@@ -2587,9 +2408,8 @@ class LoopEngine:
                         conversation_history.append({
                             "role": "user",
                             "content": (
-                                "Tool Outputs:\n⚠️ OS: You have enough sources. Call "
-                                "`save_research_note` with key findings, then output "
-                                "`final_report` and `finish_task` in one JSON turn."
+                                "Tool Outputs:\n⚠️ OS: You have enough sources. "
+                                + self._capability_final_stall_nudge()
                             ),
                         })
                     if final_step_stalls >= stall_limit:
@@ -2666,6 +2486,97 @@ class LoopEngine:
             "\n\n**FINALIZE:** Call `read_all_research_notes` once if needed, then put the "
             "full report in top-level `final_report` and call `finish_task` with only "
             "`message_to_user` in the **same** JSON response."
+        )
+
+    def _capability_budget_override_msg(self, *, is_final_step: bool) -> str:
+        if not self._uses_capability_act():
+            if is_final_step:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                    "Output `final_report` and call `finish_task` now."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                "Call `mark_objective_complete` or `finish_task` if done."
+            )
+        if self.mode == "research":
+            if is_final_step:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                    "Output top-level `final_report` and call "
+                    "`cap.research.finalize_deliverable@v1` now."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                "Call `mark_objective_complete` or the next research capability if done."
+            )
+        if self.mode == "character_build":
+            if is_final_step:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                    "Call `cap.persona.finalize@v1` with greeting and tagline now."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                "Call `mark_objective_complete` or the next persona capability if done."
+            )
+        if self.mode == "learn_syllabus_build":
+            if is_final_step:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                    "Call `cap.learn.finalize_course@v1` now."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                "Call `mark_objective_complete` or the next learn capability if done."
+            )
+        return (
+            "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+            "Call `mark_objective_complete` if done."
+        )
+
+    def _capability_step_budget_final_override(self) -> str:
+        if not self._uses_capability_act():
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Output final report "
+                "into `final_report` and use `finish_task`."
+            )
+        if self.mode == "research":
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Output top-level "
+                "`final_report` and call `cap.research.finalize_deliverable@v1`."
+            )
+        if self.mode == "character_build":
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Call "
+                "`cap.persona.finalize@v1` with greeting and tagline."
+            )
+        if self.mode == "learn_syllabus_build":
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Call "
+                "`cap.learn.finalize_course@v1`."
+            )
+        return (
+            "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Finalize via capability now."
+        )
+
+    def _capability_final_stall_nudge(self) -> str:
+        if self._uses_capability_act():
+            if self.mode == "research":
+                return (
+                    "Put findings in top-level `final_report` and call "
+                    "`cap.research.finalize_deliverable@v1` in one JSON turn."
+                )
+            if self.mode == "character_build":
+                return (
+                    "Call `cap.persona.finalize@v1` with greeting and tagline "
+                    "in one JSON turn."
+                )
+            if self.mode == "learn_syllabus_build":
+                return "Call `cap.learn.finalize_course@v1` in one JSON turn."
+        return (
+            "Call `save_research_note` with key findings, then output "
+            "`final_report` and `finish_task` in one JSON turn."
         )
 
     @staticmethod
@@ -3213,31 +3124,35 @@ class LoopEngine:
             hint = code_explore_hint()
         elif self.mode == "character_build" and step_kind == "search":
             hint = (
-                "Web lore research: web_search and read_webpage for authoritative sources; "
-                "save_research_note with distilled lore. No write_persona_file. "
-                "Then mark_objective_complete."
+                "Gather lore: call `cap.persona.gather_lore@v1` once with a focused topic. "
+                "Do NOT call `write_initialization` or finalize capabilities on this step."
             )
         elif self.mode == "character_build" and step_kind == "read":
             hint = (
-                "Persona ingest only: save_research_note once with user+attachment lore, "
-                "then mark_objective_complete. Do NOT call read_all_research_notes "
-                "(scratchpad is empty until you save). Do NOT call write_persona_file."
+                "Ingest sources: call `cap.persona.ingest_sources@v1` once. "
+                "Scratchpad notes are injected on later steps. "
+                "Do NOT call `write_initialization` or finalize capabilities on this step."
             )
         elif self.mode == "character_build" and step_kind == "synthesize":
             hint = (
                 "SCRATCHPAD below. Call ONLY `cap.persona.write_initialization@v1` "
                 'with arguments.content = full initialization.md text (≥800 chars), '
-                "including a Scene agency section. Do NOT invent tool names."
+                "including a Scene agency section. Do not invent capability IDs."
+            )
+        elif self.mode == "character_build" and step_kind == "finalize":
+            hint = (
+                "Finalize the persona: call `cap.persona.finalize@v1` with greeting and tagline "
+                "(empty arguments ok for defaults)."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "search":
             hint = (
                 "Web research: call `cap.learn.gather_topic_sources@v1` once with topic. "
-                "Do NOT invent other capability IDs. No write_syllabus on this step."
+                "Do not invent capability IDs outside the allowed list."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "read":
             hint = (
                 "Course ingest: call `cap.learn.ingest_course_materials@v1` once. "
-                "Do NOT invent read_all_research_notes or tool names."
+                "Do not invent capability IDs outside the allowed list."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "synthesize":
             hint = (
@@ -3245,7 +3160,7 @@ class LoopEngine:
                 "`cap.learn.write_syllabus@v1` with "
                 'arguments: {"content": "<syllabus JSON string>"}. '
                 "Requirements: ≥8 nodes, ≥5 with parent_id, specific titles, mastery_tier 0. "
-                "Do NOT call read_all_research_notes, generate_assessments, or invent IDs. "
+                "Do not invent capability IDs outside the allowed list. "
                 "Example: "
                 '{"reasoning":"Writing syllabus.","capabilities":[{"id":'
                 '"cap.learn.write_syllabus@v1","arguments":{"content":'
@@ -3253,13 +3168,48 @@ class LoopEngine:
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "finalize":
             hint = "Call `cap.learn.finalize_course@v1` (empty arguments ok)."
+        elif self.mode == "research" and step_kind in ("search", "read"):
+            if self.offline_research:
+                hint = (
+                    "Offline research: call `cap.research.ingest_offline@v1` to extract facts "
+                    "from attachments and journal — no web capabilities."
+                )
+            else:
+                hint = (
+                    "Gather sources: prefer `cap.research.gather_web_sources@v1` (or the plan "
+                    "`capability_id`); append notes via research capabilities — not raw web tools."
+                )
+        elif self.mode == "research" and step_kind == "synthesize":
+            hint = (
+                "Synthesize findings: call `cap.research.synthesize_notes@v1` from scratchpad "
+                "notes already in this brief."
+            )
+        elif self.mode == "research" and step_kind == "finalize":
+            hint = (
+                "Finalize deliverable: put the full report in top-level `final_report` and call "
+                "`cap.research.finalize_deliverable@v1` in the same JSON turn."
+            )
+        elif self.mode == "research" and step_kind == "work":
+            if self.offline_research:
+                hint = (
+                    "Offline research work: use `cap.research.ingest_offline@v1` then "
+                    "`cap.research.synthesize_notes@v1` — no web capabilities."
+                )
+            else:
+                hint = (
+                    "Research work: interleave gather / append-note / synthesize capabilities; "
+                    "advance when milestones are met."
+                )
         elif self._dynamic_loop_active and step_kind in ("work", "micro"):
             if self.offline_research and self.mode == "research":
                 hint = (
-                    "Offline research: use ONLY user attachments and human journal — "
-                    "no web_search or read_webpage. save_research_note to capture facts; "
-                    "read_all_research_notes when synthesizing. Call mark_objective_complete "
-                    "when milestones are met."
+                    "Dynamic offline research loop: `cap.research.ingest_offline@v1` and "
+                    "`cap.research.synthesize_notes@v1` — no web capabilities."
+                )
+            elif self.mode == "research":
+                hint = (
+                    "Dynamic research loop: interleave gather / append-note / synthesize "
+                    "capabilities until milestones are met, then advance."
                 )
             else:
                 hint = (
@@ -3279,7 +3229,7 @@ class LoopEngine:
                 "then finish_task. No exploration."
             )
         else:
-            hint = get_step_kind_hint(step_kind)
+            hint = get_step_kind_hint(step_kind, mode=self.mode)
         cwd = os.getcwd()
         parts = [
             f"WORKSPACE_ROOT: {cwd}",
@@ -3358,8 +3308,9 @@ class LoopEngine:
             parts.append(format_journal_context(self.human_research_notes).strip())
         if self.offline_research and self.mode == "research":
             parts.append(
-                "OFFLINE RESEARCH: web_search and read_webpage are disabled. "
-                "Use only attachment text, human journal, and saved research notes."
+                "OFFLINE RESEARCH: web capabilities are disabled. "
+                "Use `cap.research.ingest_offline@v1` with attachment text, human journal, "
+                "and saved research notes."
             )
         return [{"role": "user", "content": "\n".join(parts)}]
 
@@ -4161,7 +4112,7 @@ class LoopEngine:
                     "\n\n❌ OS HINT: Call `cap.learn.write_syllabus@v1` with "
                     'arguments.content set to the full syllabus JSON string '
                     '(or put nodes/title fields directly in arguments). '
-                    "Do not invent read_all_research_notes."
+                    "Do not invent capability IDs outside the allowed list."
                 )
             if result.data:
                 text += f"\n(data keys: {', '.join(sorted(result.data.keys()))})"

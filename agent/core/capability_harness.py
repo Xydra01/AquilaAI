@@ -60,7 +60,10 @@ HARNESS_SCENARIOS: dict[str, dict[str, Any]] = {
             "Produce a research note explaining how generation_lock.py prevents "
             "concurrent Ollama generations across processes."
         ),
-        "context": "Attached files cover the implementation. Do not use web_search.",
+        "context": (
+            "Attached files cover the implementation. Use offline ingest / synthesize "
+            "capabilities only — no web capabilities."
+        ),
         "file_paths": ["agent/core/generation_lock.py", "agent/core/mcp_host.py"],
         "prefer_local": True,
         "instance_id": "ai-researcher",
@@ -102,12 +105,13 @@ HARNESS_SCENARIOS: dict[str, dict[str, Any]] = {
         "objective": (
             "Chronological report covering both the Iran–Israel war and the Israel–Lebanon "
             "war: ordered dated events for each conflict, then a short comparative timeline. "
-            "Use web_search for each conflict, read_webpage on primary sources, and "
-            "save_research_note with the active task_name."
+            "Use cap.research.gather_web_sources@v1 for each conflict, read primary sources, "
+            "and append notes via research capabilities."
         ),
         "context": (
-            "Require at least 2 web_search calls and 1 read_webpage before finalize. "
-            "Sections must mention both conflicts. No repo tools."
+            "Require at least two gather-web-sources capability calls and one page read before "
+            "finalize. Sections must mention both conflicts. Put the full report in "
+            "final_report and call cap.research.finalize_deliverable@v1. No repo tools."
         ),
         "file_paths": [],
         "prefer_local": False,
@@ -496,6 +500,7 @@ def run_scenario(
         fp_str,
         prefer_local=bool(spec.get("prefer_local")),
         context=spec.get("context") or "",
+        mode=spec.get("mode") or "research",
     )
     agent = brain.get_agent(inst)
     try:

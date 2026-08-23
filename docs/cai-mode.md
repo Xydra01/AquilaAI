@@ -1,6 +1,6 @@
 # Character AI (CAI) Mode
 
-Character AI is a **per-instance** roleplay workspace in Aquila OS 3.4. Each Aquila instance keeps its own personas under `Agent-Instances/{instance_id}/personas/`.
+Character AI is a **per-instance** roleplay workspace in Aquila OS 3.4+. Each Aquila instance keeps its own personas under `Agent-Instances/{instance_id}/personas/`.
 
 ## Workspace overview
 
@@ -35,28 +35,28 @@ Agent-Instances/{instance_id}/personas/{persona_id}/
 
 ## Build pipeline
 
-Build runs `run_unified_task(..., mode="character_build")`.
+Build runs `run_unified_task(..., mode="character_build")` on the **capability act path** (`capabilities[]` per turn, not raw tools).
 
 ### Without Research lore (3 steps)
 
-1. **read** — `save_research_note` only (ingest description + attachments)
-2. **synthesize** — `write_persona_file` **once** for `initialization.md` (≥ ~800 characters)
-3. **finalize** — `finalize_persona`, then `finish_task`
+1. **read** — `cap.persona.ingest_sources@v1` (ingest description + attachments into scratchpad)
+2. **synthesize** — `cap.persona.write_initialization@v1` once for `initialization.md` (≥ ~800 characters)
+3. **finalize** — `cap.persona.finalize@v1` (greeting + tagline)
 
 ### With Research lore checked (4 steps)
 
-1. **search** — `web_search`, `read_webpage`, `save_research_note` (requires SearXNG)
-2. **read** — merge attachments via `save_research_note` if needed
-3. **synthesize** — `write_persona_file` once
-4. **finalize** — `finalize_persona`
+1. **search** — `cap.persona.gather_lore@v1` (web lore into scratchpad; requires SearXNG)
+2. **read** — `cap.persona.ingest_sources@v1` (merge attachments if needed)
+3. **synthesize** — `cap.persona.write_initialization@v1` once
+4. **finalize** — `cap.persona.finalize@v1`
 
-The GUI passes `persona_research_lore=True` into the loop so tool allowlists and plan expansion match the checkbox (not prompt text alone).
+The GUI passes `persona_research_lore=True` into the loop so capability allowlists and plan expansion match the checkbox (not prompt text alone).
 
-`write_persona_file` only accepts `file_path='initialization.md'` and always writes to `Agent-Instances/{instance}/personas/{id}/initialization.md`.
-
-Task ledger: `Agent-Tasks/persona_build_{persona_id}.json` (regenerated each build).
+Plans attach `capability_id` per step; the act loop validates against allowed capability IDs for each `step_kind`.
 
 **PDF attachments:** Comic/wiki PDFs may log harmless MuPDF font warnings; text extraction still runs when a text layer exists.
+
+Task ledger: `Agent-Tasks/persona_build_{persona_id}.json` (regenerated each build).
 
 ## Chat behavior
 

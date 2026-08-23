@@ -6,7 +6,7 @@ Use this after the **3.5 dual MVP** (Classroom + Archives). Product reference: [
 
 | Issue | Fix |
 |-------|-----|
-| Shallow syllabus (3 flat units) | `write_syllabus_file` rejects &lt;8 nodes or &lt;5 `parent_id` sub-units; prompts/planner updated |
+| Shallow syllabus (3 flat units) | `cap.learn.write_syllabus@v1` rejects &lt;8 nodes or &lt;5 `parent_id` sub-units; prompts/planner updated |
 | Archive sources not indexed | Auto-index on upload + on open when stale; shared `file_parser.extract_indexable_text` for PDF/DOCX |
 | Quiz/study gen empty | Blocked when no indexed chunks; user prompted to re-index |
 | Archive chat hits 300s with no answer | Qwen `think` blocks + generation kill-switch; fixed: strip think, `AQUILA_LEARN_ARCHIVE_GENERATION_CAP=0`, Chat-style prompts |
@@ -41,8 +41,8 @@ Use this after the **3.5 dual MVP** (Classroom + Archives). Product reference: [
 | B1 | New course, **Files** intake, attach 1+ PDF/MD, build | Build log runs; completes without tool loop error |
 | B2 | Inspect `Agent-Instances/{id}/learn/courses/{cid}/syllabus.json` | **≥8** `nodes`, **≥5** with `parent_id`; titles are specific |
 | B3 | Syllabus tree in classroom | Multiple modules + sub-units; not 3 generic bullets |
-| B4 | Shallow build (if agent tries 3 nodes) | `write_syllabus_file` returns rejection; agent retries deeper tree |
-| B5 | **Topic + web** intake + web checkbox | 4-step plan: search → read → synthesize → finalize |
+| B4 | Shallow build (if agent tries 3 nodes) | `cap.learn.write_syllabus@v1` returns rejection; agent retries deeper tree |
+| B5 | **Topic + web** intake + web checkbox | 4-step plan with `cap.learn.gather_topic_sources@v1` → ingest → write_syllabus → finalize |
 | B6 | **Placement** intake | Build completes; syllabus reflects topic areas |
 | B7 | `course.json` | `build_complete: true`; syllabus `status: active` |
 | B8 | Course `sources/` | Uploaded files copied; optional course index after build |

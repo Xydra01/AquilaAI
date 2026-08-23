@@ -151,3 +151,28 @@ def test_score_emet_log_if_present():
     card = score_jsonl_for_scenario(emet, "persona_build_lore")
     assert card.llm_requests >= 1
     assert card.read_timeouts >= 1
+
+
+def test_finalize_capability_satisfies_require_finish(tmp_path):
+    path = tmp_path / "cap_finalize.jsonl"
+    events = [
+        {"ts": "2026-01-01T12:00:00", "event": "tool_start", "tool_name": "cap:cap.research.gather_web_sources@v1"},
+        {"ts": "2026-01-01T12:00:05", "event": "tool_start", "tool_name": "cap:cap.research.gather_web_sources@v1"},
+        {"ts": "2026-01-01T12:00:10", "event": "tool_start", "tool_name": "cap:cap.web.read_pages@v1"},
+        {
+            "ts": "2026-01-01T12:00:20",
+            "event": "tool_end",
+            "tool_name": "cap:cap.research.finalize_deliverable@v1",
+            "result_preview": "✅ Deliverable saved",
+        },
+    ]
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    card = analyze_jsonl(
+        path,
+        require_finish=True,
+        min_web_search=2,
+        min_read_webpage=1,
+    )
+    assert card.capability_finalize
+    assert card.passed
+    assert "finalize capability seen" in card.passes

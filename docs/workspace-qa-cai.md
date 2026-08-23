@@ -19,10 +19,10 @@ Run after implementation and before tagging 3.4 release (with `docs/workspace-qa
 
 - [x] Name + description required
 - [x] Attach PDF/image — build receives attachment context
-- [x] **Research lore** — when checked, build uses a **4-step plan** (search → read → synthesize → finalize) and the **search** step allowlist includes `web_search` / `read_webpage`. Test with a **short** description and **no** attachments so step 1 is web research, not auto-ingest skip.
+- [x] **Research lore** — when checked, build uses a **4-step plan** (search → read → synthesize → finalize) with `cap.persona.gather_lore@v1` on the search step. Test with a **short** description and **no** attachments so step 1 is web lore, not auto-ingest skip.
 - [x] Build shows execution log; completes with `initialization.md` under `Agent-Instances/{instance}/personas/{id}/` + greeting
 - [x] On success, switches to Chat and shows greeting when history empty
-- [x] `write_persona_file` accepts only `file_path='initialization.md'` (canonical persona path)
+- [x] Synthesize step calls `cap.persona.write_initialization@v1` (writes `initialization.md` via capability handler)
 
 ## Chat
 

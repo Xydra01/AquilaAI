@@ -74,11 +74,18 @@ class LoopCoach:
             for u in unused:
                 parts.append(f"  • {u}")
         else:
-            parts.append(
-                "\n\n💡 COACH: No fresh URLs in the last search — run web_search with a "
-                "different query, or distill facts with save_research_note from snippets "
-                "you already have."
-            )
+            if self.mode in ("character_build", "research"):
+                parts.append(
+                    "\n\n💡 COACH: No fresh URLs in the last search — try a different "
+                    "gather capability query, or distill facts from snippets you already have "
+                    "via append-note / synthesize capabilities."
+                )
+            else:
+                parts.append(
+                    "\n\n💡 COACH: No fresh URLs in the last search — run web_search with a "
+                    "different query, or distill facts with save_research_note from snippets "
+                    "you already have."
+                )
         if self.mode == "character_build":
             if self.step_kind == "search":
                 parts.append(
@@ -87,12 +94,12 @@ class LoopCoach:
                 )
             elif self.step_kind == "read":
                 parts.append(
-                    "\nOn read/ingest, use save_research_note with user text + prior tool "
-                    "output, then mark_objective_complete (do not re-read the same URL)."
+                    "\nOn read/ingest, call cap.persona.ingest_sources@v1 with user text + "
+                    "prior output, then mark_objective_complete (do not re-read the same URL)."
                 )
         elif self.mode == "research" and self.step_kind in ("search", "read"):
             parts.append(
-                "\nOr save_research_note from existing snippets and mark_objective_complete."
+                "\nOr append notes via research capabilities and mark_objective_complete."
             )
         if "truncat" in block_msg.lower() or "fandom" in url.lower():
             parts.append(
@@ -125,6 +132,12 @@ class LoopCoach:
                 "task",
                 "autonomous",
             ):
+                if self.mode == "research":
+                    return (
+                        f"{prefix}: You already have enough evidence — try a different "
+                        "capability, synthesize notes, or mark_objective_complete / "
+                        "cap.research.finalize_deliverable@v1 when milestones are met."
+                    )
                 return (
                     f"{prefix}: You already have enough evidence — try a different tool, "
                     "synthesize notes, run tests, or mark_objective_complete / finish_task "
@@ -135,29 +148,41 @@ class LoopCoach:
         if self.mode == "character_build":
             if self.step_kind == "search":
                 return (
-                    f"{prefix}: Change URL/query, save_research_note with distilled bullets, "
+                    f"{prefix}: Try a different query or call "
+                    "cap.persona.gather_lore@v1 again with distilled bullets, "
                     "or mark_objective_complete if lore is enough."
                 )
             if self.step_kind == "read":
                 return (
-                    f"{prefix}: save_research_note once from user text + prior reads, then "
-                    "mark_objective_complete — do not repeat read_webpage."
+                    f"{prefix}: Call cap.persona.ingest_sources@v1 once, then "
+                    "mark_objective_complete — do not repeat gather/ingest."
                 )
             if self.step_kind == "synthesize":
                 return (
-                    f"{prefix}: read_all_research_notes once, then write_persona_file for "
-                    "initialization.md."
+                    f"{prefix}: Call cap.persona.write_initialization@v1 with "
+                    "arguments.content = full initialization.md text."
                 )
         if self.mode == "learn_syllabus_build":
-            if self.step_kind in ("search", "read"):
+            if self.step_kind == "search":
                 return (
-                    f"{prefix}: save_research_note or mark_objective_complete; "
-                    "write_syllabus_file is only on synthesize."
+                    f"{prefix}: Call cap.learn.gather_topic_sources@v1 with a different "
+                    "topic/query, or mark_objective_complete if sources are enough."
+                )
+            if self.step_kind == "read":
+                return (
+                    f"{prefix}: Call cap.learn.ingest_course_materials@v1 once, then "
+                    "mark_objective_complete — syllabus write is synthesize only."
+                )
+            if self.step_kind == "synthesize":
+                return (
+                    f"{prefix}: Call cap.learn.write_syllabus@v1 with "
+                    'arguments.content = syllabus JSON string.'
                 )
         if self.mode == "research":
             return (
-                f"{prefix}: Use a different source, save_research_note, or "
-                "mark_objective_complete / finish_task on finalize."
+                f"{prefix}: Use a different source or capability, "
+                "call cap.research.synthesize_notes@v1, or mark_objective_complete / "
+                "cap.research.finalize_deliverable@v1 on finalize."
             )
         if self.mode == "code":
             return (
@@ -187,6 +212,8 @@ class LoopCoach:
             self.mode,
             offline=self.offline_research,
             capability=self.capability_research,
+            learn_syllabus_web=self.learn_syllabus_web,
+            persona_research_lore=self.persona_research_lore,
         )
         for ms in pending_milestones:
             if ms in tool_hints:

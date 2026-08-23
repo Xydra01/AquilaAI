@@ -105,7 +105,7 @@ Optional QA: `AQUILA_RESEARCH_RECIPE_STRICT=1` auto-runs step `capability_id` on
 | Order | Mode | Capability domain | Status |
 |-------|------|-------------------|--------|
 | 1 | Research | `cap.research.*`, `cap.web.*` | Done (reference) |
-| 2 | character_build / learn_syllabus | `cap.persona.*`, `cap.learn.*` | Done — `CAPABILITY_ACT_MODES` |
+| 2 | character_build / learn_syllabus | `cap.persona.*`, `cap.learn.*` | Done — `CAPABILITY_ACT_MODES`; plan, act-hint, and fallback layers are capability-first (same contract as research) |
 | 3 | writing | `cap.writing.*` | Next |
 | 4 | code | `cap.dev.*` composites | Pending |
 | 5 | task/autonomous | `cap.delegate.*` recipes | Pending |

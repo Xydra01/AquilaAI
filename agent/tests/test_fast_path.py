@@ -54,6 +54,18 @@ def test_research_micro_plan_steps():
     plan = json.loads(raw)
     kinds = [s["step_kind"] for s in plan["steps"]]
     assert kinds == ["search", "synthesize"]
+    assert plan["steps"][0].get("capability_id") == "cap.research.gather_web_sources@v1"
+    assert plan["steps"][1].get("capability_id") == "cap.research.synthesize_notes@v1"
+
+
+def test_research_dynamic_micro_finalize_no_finish_task(monkeypatch):
+    monkeypatch.setenv("AQUILA_DYNAMIC_LOOP", "1")
+    raw = build_micro_plan("research", "Summarize local LLM costs", "r_dyn")
+    plan = json.loads(raw)
+    finalize = plan["steps"][-1]
+    assert finalize["step_kind"] == "finalize"
+    assert "finish_task" not in finalize["description"].lower()
+    assert finalize.get("capability_id") == "cap.research.finalize_deliverable@v1"
 
 
 def test_should_micro_plan_rejects_managers():

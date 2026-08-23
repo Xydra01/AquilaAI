@@ -2753,35 +2753,35 @@ class Agent:
             from .loop_settings import dynamic_loop_enabled
 
             capability_plan_note = (
-                "\nCapability research mode: steps receive capability_id at runtime; "
-                "plan step_kind and descriptions only (work/read/synthesize/finalize). "
-                "Offline plans must NOT mention web_search or read_webpage."
+                "\nCapability research mode: plan step_kind and outcome descriptions only; "
+                "runtime attaches capability_id per step (work/read/synthesize/finalize). "
+                "Offline plans: attachments and journal only — no web capabilities."
             )
             if offline_research:
                 if dynamic_loop_enabled():
                     objectives = (
                         "Offline research plan: exactly 2 steps — work then finalize. "
-                        "Use ONLY user attachments and human journal — no web_search or "
-                        "read_webpage. Include approach_summary and milestones."
+                        "Use ONLY user attachments and human journal. Include approach_summary "
+                        "and milestones."
                     )
                     example_step = (
                         '{"status": "pending", "description": "Offline work: ingest attachments", '
                         '"step_kind": "work", "max_iterations": 14}, '
-                        '{"status": "pending", "description": "final_report + finish_task", '
+                        '{"status": "pending", "description": "Finalize deliverable report", '
                         '"step_kind": "finalize", "max_iterations": 6}'
                     )
                 else:
                     objectives = (
                         "Offline research: produce AT LEAST 3 steps — read (attachments/journal) "
-                        "→ synthesize (save_research_note) → finalize (final_report). "
-                        "Do NOT use web_search or read_webpage."
+                        "→ synthesize (compile notes) → finalize (deliverable report). "
+                        "Attachments and journal only."
                     )
                     example_step = (
                         '{"status": "pending", "description": "Extract from attachments", '
                         '"step_kind": "read", "max_iterations": 5}, '
-                        '{"status": "pending", "description": "Save research notes", '
+                        '{"status": "pending", "description": "Synthesize offline findings", '
                         '"step_kind": "synthesize", "max_iterations": 6}, '
-                        '{"status": "pending", "description": "final_report + finish_task", '
+                        '{"status": "pending", "description": "Finalize deliverable report", '
                         '"step_kind": "finalize", "max_iterations": 6}'
                     )
             elif dynamic_loop_enabled():
@@ -2799,7 +2799,7 @@ class Agent:
                 example_step = (
                     '{"status": "pending", "description": "Research work: search, read, notes", '
                     '"step_kind": "work", "max_iterations": 14}, '
-                    '{"status": "pending", "description": "final_report + finish_task", '
+                    '{"status": "pending", "description": "Finalize deliverable report", '
                     '"step_kind": "finalize", "max_iterations": 6}'
                 )
             else:
@@ -2819,13 +2819,13 @@ class Agent:
                     "coverage of every confirmed planet in one task."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "Search NASA/authoritative sources for ...", '
+                    '{"status": "pending", "description": "Search authoritative sources", '
                     '"step_kind": "search", "max_iterations": 4}, '
                     '{"status": "pending", "description": "Read and extract from top URLs", '
                     '"step_kind": "read", "max_iterations": 5}, '
-                    '{"status": "pending", "description": "Save notes and compare findings", '
+                    '{"status": "pending", "description": "Synthesize findings into notes", '
                     '"step_kind": "synthesize", "max_iterations": 6}, '
-                    '{"status": "pending", "description": "final_report + finish_task", '
+                    '{"status": "pending", "description": "Finalize deliverable report", '
                     '"step_kind": "finalize", "max_iterations": 6}'
                 )
         elif mode == "writing":
@@ -2837,69 +2837,78 @@ class Agent:
             )
         elif mode == "learn_syllabus_build":
             role_desc = "You are Aquila's Learn Mode syllabus planner."
+            capability_plan_note = (
+                "\nCapability learn mode: steps receive capability_id at runtime; "
+                "plan step_kind and outcome descriptions only. "
+                "Do NOT name internal tools (write_syllabus_file, save_research_note, finish_task)."
+            )
             if learn_syllabus_web:
                 objectives = (
-                    "Produce exactly 4 steps: search (web lore) → read (ingest files) → "
-                    "synthesize (write_syllabus_file JSON once) → finalize (finalize_course). "
-                    "Syllabus must have ≥8 nodes and ≥5 sub-units in a hierarchy."
+                    "Produce exactly 4 steps: search (gather web topic sources) → read (ingest files) → "
+                    "synthesize (write syllabus JSON once; ≥8 nodes, ≥5 sub-units with parent_id) → "
+                    "finalize (complete course build)."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "Web search for topic", '
+                    '{"status": "pending", "description": "Gather web topic sources", '
                     '"step_kind": "search", "max_iterations": 5}, '
-                    '{"status": "pending", "description": "Ingest attachments", '
+                    '{"status": "pending", "description": "Ingest uploaded course materials", '
                     '"step_kind": "read", "max_iterations": 4}, '
-                    '{"status": "pending", "description": "write_syllabus_file JSON", '
+                    '{"status": "pending", "description": "Write syllabus JSON from scratchpad", '
                     '"step_kind": "synthesize", "max_iterations": 5}, '
-                    '{"status": "pending", "description": "finalize_course", '
+                    '{"status": "pending", "description": "Finalize course build", '
                     '"step_kind": "finalize", "max_iterations": 4}'
                 )
             else:
                 objectives = (
-                    "Produce exactly 3 steps: read (ingest) → synthesize (write_syllabus_file) → "
-                    "finalize (finalize_course). Syllabus must have ≥8 nodes and ≥5 sub-units "
-                    "(parent_id set) in a module/lesson tree."
+                    "Produce exactly 3 steps: read (ingest materials) → synthesize (write syllabus JSON; "
+                    "≥8 nodes, ≥5 sub-units with parent_id) → finalize (complete course build)."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "Ingest sources", '
+                    '{"status": "pending", "description": "Ingest course materials", '
                     '"step_kind": "read", "max_iterations": 4}, '
-                    '{"status": "pending", "description": "write_syllabus_file", '
+                    '{"status": "pending", "description": "Write syllabus JSON from scratchpad", '
                     '"step_kind": "synthesize", "max_iterations": 5}, '
-                    '{"status": "pending", "description": "finalize_course", '
+                    '{"status": "pending", "description": "Finalize course build", '
                     '"step_kind": "finalize", "max_iterations": 4}'
                 )
         elif mode == "character_build":
             role_desc = "You are Aquila's Character AI persona build planner."
+            capability_plan_note = (
+                "\nCapability persona mode: steps receive capability_id at runtime; "
+                "plan step_kind and outcome descriptions only. "
+                "Do NOT name internal tools (write_persona_file, save_research_note, finish_task)."
+            )
             if persona_research_lore:
                 objectives = (
-                    "Produce exactly 4 steps: (1) search — web_search / read_webpage / save_research_note "
-                    "for lore; (2) read — merge attachments via save_research_note only; "
-                    "(3) synthesize — write_persona_file ONCE for initialization.md; "
-                    "(4) finalize — finalize_persona then finish_task. "
-                    "Never put write_persona_file before synthesize."
+                    "Produce exactly 4 steps: (1) search — gather web lore; "
+                    "(2) read — merge attachments; "
+                    "(3) synthesize — write initialization.md ONCE (≥800 characters); "
+                    "(4) finalize — complete persona build. "
+                    "Never put initialization write before synthesize."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "Web search for character lore", '
+                    '{"status": "pending", "description": "Gather web character lore", '
                     '"step_kind": "search", "max_iterations": 5}, '
-                    '{"status": "pending", "description": "Ingest attachments via save_research_note", '
+                    '{"status": "pending", "description": "Ingest user text and attachments", '
                     '"step_kind": "read", "max_iterations": 4}, '
-                    '{"status": "pending", "description": "write_persona_file initialization.md once", '
+                    '{"status": "pending", "description": "Write initialization.md once", '
                     '"step_kind": "synthesize", "max_iterations": 4}, '
-                    '{"status": "pending", "description": "finalize_persona + finish_task", '
+                    '{"status": "pending", "description": "Finalize persona build", '
                     '"step_kind": "finalize", "max_iterations": 4}'
                 )
             else:
                 objectives = (
-                    "Produce exactly 3 steps: (1) read — save_research_note ONLY, "
-                    "NO write_persona_file; (2) synthesize — write_persona_file ONCE for initialization.md; "
-                    "(3) finalize — finalize_persona then finish_task. "
-                    "Never put write_persona_file on the read step."
+                    "Produce exactly 3 steps: (1) read — ingest user text and attachments ONLY; "
+                    "(2) synthesize — write initialization.md ONCE (≥800 characters); "
+                    "(3) finalize — complete persona build. "
+                    "Never put initialization write on the read step."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "Ingest user text and attachments via save_research_note", '
+                    '{"status": "pending", "description": "Ingest user text and attachments", '
                     '"step_kind": "read", "max_iterations": 4}, '
-                    '{"status": "pending", "description": "Synthesize initialization.md once via write_persona_file", '
+                    '{"status": "pending", "description": "Write initialization.md once", '
                     '"step_kind": "synthesize", "max_iterations": 4}, '
-                    '{"status": "pending", "description": "finalize_persona + finish_task", '
+                    '{"status": "pending", "description": "Finalize persona build", '
                     '"step_kind": "finalize", "max_iterations": 4}'
                 )
         elif mode == "code":
@@ -3226,6 +3235,60 @@ class Agent:
                 persona_research_lore=persona_research_lore,
                 learn_syllabus_web=learn_syllabus_web,
                 offline_research=offline_research,
+            )
+            console.print(f"[cyan]📋 {fb_note}[/cyan]")
+            if tune_notes:
+                for note in tune_notes:
+                    console.print(f"  • {note}")
+            return json.dumps(tuned, indent=2)
+
+        if mode == "character_build":
+            from .plan_validator import build_fallback_persona_plan
+
+            console.print(
+                "[yellow]⚠️ LLM planner failed after 3 attempts — using template persona plan.[/yellow]"
+            )
+            console.event(
+                "plan_template_fallback",
+                reason=last_fail_reason or "unknown",
+                preview=last_fail_preview[:300] if last_fail_preview else None,
+            )
+            fallback, fb_note = build_fallback_persona_plan(
+                user_request,
+                persona_research_lore=persona_research_lore,
+            )
+            tuned, tune_notes = validate_and_tune_plan(
+                fallback,
+                mode,
+                user_request,
+                persona_research_lore=persona_research_lore,
+            )
+            console.print(f"[cyan]📋 {fb_note}[/cyan]")
+            if tune_notes:
+                for note in tune_notes:
+                    console.print(f"  • {note}")
+            return json.dumps(tuned, indent=2)
+
+        if mode == "learn_syllabus_build":
+            from .plan_validator import build_fallback_learn_plan
+
+            console.print(
+                "[yellow]⚠️ LLM planner failed after 3 attempts — using template syllabus plan.[/yellow]"
+            )
+            console.event(
+                "plan_template_fallback",
+                reason=last_fail_reason or "unknown",
+                preview=last_fail_preview[:300] if last_fail_preview else None,
+            )
+            fallback, fb_note = build_fallback_learn_plan(
+                user_request,
+                learn_syllabus_web=learn_syllabus_web,
+            )
+            tuned, tune_notes = validate_and_tune_plan(
+                fallback,
+                mode,
+                user_request,
+                learn_syllabus_web=learn_syllabus_web,
             )
             console.print(f"[cyan]📋 {fb_note}[/cyan]")
             if tune_notes:
@@ -3618,6 +3681,20 @@ Set approval_status to "draft".
                         ).recipe_id
                 except ImportError:
                     pass
+                if mode in ("learn_syllabus_build", "character_build"):
+                    from agent.core.loop_objectives import build_milestones_from_plan_steps
+
+                    if mode == "learn_syllabus_build":
+                        plan_data["learn_syllabus_web"] = learn_syllabus_web
+                    if mode == "character_build":
+                        plan_data["persona_research_lore"] = persona_research_lore
+                    derived = build_milestones_from_plan_steps(
+                        plan_data.get("steps") or [],
+                        mode,
+                        prefix="Capabilities",
+                    )
+                    if derived:
+                        plan_data["milestones"] = derived
             plan_data["micro_plan"] = micro_plan_used
             write_plan_artifact(task_name, mode, plan_data, user_request=user_request)
             with open(task_file, "w", encoding="utf-8") as f:

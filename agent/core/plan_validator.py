@@ -83,6 +83,42 @@ STEP_KIND_HINTS: dict[str, str] = {
     ),
 }
 
+CAPABILITY_ACT_MODES = frozenset({
+    "research",
+    "character_build",
+    "learn_syllabus_build",
+})
+
+CAPABILITY_STEP_KIND_HINTS: dict[str, dict[str, str]] = {
+    "research": {
+        "explore": "Reconnaissance: survey sources before deeper research work.",
+        "search": (
+            "Gather sources via `cap.research.gather_web_sources@v1` (or plan capability_id)."
+        ),
+        "read": "Extract facts via research gather/ingest capabilities.",
+        "synthesize": "Synthesize via `cap.research.synthesize_notes@v1` from scratchpad notes.",
+        "finalize": (
+            "Put full report in top-level `final_report`; call "
+            "`cap.research.finalize_deliverable@v1`."
+        ),
+        "work": (
+            "Interleave gather / append-note / synthesize capabilities; advance when milestones met."
+        ),
+    },
+    "character_build": {
+        "search": "Call `cap.persona.gather_lore@v1` once with a focused topic.",
+        "read": "Call `cap.persona.ingest_sources@v1` once.",
+        "synthesize": "Call `cap.persona.write_initialization@v1` with full markdown.",
+        "finalize": "Call `cap.persona.finalize@v1` with greeting and tagline.",
+    },
+    "learn_syllabus_build": {
+        "search": "Call `cap.learn.gather_topic_sources@v1` once with topic.",
+        "read": "Call `cap.learn.ingest_course_materials@v1` once.",
+        "synthesize": "Call `cap.learn.write_syllabus@v1` with full syllabus JSON.",
+        "finalize": "Call `cap.learn.finalize_course@v1`.",
+    },
+}
+
 MODE_MIN_STEPS: dict[str, int] = {
     "research": 4,
     "writing": 3,
@@ -102,6 +138,14 @@ _CHARACTER_BUILD_LORE_STEP_KINDS = ("search", "read", "synthesize", "finalize")
 _LEARN_SYLLABUS_STEP_KINDS = ("read", "synthesize", "finalize")
 _LEARN_SYLLABUS_WEB_STEP_KINDS = ("search", "read", "synthesize", "finalize")
 
+from agent.core.plan_descriptions import (
+    capability_step_body,
+    capability_step_description,
+    has_tool_leak,
+    strip_planner_boilerplate,
+    tool_leak_tokens_for_mode,
+)
+
 _RESEARCH_FALLBACK_DESCRIPTIONS: dict[str, str] = {
     "explore": "Reconnaissance: survey sources before deeper research work.",
     "search": "Gather web sources on the research topic.",
@@ -120,7 +164,7 @@ _FALLBACK_DESCRIPTIONS: dict[str, str] = {
     "search": "Search the web for relevant sources on the topic.",
     "read": "Read and extract key facts from URLs or attachments.",
     "synthesize": "Compile findings into notes or deliverables.",
-    "finalize": "Complete deliverables and call finish_task.",
+    "finalize": "Complete deliverables and finalize.",
     "write": "Draft the assigned writing section.",
     "code": "Implement or edit code for this step.",
     "verify": "Verify outputs (tests, grep, lint).",
@@ -130,65 +174,40 @@ _FALLBACK_DESCRIPTIONS: dict[str, str] = {
 def _character_build_template(
     persona_research_lore: bool,
 ) -> list[tuple[str, str]]:
-    if persona_research_lore:
-        return [
-            (
-                "search",
-                "Research lore on the web: web_search and read_webpage; "
-                "save_research_note with findings (no write_persona_file).",
-            ),
-            (
-                "read",
-                "Merge user description and attachments via save_research_note if needed "
-                "(no write_persona_file).",
-            ),
-            (
-                "synthesize",
-                "read_all_research_notes then write_persona_file once for initialization.md.",
-            ),
-            (
-                "finalize",
-                "finalize_persona (greeting + tagline) then finish_task.",
-            ),
-        ]
+    kinds = (
+        _CHARACTER_BUILD_LORE_STEP_KINDS
+        if persona_research_lore
+        else _CHARACTER_BUILD_STEP_KINDS
+    )
     return [
         (
-            "read",
-            "Ingest user description and attachments via save_research_note only "
-            "(no write_persona_file).",
-        ),
-        (
-            "synthesize",
-            "read_all_research_notes then write_persona_file once for initialization.md.",
-        ),
-        ("finalize", "finalize_persona (greeting + tagline) then finish_task."),
+            kind,
+            capability_step_body(
+                "character_build",
+                kind,
+                persona_research_lore=persona_research_lore,
+            ),
+        )
+        for kind in kinds
     ]
 
 
 def _learn_syllabus_template(learn_syllabus_web: bool) -> list[tuple[str, str]]:
-    if learn_syllabus_web:
-        return [
-            (
-                "search",
-                "Web research for course topic: web_search, read_webpage, save_research_note.",
-            ),
-            (
-                "read",
-                "Merge user materials via save_research_note (no write_syllabus_file).",
-            ),
-            (
-                "synthesize",
-                "read_all_research_notes then write_syllabus_file(JSON) once.",
-            ),
-            ("finalize", "finalize_course then finish_task."),
-        ]
+    kinds = (
+        _LEARN_SYLLABUS_WEB_STEP_KINDS
+        if learn_syllabus_web
+        else _LEARN_SYLLABUS_STEP_KINDS
+    )
     return [
         (
-            "read",
-            "Ingest user course materials via save_research_note (no write_syllabus_file).",
-        ),
-        ("synthesize", "read_all_research_notes then write_syllabus_file(JSON) once."),
-        ("finalize", "finalize_course then finish_task."),
+            kind,
+            capability_step_body(
+                "learn_syllabus_build",
+                kind,
+                learn_syllabus_web=learn_syllabus_web,
+            ),
+        )
+        for kind in kinds
     ]
 
 
@@ -241,21 +260,25 @@ def mode_step_description(
 ) -> str:
     """Canonical step description for a mode/kind pair (overwrites planner leakage)."""
     req = (user_request or "the task").strip()[:500]
-    if mode_key == "character_build":
-        for kind, desc in _character_build_template(persona_research_lore):
-            if kind == step_kind:
-                return f"{desc} Topic: {req}."
-        return _FALLBACK_DESCRIPTIONS.get(step_kind, f"Complete step: {req}.")
-    if mode_key == "learn_syllabus_build":
-        for kind, desc in _learn_syllabus_template(learn_syllabus_web):
-            if kind == step_kind:
-                return f"{desc} Topic: {req}."
-        return _FALLBACK_DESCRIPTIONS.get(step_kind, f"Complete step: {req}.")
-    if mode_key == "research":
-        return _RESEARCH_FALLBACK_DESCRIPTIONS.get(
-            step_kind, _FALLBACK_DESCRIPTIONS.get(step_kind, f"Complete step: {req}.")
+    if mode_key in ("character_build", "learn_syllabus_build"):
+        return capability_step_description(
+            mode_key,
+            step_kind,
+            user_request,
+            persona_research_lore=persona_research_lore,
+            learn_syllabus_web=learn_syllabus_web,
         )
-    return _FALLBACK_DESCRIPTIONS.get(step_kind, f"Complete step: {req}.")
+    if mode_key == "research":
+        body = _RESEARCH_FALLBACK_DESCRIPTIONS.get(
+            step_kind, _FALLBACK_DESCRIPTIONS.get(step_kind, f"Complete step: {req}")
+        )
+        if " Topic:" in body:
+            return body
+        return f"{body} Topic: {req}."
+    body = _FALLBACK_DESCRIPTIONS.get(step_kind, f"Complete step: {req}")
+    if " Topic:" in body:
+        return body
+    return f"{body} Topic: {req}."
 
 
 def _collapse_comma_repetition(text: str) -> str:
@@ -309,8 +332,9 @@ def sanitize_step_description(
         kind = step_kind or "code"
         return _FALLBACK_DESCRIPTIONS.get(kind, "Complete this step."), True
 
-    cleaned = _collapse_comma_repetition(raw)
-    modified = cleaned != raw
+    stripped = strip_planner_boilerplate(raw)
+    cleaned = _collapse_comma_repetition(stripped)
+    modified = stripped != raw or cleaned != stripped
     heavy_repetition = modified and len(raw) > 200 and len(cleaned) < len(raw) * 0.15
 
     if heavy_repetition or is_degenerate_description(cleaned):
@@ -345,8 +369,19 @@ def infer_step_kind(description: str, mode: str, step_index: int, total_steps: i
     return "code"
 
 
-def get_step_kind_hint(step_kind: str) -> str:
-    return STEP_KIND_HINTS.get(step_kind, "Complete the objective efficiently; avoid duplicate tool calls.")
+def get_step_kind_hint(step_kind: str, mode: str = "") -> str:
+    mode_norm = (mode or "").strip().lower()
+    kind = (step_kind or "").strip().lower()
+    if mode_norm in CAPABILITY_ACT_MODES:
+        table = CAPABILITY_STEP_KIND_HINTS.get(mode_norm, {})
+        if kind in table:
+            return table[kind]
+        return (
+            f"Complete {kind or 'step'} via capability; do not invent capability IDs."
+        )
+    return STEP_KIND_HINTS.get(
+        kind, "Complete the objective efficiently; avoid duplicate tool calls."
+    )
 
 
 def _clamp_budget(step_kind: str, max_iterations: int | None) -> int:
@@ -699,6 +734,80 @@ def expand_dynamic_writing_plan(
     return plan, f"Dynamic writing plan ({len(new_steps)} steps)."
 
 
+def _apply_capability_descriptions_to_plan(
+    plan: dict[str, Any],
+    mode: str,
+    user_request: str,
+    *,
+    persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
+) -> None:
+    """Overwrite step descriptions with canonical capability-first copy."""
+    for step in plan.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        kind = (step.get("step_kind") or "work").strip().lower()
+        step["description"] = mode_step_description(
+            mode,
+            kind,
+            user_request,
+            persona_research_lore=persona_research_lore,
+            learn_syllabus_web=learn_syllabus_web,
+        )
+
+
+def build_fallback_persona_plan(
+    user_request: str,
+    *,
+    persona_research_lore: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Deterministic persona plan when the LLM planner fails all retries."""
+    from agent.functions.persona import build_capability_plan_from_recipe, resolve_recipe
+
+    recipe = resolve_recipe(persona_research_lore=persona_research_lore)
+    plan = build_capability_plan_from_recipe(
+        recipe,
+        user_request,
+        persona_research_lore=persona_research_lore,
+    )
+    _apply_capability_descriptions_to_plan(
+        plan,
+        "character_build",
+        user_request,
+        persona_research_lore=persona_research_lore,
+    )
+    plan["planner_fallback"] = True
+    plan["status"] = "in_progress"
+    plan["current_step_index"] = 0
+    return plan, f"Recipe fallback plan ({recipe.recipe_id})."
+
+
+def build_fallback_learn_plan(
+    user_request: str,
+    *,
+    learn_syllabus_web: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Deterministic learn syllabus plan when the LLM planner fails all retries."""
+    from agent.functions.learn import build_capability_plan_from_recipe, resolve_recipe
+
+    recipe = resolve_recipe(learn_syllabus_web=learn_syllabus_web)
+    plan = build_capability_plan_from_recipe(
+        recipe,
+        user_request,
+        learn_syllabus_web=learn_syllabus_web,
+    )
+    _apply_capability_descriptions_to_plan(
+        plan,
+        "learn_syllabus_build",
+        user_request,
+        learn_syllabus_web=learn_syllabus_web,
+    )
+    plan["planner_fallback"] = True
+    plan["status"] = "in_progress"
+    plan["current_step_index"] = 0
+    return plan, f"Recipe fallback plan ({recipe.recipe_id})."
+
+
 def expand_character_build_plan(
     plan: dict[str, Any],
     user_request: str,
@@ -711,69 +820,27 @@ def expand_character_build_plan(
     if steps and isinstance(steps[0], dict):
         original_desc = str(steps[0].get("description", "")).strip()[:400]
 
-    req = (user_request or "the persona").strip()[:500]
-    if persona_research_lore:
-        template: list[tuple[str, str]] = [
-            (
-                "search",
-                f"Research lore on the web: web_search and read_webpage for {req}; "
-                "save_research_note with findings (no write_persona_file).",
-            ),
-            (
-                "read",
-                f"Merge user description and attachments via save_research_note if needed "
-                f"(no write_persona_file). Topic: {req}.",
-            ),
-            (
-                "synthesize",
-                f"read_all_research_notes then write_persona_file once for initialization.md: {req}.",
-            ),
-            (
-                "finalize",
-                f"finalize_persona (greeting + tagline) then finish_task for: {req}.",
-            ),
-        ]
-    else:
-        template = [
-            (
-                "read",
-                f"Ingest user description and attachments via save_research_note only "
-                f"(no write_persona_file). Topic: {req}.",
-            ),
-            (
-                "synthesize",
-                f"read_all_research_notes then write_persona_file once for initialization.md: {req}.",
-            ),
-            (
-                "finalize",
-                f"finalize_persona (greeting + tagline) then finish_task for: {req}.",
-            ),
-        ]
+    from agent.functions.persona import build_capability_plan_from_recipe, resolve_recipe
 
-    new_steps: list[dict[str, Any]] = []
-    for kind, desc in template:
-        _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
-        new_steps.append({
-            "status": "pending",
-            "description": desc,
-            "step_kind": kind,
-            "max_iterations": default,
-        })
-
-    if original_desc and original_desc not in new_steps[0]["description"]:
-        new_steps[0]["description"] += f" Prior planner note: {original_desc}"
-
+    recipe = resolve_recipe(persona_research_lore=persona_research_lore)
     old_count = len(steps)
-    plan["steps"] = new_steps
-    plan["current_step_index"] = 0
-    plan["status"] = "in_progress"
-    from agent.capabilities.adapters import attach_capability_ids_to_plan
-
-    attach_capability_ids_to_plan(
-        plan,
-        mode="character_build",
+    plan = build_capability_plan_from_recipe(
+        recipe,
+        user_request,
         persona_research_lore=persona_research_lore,
     )
+    _apply_capability_descriptions_to_plan(
+        plan,
+        "character_build",
+        user_request,
+        persona_research_lore=persona_research_lore,
+    )
+    new_steps = plan.get("steps") or []
+    if original_desc and new_steps and original_desc not in new_steps[0].get("description", ""):
+        new_steps[0]["description"] += f" Prior planner note: {original_desc}"
+
+    plan["current_step_index"] = 0
+    plan["status"] = "in_progress"
     note = f"Expanded character_build plan from {old_count} to {len(new_steps)} steps."
     return plan, note
 
@@ -786,63 +853,33 @@ def expand_learn_syllabus_plan(
 ) -> tuple[dict[str, Any], str]:
     """Replace under-sized learn syllabus build plan with standard template."""
     steps = plan.get("steps") or []
-    req = (user_request or "the course").strip()[:500]
-    if learn_syllabus_web:
-        template: list[tuple[str, str]] = [
-            (
-                "search",
-                f"Web research for course topic: web_search, read_webpage, save_research_note. {req}",
-            ),
-            (
-                "read",
-                f"Ingest uploaded sources via save_research_note. {req}",
-            ),
-            (
-                "synthesize",
-                "read_all_research_notes then write_syllabus_file (JSON with nodes, mastery tiers). "
-                "Add generate_assessment for key nodes.",
-            ),
-            (
-                "finalize",
-                "finalize_course then finish_task.",
-            ),
-        ]
-    else:
-        template = [
-            (
-                "read",
-                f"Ingest topic and attachments via save_research_note. {req}",
-            ),
-            (
-                "synthesize",
-                "read_all_research_notes then write_syllabus_file once (JSON syllabus).",
-            ),
-            (
-                "finalize",
-                "finalize_course then finish_task.",
-            ),
-        ]
-    new_steps: list[dict[str, Any]] = []
-    for kind, desc in template:
-        _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
-        new_steps.append({
-            "status": "pending",
-            "description": desc,
-            "step_kind": kind,
-            "max_iterations": default,
-        })
-    old_count = len(steps)
-    plan["steps"] = new_steps
-    plan["current_step_index"] = 0
-    plan["status"] = "in_progress"
-    from agent.capabilities.adapters import attach_capability_ids_to_plan
+    original_desc = ""
+    if steps and isinstance(steps[0], dict):
+        original_desc = str(steps[0].get("description", "")).strip()[:400]
 
-    attach_capability_ids_to_plan(
-        plan,
-        mode="learn_syllabus_build",
+    from agent.functions.learn import build_capability_plan_from_recipe, resolve_recipe
+
+    recipe = resolve_recipe(learn_syllabus_web=learn_syllabus_web)
+    old_count = len(steps)
+    plan = build_capability_plan_from_recipe(
+        recipe,
+        user_request,
         learn_syllabus_web=learn_syllabus_web,
     )
-    return plan, f"Expanded learn_syllabus_build plan from {old_count} to {len(new_steps)} steps."
+    _apply_capability_descriptions_to_plan(
+        plan,
+        "learn_syllabus_build",
+        user_request,
+        learn_syllabus_web=learn_syllabus_web,
+    )
+    new_steps = plan.get("steps") or []
+    if original_desc and new_steps and original_desc not in new_steps[0].get("description", ""):
+        new_steps[0]["description"] += f" Prior planner note: {original_desc}"
+
+    plan["current_step_index"] = 0
+    plan["status"] = "in_progress"
+    note = f"Expanded learn_syllabus_build plan from {old_count} to {len(new_steps)} steps."
+    return plan, note
 
 
 def validate_and_tune_plan(
@@ -1112,22 +1149,14 @@ def validate_and_tune_plan(
     if mode_key == "research":
         effective_offline = offline_research or bool(plan.get("offline_research"))
         _attach_research_capabilities(plan, offline=effective_offline)
-        req_short = (user_request or "the research topic").strip()[:200]
-        tool_leak_tokens = (
-            "web_search",
-            "read_webpage",
-            "save_research_note",
-            "finish_task",
-            "read_all_research_notes",
-        )
+        tool_leak_tokens = tool_leak_tokens_for_mode("research")
         for step in plan.get("steps") or []:
             if not isinstance(step, dict):
                 continue
             kind = (step.get("step_kind") or "work").strip().lower()
             desc_lower = (step.get("description") or "").lower()
-            if any(tok in desc_lower for tok in tool_leak_tokens):
-                canonical = mode_step_description("research", kind, user_request)
-                step["description"] = f"{canonical} Topic: {req_short}."
+            if has_tool_leak(step.get("description") or "", tool_leak_tokens):
+                step["description"] = mode_step_description("research", kind, user_request)
                 notes.append(f"Step: replaced tool-language description for {kind}.")
         try:
             from agent.functions.research import resolve_recipe
@@ -1163,26 +1192,18 @@ def validate_and_tune_plan(
             plan["capability_recipe"] = recipe.recipe_id
         except ImportError:
             pass
-        req_short = (user_request or "the persona").strip()[:200]
-        tool_leak_tokens = (
-            "web_search",
-            "read_webpage",
-            "save_research_note",
-            "write_persona_file",
-            "finalize_persona",
-            "read_all_research_notes",
-            "finish_task",
-        )
+        tool_leak_tokens = tool_leak_tokens_for_mode("character_build")
         for step in plan.get("steps") or []:
             if not isinstance(step, dict):
                 continue
             kind = (step.get("step_kind") or "work").strip().lower()
-            desc_lower = (step.get("description") or "").lower()
-            if any(tok in desc_lower for tok in tool_leak_tokens):
-                canonical = mode_step_description(
-                    "character_build", kind, user_request
+            if has_tool_leak(step.get("description") or "", tool_leak_tokens):
+                step["description"] = mode_step_description(
+                    "character_build",
+                    kind,
+                    user_request,
+                    persona_research_lore=persona_research_lore,
                 )
-                step["description"] = f"{canonical} Topic: {req_short}."
                 notes.append(f"Step: replaced tool-language description for {kind}.")
 
     if mode_key == "learn_syllabus_build":
@@ -1200,27 +1221,18 @@ def validate_and_tune_plan(
             plan["capability_recipe"] = recipe.recipe_id
         except ImportError:
             pass
-        req_short = (user_request or "the course").strip()[:200]
-        tool_leak_tokens = (
-            "web_search",
-            "read_webpage",
-            "save_research_note",
-            "write_syllabus_file",
-            "finalize_course",
-            "generate_assessment",
-            "read_all_research_notes",
-            "finish_task",
-        )
+        tool_leak_tokens = tool_leak_tokens_for_mode("learn_syllabus_build")
         for step in plan.get("steps") or []:
             if not isinstance(step, dict):
                 continue
             kind = (step.get("step_kind") or "work").strip().lower()
-            desc_lower = (step.get("description") or "").lower()
-            if any(tok in desc_lower for tok in tool_leak_tokens):
-                canonical = mode_step_description(
-                    "learn_syllabus_build", kind, user_request
+            if has_tool_leak(step.get("description") or "", tool_leak_tokens):
+                step["description"] = mode_step_description(
+                    "learn_syllabus_build",
+                    kind,
+                    user_request,
+                    learn_syllabus_web=learn_syllabus_web,
                 )
-                step["description"] = f"{canonical} Topic: {req_short}."
                 notes.append(f"Step: replaced tool-language description for {kind}.")
 
     return plan, notes

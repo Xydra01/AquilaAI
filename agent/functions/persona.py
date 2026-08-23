@@ -28,6 +28,7 @@ def build_capability_plan_from_recipe(
         PERSONA_LORE_TEMPLATE_STEPS if persona_research_lore else PERSONA_TEMPLATE_STEPS
     )
     from agent.core.plan_validator import BUDGET_RUBRIC
+    from agent.core.plan_descriptions import capability_step_description
 
     req = (user_request or "Persona").strip()[:500]
     steps: list[dict] = []
@@ -35,7 +36,12 @@ def build_capability_plan_from_recipe(
         _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
         steps.append({
             "status": "pending",
-            "description": f"{kind}: {req}",
+            "description": capability_step_description(
+                "character_build",
+                kind,
+                user_request,
+                persona_research_lore=persona_research_lore,
+            ),
             "step_kind": kind,
             "capability_id": cap_id,
             "params": {"topic": req} if "gather" in cap_id or "ingest" in cap_id else {},

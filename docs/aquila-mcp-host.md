@@ -105,9 +105,7 @@ Each `llm_response` in `Agent-Logs/*.jsonl` records `ollama_engine`, `output_tok
 `aquila_run_mode` accepts:
 
 - **`file_paths`** — comma-separated or JSON list, e.g. `agent/core/generation_lock.py,agent/core/main.py`
-- **`prefer_local`** — `true` to steer away from `web_search` (use `read_file` / `grep`)
-
-Research mode is web-oriented; for **repo-only** summaries prefer **`mode="code"`** with `file_paths` and a read/summarize objective.
+- **`prefer_local`** — `true` for research with attachments: prefer `cap.research.ingest_offline@v1` and local file text (see MCP attachment brief). For **repo-only** summaries prefer **`mode="code"`** with `file_paths`.
 
 Example:
 

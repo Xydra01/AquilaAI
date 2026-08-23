@@ -467,14 +467,14 @@ class CharacterPage(BaseModePage):
         images = list(self.main.attached_images)
         research = self.research_lore_cb.isChecked()
         lore_line = (
-            "User enabled web research for lore — use web_search when helpful."
+            "User enabled web research for lore — gather lore on the search step."
             if research
-            else "Do NOT use web_search unless attachments are clearly insufficient."
+            else "Files/text-only intake — do not use web research."
         )
         build_steps = (
-            "search (web lore) → read → synthesize initialization.md → finalize_persona"
+            "search (gather lore) → read (ingest) → synthesize (write initialization.md) → finalize"
             if research
-            else "ingest (save_research_note) → synthesize initialization.md → finalize_persona"
+            else "read (ingest) → synthesize (write initialization.md) → finalize"
         )
         prompt = (
             f"Build a roleplay persona.\n"
@@ -482,7 +482,7 @@ class CharacterPage(BaseModePage):
             f"User description:\n{desc}\n\n"
             f"{lore_line}\n"
             f"Persona id: {persona.id}\n"
-            f"Follow the build steps: {build_steps}."
+            f"Phases: {build_steps}."
         )
         task_name = f"persona_build_{persona.id}"
         from agent.storage import agent_data_path

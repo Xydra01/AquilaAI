@@ -37,7 +37,27 @@ def test_coach_duplicate_tool_block_character_build():
     msg = coach.enhance_duplicate_tool_block(
         "❌ OS BLOCK: Same tool call repeated three times."
     )
+    assert "cap.persona.gather_lore@v1" in msg
     assert "mark_objective_complete" in msg
+
+
+def test_coach_duplicate_tool_block_research():
+    coach = LoopCoach(mode="research", step_kind="search")
+    msg = coach.enhance_duplicate_tool_block(
+        "❌ OS BLOCK: Same tool call repeated three times."
+    )
+    assert "cap.research.synthesize_notes@v1" in msg
+    assert "cap.research.finalize_deliverable@v1" in msg
+    assert "finish_task" not in msg
+
+
+def test_coach_url_block_character_read_uses_ingest_capability():
+    coach = LoopCoach(mode="character_build", step_kind="read", persona_research_lore=True)
+    reg = UrlVisitRegistry()
+    block = "❌ OS BLOCK: URL already visited."
+    enhanced = coach.enhance_url_block(block, "https://example.com", reg)
+    assert "cap.persona.ingest_sources@v1" in enhanced
+    assert "save_research_note" not in enhanced
 
 
 def test_emet_log_duplicate_read_pattern():
@@ -58,4 +78,4 @@ def test_emet_log_duplicate_read_pattern():
     assert fandom_attempts >= 1
     coach = LoopCoach(mode="character_build", step_kind="search", persona_research_lore=True)
     hint = coach.enhance_duplicate_tool_block("❌ OS BLOCK: Same tool call repeated three times.")
-    assert "save_research_note" in hint or "mark_objective_complete" in hint
+    assert "cap.persona.gather_lore@v1" in hint or "mark_objective_complete" in hint

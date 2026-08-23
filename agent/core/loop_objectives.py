@@ -50,23 +50,135 @@ MILESTONE_CAPABILITY_HINTS: dict[str, dict[str, list[str]]] = {
         "progress": ["cap.research.synthesize_notes@v1"],
         "deliver": ["cap.research.finalize_deliverable@v1"],
     },
-    "character_build": {
-        "ingest": ["cap.persona.gather_lore@v1", "cap.persona.ingest_sources@v1"],
+    "character_build_no_lore": {
+        "ingest": ["cap.persona.ingest_sources@v1"],
+        "progress": ["cap.persona.write_initialization@v1"],
+        "deliver": ["cap.persona.finalize@v1"],
+    },
+    "character_build_lore": {
+        "ingest": [
+            "cap.persona.gather_lore@v1",
+            "cap.persona.ingest_sources@v1",
+        ],
         "progress": ["cap.persona.write_initialization@v1"],
         "deliver": ["cap.persona.finalize@v1"],
     },
     "learn_syllabus_build": {
+        "ingest": ["cap.learn.ingest_course_materials@v1"],
+        "progress": ["cap.learn.write_syllabus@v1"],
+        "deliver": ["cap.learn.finalize_course@v1"],
+    },
+    "learn_syllabus_build_web": {
         "ingest": [
             "cap.learn.gather_topic_sources@v1",
             "cap.learn.ingest_course_materials@v1",
         ],
-        "progress": [
-            "cap.learn.write_syllabus@v1",
-            "cap.learn.generate_assessments@v1",
-        ],
+        "progress": ["cap.learn.write_syllabus@v1"],
         "deliver": ["cap.learn.finalize_course@v1"],
     },
 }
+
+# step_kind → milestone bucket id (research: add when migrating milestone display)
+MILESTONE_BUCKET_BY_KIND: dict[str, dict[str, str]] = {
+    "learn_syllabus_build": {
+        "search": "ingest",
+        "read": "ingest",
+        "synthesize": "progress",
+        "work": "progress",
+        "finalize": "deliver",
+    },
+    "character_build": {
+        "search": "ingest",
+        "read": "ingest",
+        "synthesize": "progress",
+        "work": "progress",
+        "finalize": "deliver",
+    },
+}
+
+MILESTONE_BUCKET_LABELS: dict[str, str] = {
+    "ingest": "Ingest",
+    "progress": "Progress",
+    "deliver": "Deliver",
+    "evidence": "Evidence",
+    "draft": "Draft",
+    "work": "Work",
+}
+
+
+def _capability_hint_key(
+    mode: str,
+    *,
+    offline: bool = False,
+    learn_syllabus_web: bool = False,
+    persona_research_lore: bool = False,
+) -> str:
+    mode_norm = (mode or "task").strip().lower()
+    if mode_norm == "research":
+        return "research_offline" if offline else "research"
+    if mode_norm == "learn_syllabus_build":
+        return "learn_syllabus_build_web" if learn_syllabus_web else "learn_syllabus_build"
+    if mode_norm == "character_build":
+        return "character_build_lore" if persona_research_lore else "character_build_no_lore"
+    return mode_norm
+
+
+def build_milestones_from_plan_steps(
+    steps: list[dict],
+    mode: str,
+    *,
+    prefix: str = "Capabilities",
+) -> list[dict]:
+    """
+    Derive plan-review milestones from step capability_id values.
+
+    Only caps present on plan steps appear in success_criteria. Research modes can
+    plug in by extending MILESTONE_BUCKET_BY_KIND and calling after attach.
+    """
+    mode_norm = (mode or "").strip().lower()
+    kind_map = MILESTONE_BUCKET_BY_KIND.get(mode_norm)
+    if not kind_map:
+        return []
+
+    buckets: dict[str, list[str]] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        kind = str(step.get("step_kind") or "").strip().lower()
+        bucket = kind_map.get(kind)
+        if not bucket:
+            continue
+        cap_id = str(step.get("capability_id") or "").strip()
+        if not cap_id:
+            continue
+        existing = buckets.setdefault(bucket, [])
+        if cap_id not in existing:
+            existing.append(cap_id)
+
+    order = ("ingest", "evidence", "progress", "draft", "work", "deliver")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for bucket_id in order:
+        caps = buckets.get(bucket_id)
+        if not caps or bucket_id in seen:
+            continue
+        seen.add(bucket_id)
+        out.append({
+            "id": bucket_id,
+            "label": MILESTONE_BUCKET_LABELS.get(bucket_id, bucket_id.replace("_", " ").title()),
+            "success_criteria": f"{prefix} used: {', '.join(caps)}",
+            "status": "pending",
+        })
+    for bucket_id, caps in buckets.items():
+        if bucket_id in seen or not caps:
+            continue
+        out.append({
+            "id": bucket_id,
+            "label": MILESTONE_BUCKET_LABELS.get(bucket_id, bucket_id.replace("_", " ").title()),
+            "success_criteria": f"{prefix} used: {', '.join(caps)}",
+            "status": "pending",
+        })
+    return out
 
 
 def milestone_hints_for_mode(
@@ -74,13 +186,19 @@ def milestone_hints_for_mode(
     *,
     offline: bool = False,
     capability: bool = False,
+    learn_syllabus_web: bool = False,
+    persona_research_lore: bool = False,
 ) -> dict[str, list[str]]:
     mode_norm = (mode or "task").strip().lower()
-    if capability and mode_norm in MILESTONE_CAPABILITY_HINTS:
-        if mode_norm == "research":
-            key = "research_offline" if offline else "research"
+    if capability:
+        key = _capability_hint_key(
+            mode_norm,
+            offline=offline,
+            learn_syllabus_web=learn_syllabus_web,
+            persona_research_lore=persona_research_lore,
+        )
+        if key in MILESTONE_CAPABILITY_HINTS:
             return MILESTONE_CAPABILITY_HINTS.get(key, {})
-        return MILESTONE_CAPABILITY_HINTS.get(mode_norm, {})
     if mode_norm != "research":
         return MILESTONE_TOOL_HINTS.get(mode_norm, {})
     key = "research_offline" if offline else "research"
@@ -93,13 +211,21 @@ def milestone_hint_mode_key(
     *,
     offline: bool = False,
     capability: bool = False,
+    learn_syllabus_web: bool = False,
+    persona_research_lore: bool = False,
 ) -> str:
     mode_norm = (mode or "task").strip().lower()
     if capability and mode_norm in (
         "character_build",
         "learn_syllabus_build",
+        "research",
     ):
-        return mode_norm
+        return _capability_hint_key(
+            mode_norm,
+            offline=offline,
+            learn_syllabus_web=learn_syllabus_web,
+            persona_research_lore=persona_research_lore,
+        )
     if mode_norm != "research":
         return mode_norm
     if capability:

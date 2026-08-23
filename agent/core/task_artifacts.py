@@ -94,7 +94,35 @@ def write_plan_artifact(
     bundle = task_bundle_dir(task_name, mode)
     plan = dict(plan)
     if user_request and not plan.get("user_goal"):
-        plan["user_goal"] = user_request.strip()[:2000]
+        if mode in ("learn_syllabus_build", "character_build"):
+            from agent.core.plan_descriptions import short_topic_for_plan
+
+            title = short_topic_for_plan(user_request)
+            if mode == "learn_syllabus_build":
+                plan["user_goal"] = f"Build a learning syllabus for course '{title}'."
+            else:
+                plan["user_goal"] = f"Build a roleplay persona: {title}."
+        else:
+            plan["user_goal"] = user_request.strip()[:2000]
+    elif plan.get("user_goal") and mode in ("learn_syllabus_build", "character_build"):
+        goal = str(plan["user_goal"])
+        if any(
+            tok in goal.lower()
+            for tok in (
+                "write_syllabus_file",
+                "web_search",
+                "save_research_note",
+                "course_id=",
+                "steps: ingest",
+            )
+        ):
+            from agent.core.plan_descriptions import short_topic_for_plan
+
+            title = short_topic_for_plan(goal or user_request)
+            if mode == "learn_syllabus_build":
+                plan["user_goal"] = f"Build a learning syllabus for course '{title}'."
+            else:
+                plan["user_goal"] = f"Build a roleplay persona: {title}."
     if "approval_status" not in plan:
         plan["approval_status"] = "draft"
     if "plan_version" not in plan:
@@ -260,7 +288,35 @@ def enrich_plan_from_ledger(
         data = raw if isinstance(raw, dict) else {}
 
     if not data.get("user_goal"):
-        data["user_goal"] = user_request.strip()[:2000]
+        if mode in ("learn_syllabus_build", "character_build"):
+            from agent.core.plan_descriptions import short_topic_for_plan
+
+            title = short_topic_for_plan(user_request)
+            if mode == "learn_syllabus_build":
+                data["user_goal"] = f"Build a learning syllabus for course '{title}'."
+            else:
+                data["user_goal"] = f"Build a roleplay persona: {title}."
+        else:
+            data["user_goal"] = user_request.strip()[:2000]
+    elif mode in ("learn_syllabus_build", "character_build"):
+        goal = str(data.get("user_goal") or "")
+        if any(
+            tok in goal.lower()
+            for tok in (
+                "write_syllabus_file",
+                "web_search",
+                "save_research_note",
+                "course_id=",
+                "steps: ingest",
+            )
+        ):
+            from agent.core.plan_descriptions import short_topic_for_plan
+
+            title = short_topic_for_plan(goal or user_request)
+            if mode == "learn_syllabus_build":
+                data["user_goal"] = f"Build a learning syllabus for course '{title}'."
+            else:
+                data["user_goal"] = f"Build a roleplay persona: {title}."
     if not data.get("approach_summary"):
         steps = data.get("steps") or []
         kinds = [s.get("step_kind", "") for s in steps if isinstance(s, dict)]
@@ -279,7 +335,12 @@ def enrich_plan_from_ledger(
         offline=offline,
         capability=capability_research,
     )
-    prefix = "Capabilities" if capability_research else "Tools"
+    cap_act = capability_research or mode in (
+        "research",
+        "character_build",
+        "learn_syllabus_build",
+    )
+    prefix = "Capabilities" if cap_act else "Tools"
     if hints and mode == "research" and offline:
         data["milestones"] = [
             MilestoneModel(
@@ -291,16 +352,25 @@ def enrich_plan_from_ledger(
             for mid, items in hints.items()
         ]
     elif not data.get("milestones"):
-        fallback = milestone_hints_for_mode(mode, offline=False, capability=False)
-        data["milestones"] = [
-            MilestoneModel(
-                id=mid,
-                label=mid.replace("_", " ").title(),
-                success_criteria=f"Tools used: {', '.join(tools[:3])}",
-                status="pending",
-            ).model_dump(mode="python")
-            for mid, tools in fallback.items()
-        ]
+        skip_static_cap = cap_act and mode in (
+            "learn_syllabus_build",
+            "character_build",
+        )
+        if not skip_static_cap:
+            fallback = milestone_hints_for_mode(
+                mode,
+                offline=offline,
+                capability=cap_act,
+            )
+            data["milestones"] = [
+                MilestoneModel(
+                    id=mid,
+                    label=mid.replace("_", " ").title(),
+                    success_criteria=f"{prefix} used: {', '.join(tools[:3])}",
+                    status="pending",
+                ).model_dump(mode="python")
+                for mid, tools in fallback.items()
+            ]
     data.setdefault("approval_status", "draft")
     data.setdefault("plan_version", 1)
     return data

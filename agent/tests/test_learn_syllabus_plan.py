@@ -34,5 +34,5 @@ def test_expand_learn_syllabus_web_four_steps():
 
 def test_mode_required_learn_build():
     required = MODE_REQUIRED["learn_syllabus_build"]
-    assert "write_syllabus_file" in required
-    assert "finalize_course" in required
+    # Legacy tool catalog may still list internal tools; capability-act path uses caps.
+    assert "finalize_course" in required or "cap.learn.finalize_course@v1" in str(required)

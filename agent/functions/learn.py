@@ -26,6 +26,7 @@ def build_capability_plan_from_recipe(
 ) -> dict:
     template = LEARN_WEB_TEMPLATE_STEPS if learn_syllabus_web else LEARN_TEMPLATE_STEPS
     from agent.core.plan_validator import BUDGET_RUBRIC
+    from agent.core.plan_descriptions import capability_step_description
 
     req = (user_request or "Course").strip()[:500]
     steps: list[dict] = []
@@ -33,7 +34,12 @@ def build_capability_plan_from_recipe(
         _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
         steps.append({
             "status": "pending",
-            "description": f"{kind}: {req}",
+            "description": capability_step_description(
+                "learn_syllabus_build",
+                kind,
+                user_request,
+                learn_syllabus_web=learn_syllabus_web,
+            ),
             "step_kind": kind,
             "capability_id": cap_id,
             "params": {"topic": req} if "gather" in cap_id or "ingest" in cap_id else {},

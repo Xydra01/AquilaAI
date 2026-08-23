@@ -46,8 +46,68 @@ def test_enrich_offline_research_milestones_use_offline_hints():
         capability_research=True,
     )
     criteria = " ".join(m.get("success_criteria", "") for m in plan["milestones"])
+    assert "Capabilities used:" in criteria
     assert "web_search" not in criteria
-    assert "ingest_offline" in criteria or "save_research_note" in criteria
+    assert "ingest_offline" in criteria or "cap.research" in criteria
+
+
+def test_enrich_capability_research_milestones_deferred_for_character():
+    """Learn/character milestones are built after attach in main, not static enrich."""
+    raw = json.dumps(
+        {
+            "status": "in_progress",
+            "current_step_index": 0,
+            "steps": [{"description": "work", "step_kind": "work", "max_iterations": 8}],
+        }
+    )
+    plan = enrich_plan_from_ledger(
+        raw,
+        user_request="Build persona",
+        mode="character_build",
+        capability_research=True,
+    )
+    assert not plan.get("milestones")
+
+
+def test_build_milestones_from_learn_file_only_steps():
+    from agent.core.loop_objectives import build_milestones_from_plan_steps
+
+    steps = [
+        {
+            "step_kind": "read",
+            "capability_id": "cap.learn.ingest_course_materials@v1",
+        },
+        {
+            "step_kind": "synthesize",
+            "capability_id": "cap.learn.write_syllabus@v1",
+        },
+        {
+            "step_kind": "finalize",
+            "capability_id": "cap.learn.finalize_course@v1",
+        },
+    ]
+    milestones = build_milestones_from_plan_steps(steps, "learn_syllabus_build")
+    criteria = " ".join(m["success_criteria"] for m in milestones)
+    assert "cap.learn.ingest_course_materials@v1" in criteria
+    assert "cap.learn.write_syllabus@v1" in criteria
+    assert "cap.learn.finalize_course@v1" in criteria
+    assert "gather_topic_sources" not in criteria
+    assert "generate_assessments" not in criteria
+
+
+def test_build_milestones_from_learn_web_steps():
+    from agent.core.loop_objectives import build_milestones_from_plan_steps
+
+    steps = [
+        {"step_kind": "search", "capability_id": "cap.learn.gather_topic_sources@v1"},
+        {"step_kind": "read", "capability_id": "cap.learn.ingest_course_materials@v1"},
+        {"step_kind": "synthesize", "capability_id": "cap.learn.write_syllabus@v1"},
+        {"step_kind": "finalize", "capability_id": "cap.learn.finalize_course@v1"},
+    ]
+    milestones = build_milestones_from_plan_steps(steps, "learn_syllabus_build")
+    ingest = next(m for m in milestones if m["id"] == "ingest")
+    assert "gather_topic_sources" in ingest["success_criteria"]
+    assert "ingest_course_materials" in ingest["success_criteria"]
 
 
 def test_write_plan_artifact_creates_files(tmp_path, monkeypatch):

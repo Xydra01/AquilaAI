@@ -65,6 +65,18 @@ def test_step_kind_hint_nonempty():
     assert "web_search" in get_step_kind_hint("search")
 
 
+def test_step_kind_hint_research_mode_capability_first():
+    hint = get_step_kind_hint("search", mode="research")
+    assert "cap.research" in hint
+    assert "web_search" not in hint
+    assert "finish_task" not in get_step_kind_hint("finalize", mode="research")
+
+
+def test_step_kind_hint_default_unchanged_for_code():
+    assert "run_pytest" in get_step_kind_hint("tdd_red")
+    assert "web_search" in get_step_kind_hint("search")
+
+
 def test_code_mode_tdd_hint_note():
     plan = {
         "status": "in_progress",

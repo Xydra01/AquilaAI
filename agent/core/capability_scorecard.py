@@ -13,6 +13,21 @@ from agent.storage import agent_data_path
 
 _URL_RE = re.compile(r"https?://[^\s\)\]>\"']+", re.I)
 
+FINALIZE_CAPABILITY_IDS = frozenset({
+    "cap.research.finalize_deliverable@v1",
+    "cap.persona.finalize@v1",
+    "cap.learn.finalize_course@v1",
+})
+
+WEB_GATHER_CAPABILITY_IDS = frozenset({
+    "cap.research.gather_web_sources@v1",
+    "cap.web.search@v1",
+})
+
+READ_PAGES_CAPABILITY_IDS = frozenset({
+    "cap.web.read_pages@v1",
+})
+
 
 @dataclass
 class CapabilityScorecard:
@@ -35,7 +50,9 @@ class CapabilityScorecard:
     max_episode_per_step: int = 0
     episodes_by_step: dict[int, int] = field(default_factory=dict)
     tool_starts: dict[str, int] = field(default_factory=dict)
+    cap_starts: dict[str, int] = field(default_factory=dict)
     finish_task: bool = False
+    capability_finalize: bool = False
     degenerate_scratchpad: bool = False
     deliverable_path: str | None = None
     deliverable_chars: int = 0
@@ -79,7 +96,9 @@ class CapabilityScorecard:
             "max_episode_per_step": self.max_episode_per_step,
             "episodes_by_step": self.episodes_by_step,
             "tool_starts": self.tool_starts,
+            "cap_starts": self.cap_starts,
             "finish_task": self.finish_task,
+            "capability_finalize": self.capability_finalize,
             "degenerate_scratchpad": self.degenerate_scratchpad,
             "deliverable_path": self.deliverable_path,
             "deliverable_chars": self.deliverable_chars,
@@ -111,6 +130,31 @@ def _parse_ts(ts: str) -> datetime | None:
 
 def _extract_urls(text: str) -> list[str]:
     return _URL_RE.findall(text or "")
+
+
+def _record_tool_or_cap_start(card: CapabilityScorecard, name: str) -> None:
+    if name.startswith("cap:"):
+        cap_id = name[4:]
+        card.cap_starts[cap_id] = card.cap_starts.get(cap_id, 0) + 1
+        if cap_id in FINALIZE_CAPABILITY_IDS:
+            card.capability_finalize = True
+            card.finish_task = True
+    else:
+        card.tool_starts[name] = card.tool_starts.get(name, 0) + 1
+
+
+def _web_search_count(card: CapabilityScorecard) -> int:
+    total = card.tool_starts.get("web_search", 0)
+    for cap_id in WEB_GATHER_CAPABILITY_IDS:
+        total += card.cap_starts.get(cap_id, 0)
+    return total
+
+
+def _read_webpage_count(card: CapabilityScorecard) -> int:
+    total = card.tool_starts.get("read_webpage", 0)
+    for cap_id in READ_PAGES_CAPABILITY_IDS:
+        total += card.cap_starts.get(cap_id, 0)
+    return total
 
 
 def analyze_jsonl(
@@ -251,7 +295,7 @@ def analyze_jsonl(
                 card.plan_llm_calls += 1
             elif ev == "tool_start":
                 name = str(rec.get("tool_name", ""))
-                card.tool_starts[name] = card.tool_starts.get(name, 0) + 1
+                _record_tool_or_cap_start(card, name)
                 if name == "web_search":
                     args = rec.get("arguments") or {}
                     q = str(args.get("query", ""))
@@ -262,6 +306,11 @@ def analyze_jsonl(
                 card.tool_call_count += 1
                 name = str(rec.get("tool_name", ""))
                 preview = str(rec.get("result_preview") or rec.get("body_preview") or "")
+                if name.startswith("cap:"):
+                    cap_id = name[4:]
+                    if cap_id in FINALIZE_CAPABILITY_IDS and not preview.startswith("❌"):
+                        card.capability_finalize = True
+                        card.finish_task = True
                 if name == "web_search":
                     last_search_urls = _extract_urls(preview)
                 if name == "save_research_note":
@@ -321,24 +370,27 @@ def analyze_jsonl(
     elif max_read_timeouts is not None:
         card.passes.append(f"read_timeouts<={max_read_timeouts}")
 
-    if require_finish and not card.finish_task:
-        card.failures.append("finish_task not observed in log")
+    if require_finish and not (card.finish_task or card.capability_finalize):
+        card.failures.append("finish_task / finalize capability not observed in log")
     elif require_finish:
-        card.passes.append("finish_task seen")
+        if card.capability_finalize:
+            card.passes.append("finalize capability seen")
+        else:
+            card.passes.append("finish_task seen")
 
     if min_web_search is not None:
-        ws = card.tool_starts.get("web_search", 0)
+        ws = _web_search_count(card)
         if ws < min_web_search:
-            card.failures.append(f"web_search {ws} < {min_web_search}")
+            card.failures.append(f"web/gather sources {ws} < {min_web_search}")
         else:
-            card.passes.append(f"web_search>={min_web_search}")
+            card.passes.append(f"web/gather sources>={min_web_search}")
 
     if min_read_webpage is not None:
-        rw = card.tool_starts.get("read_webpage", 0)
+        rw = _read_webpage_count(card)
         if rw < min_read_webpage:
-            card.failures.append(f"read_webpage {rw} < {min_read_webpage}")
+            card.failures.append(f"read_webpage / read_pages {rw} < {min_read_webpage}")
         else:
-            card.passes.append(f"read_webpage>={min_read_webpage}")
+            card.passes.append(f"read_webpage/read_pages>={min_read_webpage}")
 
     if max_parse_failures is not None and card.parse_failures > max_parse_failures:
         card.failures.append(

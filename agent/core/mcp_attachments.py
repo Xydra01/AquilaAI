@@ -5,10 +5,15 @@ import json
 from pathlib import Path
 
 
-_LOCAL_RESEARCH_HINT = (
+_LOCAL_RESEARCH_HINT_TOOL = (
     "LOCAL RESEARCH: Use read_file, read_file_region, search_files, and grep on repo paths. "
     "Do not use web_search unless the objective requires external URLs. "
     "Attached file content is in the <attached_files> block below."
+)
+
+_LOCAL_RESEARCH_HINT_CAPABILITY = (
+    "LOCAL RESEARCH: Prefer `cap.research.ingest_offline@v1` and attachment text from the "
+    "<attached_files> block below. Use gather capabilities only when external URLs are required."
 )
 
 
@@ -40,11 +45,19 @@ def resolve_paths(paths: list[str], *, repo_root: Path | None = None) -> list[st
     return resolved
 
 
+def _local_research_hint(mode: str) -> str:
+    mode_norm = (mode or "research").strip().lower()
+    if mode_norm == "research":
+        return _LOCAL_RESEARCH_HINT_CAPABILITY
+    return _LOCAL_RESEARCH_HINT_TOOL
+
+
 def load_attachments_for_mcp(
     file_paths: str,
     *,
     prefer_local: bool = False,
     context: str = "",
+    mode: str = "research",
 ) -> tuple[list[str], list, str]:
     """Return (text_chunks, image_payloads, augmented_context)."""
     from agent.coding import process_local_attachments
@@ -56,7 +69,7 @@ def load_attachments_for_mcp(
         text_chunks, image_payloads = process_local_attachments(paths)
     ctx = (context or "").strip()
     if prefer_local or paths:
-        hint = _LOCAL_RESEARCH_HINT
+        hint = _local_research_hint(mode)
         if paths:
             hint += f" Files attached: {', '.join(Path(p).name for p in paths)}."
         ctx = f"{hint}\n\n{ctx}" if ctx else hint
