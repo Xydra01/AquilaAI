@@ -6,8 +6,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from context_budget import resolve_context_profile
-from timeout_policy import (
+from agent.policies import resolve_context_profile
+from agent.policies import (
     _TIER_CAP_DEFAULT,
     compute_read_timeout,
     timeout_compress_retry_enabled,

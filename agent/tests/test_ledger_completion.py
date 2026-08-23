@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import (
+from agent.core import (
     complete_ledger_state,
     save_task_deliverable,
     read_json_state,
@@ -72,3 +72,45 @@ def test_finish_task_saves_report_from_arguments(tmp_agent_dirs, write_ledger, m
     report_path = os.path.join("Agent-Research", "research_task.md")
     assert os.path.exists(report_path)
     assert "Findings here" in open(report_path, encoding="utf-8").read()
+
+
+def test_finish_task_hoists_report_from_arguments(tmp_agent_dirs, write_ledger, monkeypatch):
+    import main as main_mod
+
+    write_ledger(
+        "Agent-Plans/research_task_hoist.json",
+        {
+            "status": "in_progress",
+            "current_step_index": 0,
+            "steps": [{"description": "Research", "max_iterations": 2}],
+        },
+    )
+
+    response = """{
+  "reasoning": "Finish the research task and write the report.",
+  "tools": [
+    {
+      "name": "finish_task",
+      "arguments": {
+        "message_to_user": "Done",
+        "final_report": "# My Report\\n\\nHoisted findings here."
+      }
+    }
+  ]
+}"""
+
+    def fake_chat(*args, **kwargs):
+        return {"message": {"content": response}, "format_mode_used": "strict_schema"}
+
+    monkeypatch.setattr(main_mod.client, "chat", fake_chat)
+    monkeypatch.setattr(main_mod.aquila_memory, "store_experience", lambda *a, **k: None)
+
+    agent = main_mod.Agent()
+    result = agent.run_unified_task("research_task_hoist", "Research topic", mode="research")
+
+    state = read_json_state("Agent-Plans/research_task_hoist.json")
+    assert state["status"] == "completed"
+    report_path = os.path.join("Agent-Research", "research_task_hoist.md")
+    assert os.path.exists(report_path)
+    assert "Hoisted findings here" in open(report_path, encoding="utf-8").read()
+

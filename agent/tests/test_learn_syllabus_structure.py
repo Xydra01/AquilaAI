@@ -1,5 +1,5 @@
 """Syllabus depth validation gates."""
-from learn_registry import SYLLABUS_MIN_CHILD_NODES, SYLLABUS_MIN_NODES, validate_syllabus_structure
+from agent.storage import SYLLABUS_MIN_CHILD_NODES, SYLLABUS_MIN_NODES, validate_syllabus_structure
 
 
 def _nodes(n: int, children: int) -> list[dict]:

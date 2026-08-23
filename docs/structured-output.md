@@ -1,6 +1,6 @@
 # Structured output (Pydantic + Ollama)
 
-Aquila generates **strict JSON Schema** from tool signatures via Pydantic and sends it to Ollama as `response_format.type = json_schema` with `strict: true`. Parsed responses are validated with the same models before tools run.
+Aquila generates **strict JSON Schema** from tool signatures via Pydantic and sends it to Ollama native `/api/chat` as the top-level `format` field (same schema body). Parsed responses are validated with the same models before tools run. See also [thinking.md](thinking.md) for `message.thinking` vs JSON `reasoning`, and [constrained-decoding.md](constrained-decoding.md) for SchemaPolicy / decode-time rules.
 
 ## Surfaces
 
@@ -13,11 +13,12 @@ Aquila generates **strict JSON Schema** from tool signatures via Pydantic and se
 
 ## Model profiles
 
-`OLLAMA_MODEL` selects a capability profile (`aquila`, `heretic`, `turboquant`):
+`OLLAMA_MODEL` selects a capability profile (`aquila`, `qwopus`, `heretic`, `turboquant`):
 
 | Profile | Notes |
 |---------|--------|
 | `aquila` | Full strict → shrink → `json_object` → plain |
+| `qwopus` | Same as `aquila` (Qwopus Coder tag `aquila_qwopus`) |
 | `heretic` | Same; smaller default routed schema cap |
 | `turboquant` | Stricter plain fallback via `AQUILA_STRUCTURED_NO_PLAIN=1` |
 
@@ -25,7 +26,7 @@ Aquila generates **strict JSON Schema** from tool signatures via Pydantic and se
 
 | Variable | Default | Role |
 |----------|---------|------|
-| `AQUILA_STRUCTURED_STRICT` | `1` | Use strict `json_schema` when supported |
+| `AQUILA_STRUCTURED_STRICT` | `1` | Use strict schema dict as first `format` attempt |
 | `AQUILA_STRUCTURED_NO_PLAIN` | `0` | If `1`, skip plain-text fallback after schema/json_object failures |
 | `AQUILA_SCHEMA_MAX_TOOLS` | profile default | Max tools in one routed schema `anyOf` |
 

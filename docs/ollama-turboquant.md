@@ -22,14 +22,14 @@ Official **ggml-org/llama.cpp** does not ship TurboQuant in stable releases yet.
 | Build | `tq3` / `tq3k` | `tq2` | How to get |
 |-------|----------------|-------|------------|
 | Stable **0.24.0** (default installer) | No | Yes (string present) | ollama.com |
-| Pre-release **v0.30.0-rc17** | No | Yes | `.\scripts\install-ollama-turboquant.ps1` |
-| **[PR #15505](https://github.com/ollama/ollama/pull/15505)** (open) | **Yes** | Yes | `.\scripts\install-ollama-turboquant-pr.ps1` (needs Go, CMake, VS2022) |
+| Pre-release **v0.30.0-rc17** | No | Yes | `./scripts/install-ollama-turboquant.sh` |
+| **[PR #15505](https://github.com/ollama/ollama/pull/15505)** (open) | **Yes** | Yes | `./scripts/install-ollama-turboquant-pr.sh` (needs Go, CMake; Windows GPU build needs VS2022) |
 
 Until PR #15505 ships in a release, **public Windows builds do not run TurboQuant end-to-end** for Qwen 3.5: v0.30.0-rc17 sets `OLLAMA_KV_CACHE_TYPE=tq2` but the bundled `llama-server.exe` rejects `--cache-type-k tq2` (`Unsupported cache type`). PR #15505 implements TQ in the **native engine** (`ollamarunner`), not via llama-server cache flags.
 
-**Working path today:** build from PR #15505 → `.\scripts\install-ollama-turboquant-pr.ps1` (Go, CMake, VS2022 C++ workload).
+**Working path today:** build from PR #15505 → `./scripts/install-ollama-turboquant-pr.sh` (Go, CMake; the Windows GPU build also needs the VS2022 C++ workload).
 
-**Interim:** `.\scripts\install-ollama-turboquant.ps1` installs portable **v0.30.0-rc17** (better Qwen 3.5 support, flash attention) without working TQ until a PR build or fork swap is ready.
+**Interim:** `./scripts/install-ollama-turboquant.sh` installs portable **v0.30.0-rc17** (better Qwen 3.5 support, flash attention) without working TQ until a PR build or fork swap is ready.
 
 ## Community llama.cpp forks (your note)
 
@@ -54,7 +54,7 @@ Example (standalone server, not Ollama):
 
 Only if you cannot build Ollama PR #15505 yet:
 
-1. Install portable Ollama: `.\scripts\install-ollama-turboquant.ps1`
+1. Install portable Ollama: `./scripts/install-ollama-turboquant.sh`
 2. Build `llama-server` from a fork (CMake + VS2022 + CUDA), e.g. TheTom `feature/turboquant-kv-cache`
 3. Back up and replace:
    `tools\ollama-turboquant\lib\ollama\llama-server.exe`
@@ -63,7 +63,7 @@ Only if you cannot build Ollama PR #15505 yet:
    - PR #15505 (recommended), or
    - run the fork’s `llama-server` directly (different API; Aquila would need more than `.env` changes)
 
-For Aquila, **prefer Ollama PR #15505** so `/v1/chat/completions`, Modelfile, and strict JSON stay unchanged.
+For Aquila, **prefer Ollama PR #15505** so native `/api/chat`, Modelfile, structured `format`, and thinking stay supported on long-context builds.
 
 ```mermaid
 flowchart LR
@@ -84,21 +84,15 @@ flowchart LR
 
 Verify Ollama is running:
 
-```powershell
-.\scripts\verify-ollama-turboquant.ps1
+```bash
+./scripts/verify-ollama-turboquant.sh
 ```
 
 ## Quick start
 
 ### 1. Start Ollama with TurboQuant
 
-**Windows (PowerShell):**
-
-```powershell
-.\scripts\ollama-serve-turboquant.ps1
-```
-
-**Git Bash:**
+Run in Git Bash (Windows) or a terminal (macOS/Linux):
 
 ```bash
 ./scripts/ollama-serve-turboquant.sh
@@ -118,11 +112,11 @@ This sets:
 
 ### 2. Create TurboQuant models
 
-From repo root (stock `aquila` unchanged). Use the **portable** `ollama.exe` and point at your TQ server (port **11435** if using `ollama-serve-turboquant-port.ps1`):
+From repo root (stock `aquila` unchanged). Use the **portable** `ollama` binary and point at your TQ server (port **11435** if using `ollama-serve-turboquant-port.sh`):
 
-```powershell
-$env:OLLAMA_HOST = "http://127.0.0.1:11435"
-.\scripts\ollama-create-tq-models.ps1
+```bash
+export OLLAMA_HOST="http://127.0.0.1:11435"
+./scripts/ollama-create-tq-models.sh
 ```
 
 Or individually:
@@ -154,7 +148,7 @@ OLLAMA_MODEL=aquila-tq-64k
 Start Aquila from repo root (Ollama must already be running with TQ):
 
 ```bash
-python agent/gui.py
+python agent/gui/gui.py
 ```
 
 Do **not** embed TurboQuant into `start.sh` — keep Ollama as a separate long-lived service.
@@ -168,7 +162,7 @@ Do **not** embed TurboQuant into `start.sh` — keep Ollama as a separate long-l
 | `tq2` | smallest cache | required | Maximum KV savings |
 | `tq4` | highest fidelity | required | Quality over VRAM |
 
-Pass preset to PowerShell: `.\scripts\ollama-serve-turboquant.ps1 -Preset tq3k`
+Pass a preset as the first argument: `./scripts/ollama-serve-turboquant.sh tq3k`
 
 ## VRAM discovery
 
@@ -213,14 +207,31 @@ Success criteria:
 - `test_live_context_smoke` large prefill does not OOM.
 - Real Code Mode task with many `read_file_region` calls in one step.
 
+## Throughput monitoring (tokens/s)
+
+When Aquila talks to TurboQuant on **`:11435`**, run logs tag each LLM turn with `ollama_engine: "tq"` and `output_tokens_per_s` in `Agent-Logs/*.jsonl`. MCP tools:
+
+- `aquila_probe_throughput(engine="tq")` — quick stream probe on the TQ port
+- `aquila_probe_throughput(engine="both")` — compare stock `:11434` vs TQ `:11435`
+- `aquila_get_task_metrics` while a task runs — live tokens/s and ETA
+
+Set baselines in `.env` (defaults **30** tokens/s):
+
+```bash
+AQUILA_EXPECTED_TOKENS_PER_S=30      # stock
+AQUILA_TQ_EXPECTED_TOKENS_PER_S=30   # TurboQuant (falls back to stock if unset)
+```
+
+See [aquila-mcp-host.md](aquila-mcp-host.md) for Cursor MCP usage.
+
 ## Troubleshooting
 
 | Symptom | Action |
 |---------|--------|
 | OOM at high context | Lower `num_ctx` in Modelfile; try `tq2` or `tq3k` |
 | Model ignores JSON schema at 64k+ | Stay on `aquila` 32k for production; lower temperature in TQ Modelfile |
-| `aquila-tq-*` not found | `.\scripts\ollama-create-tq-models.ps1` with `OLLAMA_HOST` set |
-| `ollama create` / `cmd.exe` errors | Use `tools\ollama-turboquant\ollama.exe`, not tray `ollama` on PATH |
+| `aquila-tq-*` not found | `./scripts/ollama-create-tq-models.sh` with `OLLAMA_HOST` set |
+| `ollama create` / `cmd.exe` errors | Use `tools/ollama-turboquant/ollama`, not tray `ollama` on PATH |
 | PTX / unsupported toolchain | Update NVIDIA driver until `nvidia-smi` shows CUDA 13.2+ |
 | TQ env ignored | Use `ollama-serve-turboquant` script; child `ollama serve` inherits env |
 | `Unsupported cache type: tq2` | Stock `llama-server` in Ollama release; use PR #15505 or fork swap + flag alignment |

@@ -1,0 +1,5 @@
+# Aquila Lite — CPU / low-RAM preset (qwen2.5 3B, ~2 GB download)
+FROM qwen2.5:3b
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.2

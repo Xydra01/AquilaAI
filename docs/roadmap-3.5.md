@@ -4,7 +4,7 @@
 
 3.4 workspace QA complete, including Character AI ([workspace-qa-cai.md](workspace-qa-cai.md)) and core workspaces ([workspace-qa-3.4.md](workspace-qa-3.4.md)).
 
-## Primary goal: Learn mode (dual MVP — shipped in 3.5 alpha)
+## Primary goal: Learn mode (dual MVP — shipped in 3.5)
 
 Replace the Learn stub with **Classroom + Archives** ([`docs/learn-mode.md`](learn-mode.md)):
 
@@ -24,13 +24,37 @@ Replace the Learn stub with **Classroom + Archives** ([`docs/learn-mode.md`](lea
 - Writing Mode subcall for polished exports
 - Slides / images
 
-## Out of scope for 3.5
+## Also shipped in 3.5
+
+| Item | Location |
+|------|----------|
+| MCP client bridge | [`agent/core/mcp_bridge.py`](../agent/core/mcp_bridge.py) — [mcp-integration.md](mcp-integration.md) |
+| MCP host (Cursor) | [`agent/core/mcp_host.py`](../agent/core/mcp_host.py) — [aquila-mcp-host.md](aquila-mcp-host.md) |
+| Remote Companion | [`agent/remote/`](../agent/remote/) — [remote-companion.md](remote-companion.md) |
+| Runtime Settings GUI | [`agent/gui/gui_pages/settings_page.py`](../agent/gui/gui_pages/settings_page.py) |
+| Dynamic loop + harness | [loop-dynamic.md](loop-dynamic.md), [aquila-recursive-harness.md](aquila-recursive-harness.md) |
+| Codebase refactor | Subpackages under `agent/core/`, `storage/`, `parser/`, `policies/`, `research/`, `coding/`, `gui/` |
+
+## Experimental / disabled by default
+
+| Item | Notes |
+|------|-------|
+| Data Processing mode | `AQUILA_ENABLE_DATA_PROCESSING=0` — [data-processing-mode.md](data-processing-mode.md) |
+| CNN training toolkit | Local only — [vision-and-cnn.md](vision-and-cnn.md) |
+
+## Out of scope for 3.5 (deferred to 4.0+)
 
 | Item | Target |
 |------|--------|
-| MCP bridge | 4.0 ([`agent/mcp_bridge.py`](../agent/mcp_bridge.py) stub) |
-| Inter-modal orchestration | Future (Task mode placeholder stack today) |
+| Inter-modal orchestration UI | 4.0 — [roadmap-4.0.md](roadmap-4.0.md) Pillar D |
+| Voice-first operation | 4.0 — [voice-interface-vision.md](voice-interface-vision.md) |
+| ML Lab (Data Processing evolution) | 4.0 — [ml-lab-vision.md](ml-lab-vision.md), `aquila[ml]` extra |
+| Voice (wake + toggle) | 4.0 — [voice-interface-vision.md](voice-interface-vision.md), `aquila[voice]` extra |
+| Smart home integration | Vision only — [smart-home-vision.md](smart-home-vision.md); no 4.0 code |
+| Lifestyle / Communication / Workflow editor | 4.0 — [roadmap-4.0.md](roadmap-4.0.md) Pillars F, G, D |
+| Prompt suggestion (all typing surfaces) | 4.0-cross — [prompt-suggestion-vision.md](prompt-suggestion-vision.md) |
 | Embedded browser in Research | Deferred (SearXNG panel remains) |
+| Multi-GPU worker scheduler | 5.0 — [loop-rework-and-parallelism.md](loop-rework-and-parallelism.md) |
 
 ## Branch / release
 
@@ -39,5 +63,5 @@ Replace the Learn stub with **Classroom + Archives** ([`docs/learn-mode.md`](lea
 
 ## References
 
-- [ARCHITECTURE.md](../ARCHITECTURE.md) §18 — mode workspaces
-- [README.md](../README.md) § Known limitations and 3.5 direction
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — mode workspaces
+- [README.md](../README.md) — operational modes

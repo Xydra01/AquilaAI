@@ -5,7 +5,7 @@ import inspect
 from pathlib import Path
 from typing import Any
 
-from persona_registry import (
+from agent.storage import (
     Persona,
     get_persona,
     initialization_path,
@@ -40,7 +40,7 @@ def get_active_persona_build() -> dict[str, Any] | None:
 def _build_root() -> Path | None:
     if not _active_build:
         return None
-    from persona_registry import persona_dir
+    from agent.storage import persona_dir
 
     return persona_dir(_active_build["instance_id"], _active_build["persona_id"])
 

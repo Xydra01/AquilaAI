@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from PySide6.QtWidgets import QApplication
-from gui_pages.writing_page import WritingPage
+from agent.gui.gui_pages.writing_page import WritingPage
 
 
 @pytest.fixture(scope="session")
@@ -18,7 +18,7 @@ def qapp():
 
 
 def test_writing_page_mode_flag(qapp, qtbot):
-    import gui
+    from agent import gui
 
     window = gui.AquilaOS()
     qtbot.addWidget(window)

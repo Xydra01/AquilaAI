@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from file_parser import process_local_attachments
+from agent.coding import process_local_attachments
 
 def test_missing_file():
     chunks, images = process_local_attachments(["/path/to/nowhere/fake_file.txt"])
@@ -65,7 +65,7 @@ def test_html_parsing(tmp_path):
 
 
 def test_oversize_file_skipped(tmp_path):
-    from file_parser import MAX_FILE_BYTES
+    from agent.coding import MAX_FILE_BYTES
 
     big = tmp_path / "huge.txt"
     big.write_bytes(b"x" * (MAX_FILE_BYTES + 1))
@@ -99,7 +99,7 @@ def test_extensionless_dockerfile(tmp_path):
 
 
 def test_is_attachment_text_path_matlab():
-    from file_parser import is_attachment_text_path
+    from agent.coding import is_attachment_text_path
 
     assert is_attachment_text_path("foo.m")
     assert is_attachment_text_path("script.mlx")
@@ -108,7 +108,7 @@ def test_is_attachment_text_path_matlab():
 
 
 def test_attachment_dialog_filter_includes_matlab():
-    from file_parser import attachment_dialog_filter
+    from agent.coding import attachment_dialog_filter
 
     filt = attachment_dialog_filter()
     assert "*.m" in filt

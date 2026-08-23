@@ -1,0 +1,2 @@
+# Aquila packaged build — install on top of requirements-core.txt
+pyinstaller>=6.0

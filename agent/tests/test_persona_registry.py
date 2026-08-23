@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from instance_registry import create_instance, ensure_default_instance
-from persona_registry import (
+from agent.storage import create_instance, ensure_default_instance
+from agent.storage import (
     Persona,
     chat_history_path,
     create_persona,

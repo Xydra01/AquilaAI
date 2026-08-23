@@ -1,0 +1,7 @@
+# Qwopus 3.5 9B Coder — agentic/tool-tuned Qwen 3.5 for Aquila (32k ctx).
+# No custom TEMPLATE — Ollama applies Qwen 3.5 renderer for native thinking.
+
+FROM hf.co/Jackrong/Qwopus3.5-9B-Coder-GGUF:Q4_K_M
+
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.2

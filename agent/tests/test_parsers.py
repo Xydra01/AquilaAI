@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import parse_agent_response
+from agent.core import parse_agent_response
 
 def test_perfect_json():
     raw_output = '{"reasoning": "I am thinking.", "tools": [{"name": "read_outline", "arguments": {}}]}'
@@ -35,3 +35,14 @@ def test_unescaped_quotes_in_string():
     
     assert isinstance(result, dict)
     assert "Hello" in result["tools"][0]["arguments"]["gathered_data"]
+
+def test_unescaped_newlines_in_string():
+    raw_output = '{\n  "reasoning": "Notes",\n  "tools": [\n    {\n      "name": "replace_in_file",\n      "arguments": {\n        "file_path": "bullet.py",\n        "target_text": "    def __init__(self):\\n        self.x = 0",\n        "replacement_text": "    def __init__(self):\\n        self.x = 0\\n        self.damage = 1"\n      }\n    }\n  ]\n}'
+    # Convert double-escaped \\n to raw \n to test literal raw newlines inside the json payload
+    raw_output = raw_output.replace('\\n', '\n')
+    result = parse_agent_response(raw_output)
+    
+    assert isinstance(result, dict)
+    assert result["tools"][0]["name"] == "replace_in_file"
+    assert "self.x = 0" in result["tools"][0]["arguments"]["target_text"]
+    assert "self.damage = 1" in result["tools"][0]["arguments"]["replacement_text"]

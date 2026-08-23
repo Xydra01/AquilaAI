@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from plan_validator import expand_character_build_plan, validate_and_tune_plan
+from agent.core import expand_character_build_plan, validate_and_tune_plan
 
 
 def test_character_build_plan_gets_read_synthesize_finalize_kinds():

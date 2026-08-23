@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from research_journal import (
+from agent.research import (
     format_journal_context,
     journal_path,
     load_journal,

@@ -13,4 +13,4 @@ fi
 #start the docker container
 docker compose up -d
 # Run the agent through qt
-python agent/gui.py
+python agent/gui/gui.py

@@ -18,7 +18,7 @@ import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import (
+from agent.core import (
     OllamaClient,
     build_strict_schema,
     get_executable_tools,
@@ -182,10 +182,16 @@ def require_heretic_ollama():
 
 @pytest.fixture(scope="module")
 def heretic_client() -> OllamaClient:
+    import os
+
     client = OllamaClient()
     assert "heretic" in client.model_name.lower(), (
         f"expected heretic model, got {client.model_name!r}"
     )
+    os.environ["AQUILA_SKIP_WARMUP"] = "0"
+    ok, msg = client.ensure_warmup()
+    if not ok:
+        pytest.skip(f"warmup failed: {msg}")
     return client
 
 

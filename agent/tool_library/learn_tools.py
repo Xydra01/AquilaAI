@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from learn_index import format_retrieval_block, index_archive, search_index
-from learn_registry import (
+from agent.storage import format_retrieval_block, index_archive, search_index
+from agent.storage import (
     MASTERY_TIER_MAX,
     SYLLABUS_MIN_NODES,
     advance_mastery_on_pass,
@@ -50,7 +50,7 @@ def get_active_syllabus_build() -> dict[str, Any] | None:
 def _build_root() -> Path | None:
     if not _active_build:
         return None
-    from learn_registry import course_dir
+    from agent.storage import course_dir
 
     return course_dir(_active_build["instance_id"], _active_build["course_id"])
 
@@ -190,7 +190,7 @@ def record_assessment_result(
     syllabus = load_syllabus(iid, course_id)
     if not syllabus:
         return "❌ Syllabus not found."
-    from learn_registry import load_assessment
+    from agent.storage import load_assessment
 
     spec = load_assessment(iid, course_id, assessment_id)
     if not spec:

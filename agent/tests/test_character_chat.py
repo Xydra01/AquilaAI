@@ -6,9 +6,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from instance_registry import create_instance, ensure_default_instance
-from main import Agent
-from persona_registry import create_persona, initialization_path
+from agent.storage import create_instance, ensure_default_instance
+from agent.core import Agent
+from agent.storage import create_persona, initialization_path
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +27,7 @@ def test_run_character_chat_injects_init_doc(monkeypatch):
 
     captured = {}
 
-    def fake_chat(messages, temperature=0.8, stream=True):
+    def fake_chat(messages, temperature=0.8, stream=True, **kwargs):
         captured["messages"] = messages
         captured["temperature"] = temperature
         if stream:
@@ -53,7 +53,7 @@ def test_run_character_chat_includes_text_attachments(monkeypatch):
 
     captured = {}
 
-    def fake_chat(messages, temperature=0.8, stream=True):
+    def fake_chat(messages, temperature=0.8, stream=True, **kwargs):
         captured["messages"] = messages
         if stream:
             yield {"message": {"content": "ok"}}
@@ -74,7 +74,7 @@ def test_run_character_chat_includes_text_attachments(monkeypatch):
     )
     user_msg = captured["messages"][-1]["content"]
     assert "SECRET_LORE_CHUNK" in user_msg
-    assert "ATTACHED CONTEXT" in user_msg
+    assert "<attached_files>" in user_msg
 
 
 def test_run_character_chat_passes_vision_payload(monkeypatch):
@@ -85,7 +85,7 @@ def test_run_character_chat_passes_vision_payload(monkeypatch):
 
     captured = {}
 
-    def fake_chat(messages, temperature=0.8, stream=True):
+    def fake_chat(messages, temperature=0.8, stream=True, **kwargs):
         captured["messages"] = messages
         if stream:
             yield {"message": {"content": "ok"}}

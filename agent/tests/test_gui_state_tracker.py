@@ -8,8 +8,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from PySide6.QtWidgets import QApplication, QMainWindow
-import gui
-from gui_state import (
+from agent import gui
+from agent.gui import (
     render_step_ledger_html,
     render_writing_draft_html,
     render_code_canvas_html,

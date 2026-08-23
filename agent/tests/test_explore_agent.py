@@ -1,4 +1,4 @@
-from explore_agent import ExplorationBrief, _brief_from_findings
+from agent.core import ExplorationBrief, _brief_from_findings
 
 
 def test_brief_from_findings_extracts_paths():

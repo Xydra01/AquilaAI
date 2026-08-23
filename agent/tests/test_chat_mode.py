@@ -4,7 +4,7 @@ import os
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from main import Agent
+from agent.core import Agent
 
 @patch('main.client.chat')
 def test_agent_run_chat_streaming_and_vision(mock_chat):
@@ -48,7 +48,7 @@ def test_agent_run_chat_streaming_and_vision(mock_chat):
 
 @patch('main.client.chat')
 def test_agent_run_chat_includes_text_attachments(mock_chat):
-    """Chat mode must inject text_chunks like unified tasks (3.4 QA fix)."""
+    """Chat mode must inject text_chunks like unified tasks (3.5 QA fix)."""
     mock_chat.return_value = iter([{"message": {"content": "ok"}}])
     agent = Agent()
     list(
@@ -62,4 +62,4 @@ def test_agent_run_chat_includes_text_attachments(mock_chat):
     messages_sent = mock_chat.call_args[0][0]
     last = messages_sent[-1]["content"]
     assert "SECRET_FILE_BODY" in last
-    assert "ATTACHED CONTEXT" in last
+    assert "<attached_files>" in last

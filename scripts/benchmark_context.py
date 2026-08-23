@@ -49,10 +49,11 @@ def chat(user_content: str, num_ctx: int | None) -> tuple[float, str]:
     if num_ctx is not None:
         payload["options"] = {"num_ctx": num_ctx}
     start = time.perf_counter()
-    r = requests.post(f"{BASE}/v1/chat/completions", json=payload, timeout=(10, 600))
+    payload["think"] = False
+    r = requests.post(f"{BASE}/api/chat", json=payload, timeout=(10, 600))
     elapsed = time.perf_counter() - start
     r.raise_for_status()
-    content = r.json()["choices"][0]["message"]["content"]
+    content = r.json()["message"]["content"]
     return elapsed, content.strip()[:80]
 
 

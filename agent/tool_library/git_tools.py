@@ -5,8 +5,8 @@ import inspect
 import subprocess
 from pathlib import Path
 
-from tools import get_code_project_root
-from tool_result import format_tool_result
+from agent.core import get_code_project_root
+from agent.core import format_tool_result
 
 _MAX_OUT = 12_000
 

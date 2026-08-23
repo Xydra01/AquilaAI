@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from doc_write_policy import (
+from agent.policies import (
     DOC_MIN_CHARS_ARCHITECTURE,
     WRITE_PROJECT_MARKDOWN_MAX_CHARS,
     compact_read_code_outline_result,
@@ -22,7 +22,7 @@ def _architecture_doc_body(prefix: str = "# Title\n\nShort doc.\n") -> str:
     while len(text.strip()) < DOC_MIN_CHARS_ARCHITECTURE:
         text += line
     return text
-from main import validate_tool_arguments
+from agent.core import validate_tool_arguments
 
 
 def test_validate_rejects_stub_architecture():

@@ -1,3 +1,4 @@
+import json
 import pytest
 import sys
 import os
@@ -5,7 +6,7 @@ import requests
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from main import OllamaClient
+from agent.core import OllamaClient
 
 @patch("main.console.log_filename", None)
 @patch('main.requests.Session.post')
@@ -28,13 +29,19 @@ def test_generation_kill_switch():
     the OS must manually sever the connection and return the partial content.
     """
     mock_response = MagicMock()
-    mock_response.iter_lines.return_value = [b'data: {"choices": [{"delta": {"content": "Partial text"}}]}']
+    mock_response.iter_lines.return_value = [
+        json.dumps({"message": {"content": "Partial text"}}).encode(),
+        b"",
+    ]
 
     clock = {"n": 0}
 
     def fake_time():
         clock["n"] += 1
-        return 0.0 if clock["n"] < 4 else 200.0
+        # Deterministic time progression for "stall/no progress" logic.
+        # Each internal time() call advances by 100s so the kill triggers
+        # on the subsequent empty-line iteration.
+        return float(clock["n"] * 100)
 
     with patch("main.console.log_filename", None), patch("main.console.print"), patch(
         "main.time.time", side_effect=fake_time
@@ -44,7 +51,7 @@ def test_generation_kill_switch():
         client = OllamaClient()
         generator = client.chat(
             [{"role": "user", "content": "Write an infinite loop"}],
-            timeout=120,
+            timeout=50,
             stream=True,
         )
 

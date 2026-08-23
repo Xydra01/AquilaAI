@@ -1,0 +1,30 @@
+"""Optional live harness runs (require Ollama stock)."""
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+pytestmark = pytest.mark.live
+
+
+def _stock_reachable() -> bool:
+    try:
+        import requests
+
+        return requests.get("http://127.0.0.1:11434/api/tags", timeout=3).status_code == 200
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _stock_reachable(), reason="stock Ollama not reachable")
+def test_live_code_smoke_file_stock():
+    from agent.core import run_scenario, evaluate_run
+
+    rep = run_scenario("code_smoke_file", engine="stock")
+    assert rep.get("ok") is True, rep
+    passed, failures = evaluate_run(rep)
+    assert passed, failures

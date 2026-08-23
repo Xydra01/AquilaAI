@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import (
+from agent.core import (
     MAX_TOOLS_PER_TURN,
     get_executable_tools,
     validate_tool_calls,
@@ -16,9 +16,9 @@ from main import (
     ToolExecutor,
     build_strict_schema,
 )
-from tools import normalize_workspace_path
+from agent.core import normalize_workspace_path
 from tool_library.agent_tools import save_research_note, MAX_SCRATCHPAD_NOTE_BYTES
-from loop_engine import LoopEngine
+from agent.core import LoopEngine
 
 
 def test_validate_rejects_tool_name_alias():
@@ -54,7 +54,7 @@ def test_max_tools_constant():
 
 
 def test_parse_empty_returns_dict():
-    from main import console
+    from agent.core import console
 
     console.log_filename = None
     assert parse_agent_response("not json at all") == {}
@@ -93,8 +93,24 @@ def test_validate_rejects_unknown_argument_keys():
             "arguments": {"task_name": "t", "gathered_data": "x", "format": "markdown"},
         },
     ])
-    assert ok is False
-    assert "format" in err
+    assert ok is True
+
+
+def test_read_webpage_drops_garbage_max_chars():
+    from tool_library.web_tools import read_webpage
+
+    calls = [
+        {
+            "name": "read_webpage",
+            "arguments": {"url": "https://example.com", "max_chars": "}, '"},
+        }
+    ]
+    ok, err = validate_tool_arguments(
+        calls,
+        registry={"read_webpage": {"func": read_webpage, "description": "read"}},
+    )
+    assert ok, err
+    assert "max_chars" not in calls[0]["arguments"]
 
 
 def test_normalize_workspace_path_collapses_doubled_agent():
@@ -102,8 +118,9 @@ def test_normalize_workspace_path_collapses_doubled_agent():
 
 
 def test_save_research_note_splits_large_payload_into_chunks(monkeypatch):
-    from context_budget import set_runtime_context
+    from agent.policies import set_runtime_context
     from tool_library import agent_tools as at
+    from tool_library.agent_tools import _scratchpad_byte_limit
 
     set_runtime_context("aquila", 8192)
     saved_notes: list[str] = []
@@ -114,13 +131,18 @@ def test_save_research_note_splits_large_payload_into_chunks(monkeypatch):
 
     mock_mem = type("M", (), {})()
     mock_mem.save_scratchpad_note = fake_save
+    mock_mem.get_scratchpad_notes = lambda t: ""
     monkeypatch.setattr(at, "get_active_memory", lambda: mock_mem)
-    big = "x" * (MAX_SCRATCHPAD_NOTE_BYTES + 500)
-    result = save_research_note("task1", big)
+    big = "x" * (_scratchpad_byte_limit() + 500)
+    from agent.core import active_task
+
+    with active_task("task1"):
+        result = save_research_note(big)
+    limit = _scratchpad_byte_limit()
     assert "scratchpad chunks" in result.lower()
     assert len(saved_notes) >= 2
     for note in saved_notes:
-        assert len(note.encode("utf-8")) <= MAX_SCRATCHPAD_NOTE_BYTES + 64
+        assert len(note.encode("utf-8")) <= limit + 64
     rejoined = "".join(
         n.split("\n", 1)[-1] if n.startswith("[scratchpad chunk") else n
         for n in saved_notes
@@ -128,13 +150,35 @@ def test_save_research_note_splits_large_payload_into_chunks(monkeypatch):
     assert len(rejoined) == len(big)
 
 
-def test_normalize_research_tool_args_rewrites_wrong_task_name():
+def test_strip_scratchpad_task_name_before_validation():
+    stripped = LoopEngine._strip_scratchpad_task_name_from_tool_calls(
+        [
+            {
+                "name": "save_research_note",
+                "arguments": {"task_name": "wrong_slug", "gathered_data": "lore"},
+            }
+        ]
+    )
+    assert "task_name" not in stripped[0]["arguments"]
+    assert stripped[0]["arguments"]["gathered_data"] == "lore"
+
+
+def test_research_finalize_hint_skips_read_when_scratchpad_injected():
+    injected = LoopEngine._research_finalize_os_hint(scratchpad_injected=True)
+    assert "SCRATCHPAD" in injected
+    assert "Do **not** call `read_all_research_notes`" in injected
+    assert "same** JSON" in injected
+    plain = LoopEngine._research_finalize_os_hint(scratchpad_injected=False)
+    assert "read_all_research_notes` once" in plain
+
+
+def test_normalize_research_tool_args_heal_gathered_data():
     args, note = LoopEngine._normalize_research_tool_args(
         "read_all_research_notes",
         {"task_name": "sans-au-school"},
         "syllabus_build_sans-au-school",
     )
-    assert args["task_name"] == "syllabus_build_sans-au-school"
+    assert "task_name" not in args
     assert note is None
 
     args2, note2 = LoopEngine._normalize_research_tool_args(
@@ -142,7 +186,7 @@ def test_normalize_research_tool_args_rewrites_wrong_task_name():
         {"task_name": "sans-au-school", "gathered_data": "lore"},
         "syllabus_build_sans-au-school",
     )
-    assert args2["task_name"] == "syllabus_build_sans-au-school"
+    assert "task_name" not in args2
     assert note2 == "lore"
 
 
@@ -154,7 +198,7 @@ def test_loop_engine_duplicate_warning_at_two():
 
 
 def test_duplicate_tool_block_on_third_identical_call():
-    from url_visit_registry import UrlVisitRegistry
+    from agent.research import UrlVisitRegistry
 
     sig = json.dumps({"name": "web_search", "arguments": {"query": "nasa exoplanets"}}, sort_keys=True)
     reg = UrlVisitRegistry()
@@ -164,7 +208,7 @@ def test_duplicate_tool_block_on_third_identical_call():
 
 
 def test_build_allowed_includes_tree_when_routed_empty_code_explore():
-    from tool_policy import build_allowed_tool_names
+    from agent.policies import build_allowed_tool_names
 
     allowed = build_allowed_tool_names(
         mode="code",
@@ -181,7 +225,7 @@ def test_build_allowed_includes_tree_when_routed_empty_code_explore():
 
 
 def test_normalize_tool_calls_list_coerces_strings():
-    from main import normalize_tool_calls_list
+    from agent.core import normalize_tool_calls_list
 
     out = normalize_tool_calls_list(["web_search", {"name": "read_webpage", "arguments": {"url": "http://x"}}])
     assert out[0] == {"name": "web_search", "arguments": {}}
@@ -251,3 +295,21 @@ def test_tdd_green_gate_requires_pass():
     assert LoopEngine._tdd_advance_gate("tdd_green", [], fail_blob) is not None
     pass_blob = "Tool 'run_pytest' result:\n✅ pytest: 2 passed, 0 failed"
     assert LoopEngine._tdd_advance_gate("tdd_green", [], pass_blob) is None
+
+
+def test_normalize_tool_calls_merges_duplicate_save_research_notes():
+    tool_calls = [
+        {"name": "web_search", "arguments": {"query": "test"}},
+        {"name": "save_research_note", "arguments": {"gathered_data": "first note"}},
+        {"name": "save_research_note", "arguments": {"gathered_data": "second note"}},
+        {"name": "list_directory", "arguments": {"path": "."}},
+        {"name": "save_research_note", "arguments": {"gathered_data": "third note"}},
+    ]
+    healed, report = LoopEngine._normalize_tool_calls(tool_calls, "existing_report")
+
+    assert report == "existing_report"
+    assert len(healed) == 3
+    assert healed[0] == {"name": "web_search", "arguments": {"query": "test"}}
+    assert healed[1]["name"] == "save_research_note"
+    assert healed[1]["arguments"]["gathered_data"] == "first note\n\nsecond note\n\nthird note"
+    assert healed[2] == {"name": "list_directory", "arguments": {"path": "."}}

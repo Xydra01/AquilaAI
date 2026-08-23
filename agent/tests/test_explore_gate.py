@@ -1,4 +1,4 @@
-from loop_engine import LoopEngine
+from agent.core import LoopEngine
 
 
 def test_explore_gate_blocks_without_evidence():

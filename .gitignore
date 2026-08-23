@@ -35,3 +35,28 @@ tools/*.log
 
 pr-3.*
 pr-4.*
+
+# Personal
+Personal/
+
+# Local CNN training toolkit (not shipped; see docs/vision-and-cnn.md)
+standalone_cnn_toolkit/
+overnight_pipeline_manager.py
+
+# Trained weights (local only; agent/vision/ source stays in repo)
+*.pth
+models/
+
+# Large packaging download cache (Ollama portable zips ~1.5GB)
+packaging/cache/
+
+# Packaged app outputs & local model weights (too large for GitHub)
+dist/
+build/
+packaging/dist/
+packaging/prerequisites/
+*.gguf
+*.exe
+!scripts/**/*.exe
+Agent-Logs/
+Exe errors.pdf

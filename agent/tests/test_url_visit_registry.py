@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from url_visit_registry import UrlVisitRegistry
+from agent.research import UrlVisitRegistry
 
 
 def test_blocks_repeat_read_webpage_same_step():

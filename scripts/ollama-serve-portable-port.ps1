@@ -1,15 +1,13 @@
-# Portable Ollama on 11435 without TurboQuant (works with rc17 until PR #15505 build is ready).
-# Aquila: OLLAMA_BASE_URL=http://127.0.0.1:11435  OLLAMA_MODEL=aquila-tq-64k
-# For TurboQuant after PR build: .\scripts\ollama-serve-turboquant-port.ps1
-
-$PortableOllama = Join-Path (Split-Path $PSScriptRoot -Parent) "tools\ollama-turboquant\ollama.exe"
-if (Test-Path $PortableOllama) {
-    $env:PATH = (Split-Path $PortableOllama -Parent) + ';' + $env:PATH
-}
+# RETIRED: this PowerShell script now forwards to the cross-platform bash version.
+# Prefer running scripts/ollama-serve-portable-port.sh directly (Git Bash on Windows).
+# This shim is transitional and will be removed in a future release.
 $ErrorActionPreference = "Stop"
-Remove-Item Env:OLLAMA_KV_CACHE_TYPE -ErrorAction SilentlyContinue
-Remove-Item Env:OLLAMA_NEW_ENGINE -ErrorAction SilentlyContinue
-Remove-Item Env:OLLAMA_FLASH_ATTENTION -ErrorAction SilentlyContinue
-$env:OLLAMA_HOST = "http://127.0.0.1:11435"
-Write-Host "Portable Ollama serve (no TurboQuant) on $env:OLLAMA_HOST"
-ollama serve
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Sh = Join-Path $ScriptDir "ollama-serve-portable-port.sh"
+$Bash = Get-Command bash -ErrorAction SilentlyContinue
+if (-not $Bash) {
+    Write-Error "Git Bash 'bash' not found on PATH. Install Git for Windows: https://git-scm.com/download/win"
+    exit 1
+}
+& $Bash.Source $Sh @args
+exit $LASTEXITCODE

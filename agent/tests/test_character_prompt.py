@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from prompts import MODES_ROSTER, get_character_prompt, get_persona_build_prompt
+from agent.core import MODES_ROSTER, get_character_prompt, get_persona_build_prompt
 
 
 def test_character_prompt_includes_bible_excludes_roster():

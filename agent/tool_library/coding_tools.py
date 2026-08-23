@@ -6,8 +6,8 @@ import inspect
 from functools import lru_cache
 
 # Firewall Import
-from tools import should_skip_dir
-from workspace_paths import get_vector_db_path
+from agent.core import should_skip_dir
+from agent.storage import get_vector_db_path
 
 get_vector_db_path().mkdir(parents=True, exist_ok=True)
 
@@ -22,33 +22,34 @@ def _get_embedding_function():
     """
     Lazily construct the embedding function.
 
-    SentenceTransformerEmbeddingFunction triggers model downloads / weight loads, so we
-    avoid doing that at import time (it can heavily degrade Ollama VRAM stability).
+    Uses Aquila's offline-safe helper (hash by default; ONNX only if already cached).
+    SentenceTransformer was avoided — it downloads weights and fights Ollama for VRAM.
     """
-    from chromadb.utils import embedding_functions
+    from agent.storage.embeddings import get_aquila_embedding_function
 
-    return embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
-    )
+    return get_aquila_embedding_function()
 
 def _index_codebase(directory: str, extensions: tuple[str, ...] | None = None):
     """Hidden helper function to read and embed source files in a directory."""
     if extensions is None:
         try:
-            from language_registry import index_extensions
+            from agent.coding import index_extensions
 
             extensions = tuple(index_extensions())
         except ImportError:
             extensions = (".py",)
     chroma_client = _get_chroma_client()
     ef = _get_embedding_function()
+    from agent.storage.embeddings import embedding_collection_tag
+
+    coll_name = f"codebase_{embedding_collection_tag()}"
     collection = chroma_client.get_or_create_collection(
-        name="codebase", embedding_function=ef
+        name=coll_name, embedding_function=ef
     )
     try:
-        chroma_client.delete_collection("codebase")
+        chroma_client.delete_collection(coll_name)
         collection = chroma_client.create_collection(
-            name="codebase", embedding_function=ef
+            name=coll_name, embedding_function=ef
         )
     except Exception:
         pass

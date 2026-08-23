@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from web_search_query import clean_research_query, low_quality_results_note
+from agent.research import clean_research_query, low_quality_results_note
 
 
 def test_clean_confirmed_exoplanet_query():
@@ -20,6 +20,15 @@ def test_low_quality_dictionary_results_note():
     msg = low_quality_results_note(blob)
     assert msg is not None
     assert "low-quality" in msg.lower()
+
+
+def test_low_quality_cambridge_without_technical():
+    blob = (
+        "Search Results for 'lightweight docker':\n\n"
+        "1. Lightweight\nURL: https://dictionary.cambridge.org/lightweight\n"
+    )
+    msg = low_quality_results_note(blob)
+    assert msg is not None
 
 
 def test_trusted_results_no_note():

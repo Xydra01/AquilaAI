@@ -24,6 +24,15 @@ from .persona_tools import PERSONA_TOOLS
 
 from .learn_tools import LEARN_TOOLS
 
+from .data_tools import DATA_TOOLS
+
+from .desktop_tools import DESKTOP_TOOLS
+
+from .calendar_tools import CALENDAR_TOOLS
+
+from .browser_tools import BROWSER_TOOLS
+
+from .multimodal_tools import MULTIMODAL_TOOLS
 
 ALL_TOOLS = {
 
@@ -52,6 +61,16 @@ ALL_TOOLS = {
     **PERSONA_TOOLS,
 
     **LEARN_TOOLS,
+
+    **DATA_TOOLS,
+
+    **DESKTOP_TOOLS,
+
+    **CALENDAR_TOOLS,
+
+    **BROWSER_TOOLS,
+
+    **MULTIMODAL_TOOLS,
 
 }
 

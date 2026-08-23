@@ -10,7 +10,7 @@ import io
 
 import cloudscraper
 
-from pdf_text import extract_pdf_text
+from agent.coding import extract_pdf_text
 
 import markdownify
 
@@ -20,9 +20,10 @@ from bs4 import BeautifulSoup
 
 
 
-from context_budget import get_context_profile
-from web_content_quality import analyze_fetched_page, format_tool_result_for_quality
-from web_search_query import clean_research_query, low_quality_results_note
+from agent.policies import get_context_profile
+from agent.research import analyze_fetched_page, format_tool_result_for_quality
+from agent.research import get_search_url, search_params
+from agent.research import clean_research_query, low_quality_results_note
 
 
 
@@ -48,7 +49,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 
     """Searches the web locally using your private SearXNG instance."""
 
-    url = "http://localhost:8080/search"
+    url = f"{get_search_url()}/search"
 
 
 
@@ -60,7 +61,7 @@ def web_search(query: str, max_results: int = 5) -> str:
         clean_query, rewrite_note = clean_research_query(stripped)
         if rewrite_note:
             try:
-                from run_logger import get_active_run_logger
+                from agent.core import get_active_run_logger
 
                 logger = get_active_run_logger()
                 if logger:
@@ -76,17 +77,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 
 
-        params = {
-
-            "q": clean_query,
-
-            "format": "json",
-
-            "engines": "google,bing,duckduckgo,wikipedia",
-
-            "language": "en",
-
-        }
+        params = search_params(clean_query)
 
 
 

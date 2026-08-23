@@ -7,10 +7,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from PySide6.QtWidgets import QApplication
 
-import gui
-from gui_pages.character_page import CharacterPage
-from instance_registry import create_instance, ensure_default_instance
-from persona_registry import create_persona, save_chat_history
+from agent import gui
+from agent.gui.gui_pages.character_page import CharacterPage
+from agent.storage import create_instance, ensure_default_instance
+from agent.storage import create_persona, save_chat_history
 
 
 @pytest.fixture(scope="session")
@@ -41,7 +41,7 @@ def test_character_page_history_round_trip(qtbot, qapp, tmp_path, monkeypatch):
     win.active_instance_id = inst.id
     p = create_persona(inst.id, "TestChar", build_complete=True)
     p.greeting = "Hi!"
-    from persona_registry import save_persona
+    from agent.storage import save_persona
 
     save_persona(inst.id, p)
     save_chat_history(inst.id, p.id, [{"role": "user", "content": "Hey"}])

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0b1020" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Aquila" />
+  <title>Aquila Remote</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Pairing screen -->
+  <section id="pair-view" class="view hidden">
+    <div class="pair-card">
+      <div class="brand"><img src="icon.svg" alt="" class="brand-mark" /><span>Aquila</span></div>
+      <h1>Pair this device</h1>
+      <p class="muted">On your host machine run <code>python -m remote.host_cli pair-code</code> and enter the values below.</p>
+      <label>Host ID
+        <input id="pair-host-id" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. 0fb9433a8dee..." />
+      </label>
+      <label>Pairing code
+        <input id="pair-code" type="text" inputmode="numeric" autocomplete="off" placeholder="6-digit code" />
+      </label>
+      <label>Device name
+        <input id="pair-device-name" type="text" autocomplete="off" placeholder="My phone" />
+      </label>
+      <button id="pair-btn" class="primary">Pair</button>
+      <p id="pair-error" class="error hidden"></p>
+    </div>
+  </section>
+
+  <!-- Main app -->
+  <section id="app-view" class="view hidden">
+    <header class="topbar">
+      <div class="brand"><img src="icon.svg" alt="" class="brand-mark" /><span>Aquila</span></div>
+      <div class="topbar-right">
+        <span id="engine-indicator" class="engine-indicator" title="running engines">no engine</span>
+        <span id="conn-dot" class="dot" title="connection"></span>
+        <select id="instance-select" aria-label="Instance"></select>
+        <button id="logout-btn" class="ghost" title="Unpair this device">Logout</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- Chat panel -->
+      <div id="chat-panel" class="panel active">
+        <div id="messages" class="messages"></div>
+        <form id="chat-form" class="composer">
+          <div id="chat-attach-chips" class="attach-chips"></div>
+          <div class="composer-row">
+            <label class="toggle">
+              <input type="checkbox" id="light-research" />
+              <span>Light research</span>
+            </label>
+            <button type="button" class="ghost attach-btn" data-target="chat">Attach</button>
+          </div>
+          <div class="composer-row">
+            <textarea id="chat-input" rows="1" placeholder="Message Aquila…" autocomplete="off"></textarea>
+            <button id="send-btn" class="primary" type="submit">Send</button>
+            <button id="stop-btn" class="ghost hidden" type="button">Stop</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Character panel -->
+      <div id="character-panel" class="panel">
+        <div id="character-list-view" class="ws-view">
+          <div class="ws-head">
+            <h2>Characters</h2>
+            <button id="persona-new-btn" class="primary">New persona</button>
+          </div>
+          <div id="persona-cards" class="cards"></div>
+        </div>
+        <div id="character-create-view" class="ws-view hidden"></div>
+        <div id="character-build-view" class="ws-view hidden"></div>
+        <div id="character-chat-view" class="ws-view chat-view hidden"></div>
+      </div>
+
+      <!-- Learn panel -->
+      <div id="learn-panel" class="panel">
+        <div id="learn-list-view" class="ws-view">
+          <div class="ws-head">
+            <h2>Learn</h2>
+            <div class="seg">
+              <button id="learn-tab-courses" class="seg-btn active" data-learn-tab="courses">Courses</button>
+              <button id="learn-tab-archives" class="seg-btn" data-learn-tab="archives">Archives</button>
+            </div>
+          </div>
+          <div id="learn-courses" class="learn-section">
+            <div class="ws-subhead"><button id="course-new-btn" class="primary">New course</button></div>
+            <div id="course-cards" class="cards"></div>
+          </div>
+          <div id="learn-archives" class="learn-section hidden">
+            <div class="ws-subhead"><button id="archive-new-btn" class="primary">New archive</button></div>
+            <div id="archive-cards" class="cards"></div>
+          </div>
+        </div>
+        <div id="learn-create-view" class="ws-view hidden"></div>
+        <div id="learn-build-view" class="ws-view hidden"></div>
+        <div id="learn-detail-view" class="ws-view hidden"></div>
+        <div id="learn-chat-view" class="ws-view chat-view hidden"></div>
+      </div>
+
+      <!-- Tasks panel -->
+      <div id="tasks-panel" class="panel">
+        <div id="tasks-launch-view" class="ws-view">
+          <div class="ws-head"><h2>Tasks</h2></div>
+          <form id="tasks-form" class="stacked-form">
+            <label>Mode
+              <select id="tasks-mode">
+                <option value="research">Research</option>
+                <option value="code">Code Mode</option>
+                <option value="writing">Writing</option>
+                <option value="autonomous">Autonomous Task</option>
+              </select>
+            </label>
+            <label>Task name
+              <input id="tasks-task-name" type="text" placeholder="auto from prompt if blank" />
+            </label>
+            <label>Task prompt / goal
+              <textarea id="tasks-prompt" rows="3" placeholder="What should Aquila do?"></textarea>
+            </label>
+            <label>Context note (optional)
+              <textarea id="tasks-journal" rows="2" placeholder="Human notes injected as context"></textarea>
+            </label>
+            <div id="tasks-attach-chips" class="attach-chips"></div>
+            <div class="composer-row">
+              <button type="button" class="ghost attach-btn" data-target="tasks">Attach files</button>
+              <button id="tasks-run-btn" class="primary" type="submit">Run Task</button>
+            </div>
+          </form>
+          
+          <div id="tasks-deliverables-section">
+            <div class="ws-subhead"><h3>Past deliverables</h3><button id="tasks-refresh" class="ghost">Refresh</button></div>
+            <div id="tasks-deliverables" class="cards"></div>
+          </div>
+
+          <div id="tasks-repos-section" class="hidden">
+            <div class="ws-subhead"><h3>Code Repositories</h3><button id="tasks-repos-refresh" class="ghost">Refresh</button></div>
+            <div id="tasks-repos" class="cards"></div>
+          </div>
+        </div>
+        <div id="tasks-run-view" class="ws-view hidden"></div>
+        <div id="tasks-doc-view" class="ws-view hidden"></div>
+        <div id="tasks-explorer-view" class="ws-view hidden"></div>
+      </div>
+
+      <!-- Settings panel -->
+      <div id="settings-panel" class="panel">
+        <div class="ws-head">
+          <h2>Environment Settings</h2>
+          <button id="save-env-btn" class="primary">Apply Settings</button>
+        </div>
+        <div id="env-settings-container" class="cards" style="margin-bottom: 2rem;"></div>
+
+        <div class="ws-head">
+          <h2>Ollama engines</h2>
+          <button id="refresh-status" class="ghost">Refresh</button>
+        </div>
+        <div id="engine-cards" class="engine-cards"></div>
+        <div class="ws-head" style="margin-top:1.5rem">
+          <h2>SearXNG search</h2>
+          <button id="refresh-search" class="ghost">Refresh</button>
+        </div>
+        <div id="search-status-card" class="engine-card">
+          <div class="url" id="search-url-label">—</div>
+          <div class="models" id="search-health-label">Status: unknown</div>
+          <div class="actions">
+            <button id="search-start-btn" class="primary" type="button">Start container</button>
+            <button id="search-stop-btn" class="ghost" type="button">Stop container</button>
+            <button id="search-test-btn" class="ghost" type="button">Test</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <nav class="workspace-nav">
+      <button class="nav-btn active" data-target="chat-panel">Chat</button>
+      <button class="nav-btn" data-target="character-panel">Character</button>
+      <button class="nav-btn" data-target="learn-panel">Learn</button>
+      <button class="nav-btn" data-target="tasks-panel">Tasks</button>
+      <button class="nav-btn" data-target="settings-panel">Settings</button>
+    </nav>
+  </section>
+
+  <div id="toast" class="toast hidden"></div>
+  <input id="hidden-file-input" type="file" multiple class="hidden" />
+
+  <script src="markdown.js"></script>
+  <script src="app.js"></script>
+  <script src="character.js"></script>
+  <script src="learn.js"></script>
+  <script src="tasks.js"></script>
+</body>
+</html>

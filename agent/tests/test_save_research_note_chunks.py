@@ -31,8 +31,8 @@ def test_utf8_byte_chunks_unicode_boundaries():
 
 def test_save_research_note_multiple_rows_sqlite(tmp_path, monkeypatch):
     """Integration: memory returns all chunks via get_scratchpad_notes."""
-    from context_budget import set_runtime_context
-    from memory import DualMemorySystem
+    from agent.policies import set_runtime_context
+    from agent.storage import DualMemorySystem
 
     mem = DualMemorySystem(storage_dir=tmp_path, instance_id="test")
     monkeypatch.setattr(
@@ -43,7 +43,10 @@ def test_save_research_note_multiple_rows_sqlite(tmp_path, monkeypatch):
     set_runtime_context("aquila", 8192)
 
     payload = "z" * (MAX_SCRATCHPAD_NOTE_BYTES + 2000)
-    result = save_research_note("task_chunk", payload)
+    from agent.core import active_task
+
+    with active_task("task_chunk"):
+        result = save_research_note(payload)
     assert "scratchpad chunks" in result.lower()
 
     import sqlite3
@@ -65,8 +68,8 @@ def test_save_research_note_multiple_rows_sqlite(tmp_path, monkeypatch):
 
 
 def test_read_all_research_notes_capped_by_default(tmp_path, monkeypatch):
-    from context_budget import set_runtime_context
-    from memory import DualMemorySystem
+    from agent.policies import set_runtime_context
+    from agent.storage import DualMemorySystem
 
     mem = DualMemorySystem(storage_dir=tmp_path, instance_id="test")
     monkeypatch.setattr(
@@ -77,7 +80,10 @@ def test_read_all_research_notes_capped_by_default(tmp_path, monkeypatch):
     set_runtime_context("aquila-tq-32k", 32768)
 
     big = "A" * 80_000
-    save_research_note("task_big", big)
-    out = read_all_research_notes("task_big")
+    from agent.core import active_task
+
+    with active_task("task_big"):
+        save_research_note(big)
+        out = read_all_research_notes()
     assert len(out) < len(big)
     assert "truncated" in out.lower()

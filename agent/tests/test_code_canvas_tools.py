@@ -78,9 +78,9 @@ def test_apply_unified_patch(code_workspace):
 
 def test_run_pytest_updates_state(code_workspace):
     from unittest.mock import patch
-    from language_registry import TestResult
+    from agent.coding import TestResult
 
-    with patch("language_registry.run_tests") as mock_run:
+    with patch("agent.coding.run_tests") as mock_run:
         mock_run.return_value = TestResult(True, 2, 0, "ok", "2 passed")
         code_canvas_tools.init_code_project("t", ".", "python")
         code_canvas_tools.create_buffer_file("m.py", "def f(): pass\n")

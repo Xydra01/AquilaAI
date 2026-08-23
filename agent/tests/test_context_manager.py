@@ -1,7 +1,7 @@
 import os
 
-from context_budget import resolve_context_profile
-from context_manager import (
+from agent.policies import resolve_context_profile
+from agent.policies import (
     build_loop_messages,
     estimate_messages_tokens,
     on_step_advance,

@@ -3,17 +3,17 @@ import os
 
 import pytest
 
-from main import save_task_deliverable
-from web_enrichment import SourceRegistry, append_bibliography_to_report
+from agent.core import save_task_deliverable
+from agent.research import SourceRegistry, append_bibliography_to_report
 
 
 def test_append_bibliography_to_report_research():
     reg = SourceRegistry()
-    reg.register("https://example.com", title="Example", via="auto_scrape")
+    reg.register("https://example.org", title="Example", via="auto_scrape")
     text = append_bibliography_to_report("# Findings\n\nBody.", reg, mode="research")
     assert text.startswith("# Findings")
     assert "## References" in text
-    assert "example.com" in text
+    assert "example.org" in text
 
 
 def test_append_strips_model_references_first():

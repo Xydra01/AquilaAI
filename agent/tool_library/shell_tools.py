@@ -1,4 +1,4 @@
-"""Scoped terminal commands for Code Mode (Aquila 3.4 Wave 4)."""
+"""Scoped terminal commands for Code Mode (Aquila 3.5 Wave 4)."""
 from __future__ import annotations
 
 import os
@@ -35,7 +35,7 @@ def _terminal_enabled() -> bool:
 
 
 def _log_terminal(instance_id: str, command: str, cwd: str, output: str) -> None:
-    from workspace_paths import agent_data_path
+    from agent.storage import agent_data_path
 
     log_dir = agent_data_path("Agent-Logs")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +96,7 @@ def run_terminal_command(command: str, cwd: str = ".", timeout: int = 120) -> st
             timeout=min(max(5, timeout), 300),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
-        from instance_registry import get_active_instance_id
+        from agent.storage import get_active_instance_id
 
         _log_terminal(get_active_instance_id(), cmd, str(workdir), out[:8000])
         status = "✅" if proc.returncode == 0 else "⚠️"

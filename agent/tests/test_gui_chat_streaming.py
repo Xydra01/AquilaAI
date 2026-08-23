@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from PySide6.QtWidgets import QApplication, QMainWindow
-import gui
+from agent import gui
 
 
 @pytest.fixture(scope="session")
@@ -39,11 +39,12 @@ def test_chat_finished_does_not_duplicate_bubble(qtbot, qapp):
     page.chat_history.clear()
     page.begin_assistant_stream()
     page.stream_chat_token("Hello from stream")
+    assert "Aquila" in page.chat_history.toPlainText()
     before_count = page.chat_history.toHtml().count("Aquila")
     window.worker = gui.AgentWorker("chat", "Hello", "chat")
     window.chat_finished("Hello from stream")
     after_html = page.chat_history.toHtml()
-    assert after_html.count("Aquila:") == before_count
+    assert after_html.count("Aquila") == before_count
     assert page.run_btn.isEnabled()
 
 
@@ -53,7 +54,7 @@ def test_execute_task_chat_uses_chat_finished(qtbot, qapp):
         pytest.skip("Main window not found")
     window = MainWindowClass()
     qtbot.addWidget(window)
-    window.enter_workspace(window.active_instance_id)
+    window.enter_workspace(window.active_instance_id, mode_label="Chat Mode")
     window.mode_selector.setCurrentText("Chat Mode")
     page = window.chat_page
     page.chat_history.clear()

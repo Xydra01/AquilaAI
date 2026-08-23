@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from PySide6.QtWidgets import QApplication, QPlainTextEdit
-from gui_pages.code_ide_page import CodeIdePage
+from agent.gui.gui_pages.code_ide_page import CodeIdePage
 
 
 @pytest.fixture(scope="session")
@@ -19,7 +19,7 @@ def qapp():
 
 def test_code_editors_not_read_only(qapp, qtbot, tmp_path, monkeypatch):
     import json
-    import gui
+    from agent import gui
 
     monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
     code_dir = tmp_path / "Agent-Code"

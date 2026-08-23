@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from explore_agent import run_brief
+from agent.core import run_brief
 
 
 def test_run_brief_full_json_response_from_ollama():

@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from language_registry import (
+from agent.coding import (
     get_language,
     index_extensions,
     run_linter,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from tools import is_safe_path
+from agent.core import is_safe_path
 
 def test_allowed_paths():
     """TDD Goal: Ensure normal workspace files are permitted."""

@@ -11,10 +11,10 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from language_registry import get_language, index_extensions, run_linter
-from tools import is_ignored_code_path, normalize_workspace_path, read_file_lines, should_skip_dir
+from agent.coding import get_language, index_extensions, run_linter
+from agent.core import is_ignored_code_path, normalize_workspace_path, read_file_lines, should_skip_dir
 
-from workspace_paths import agent_data_path, resolve_under_data_root
+from agent.storage import agent_data_path, resolve_under_data_root
 
 
 def code_dir() -> Path:
@@ -99,8 +99,8 @@ def _should_queue_patch() -> bool:
     if os.getenv("AQUILA_DIFF_REVIEW", "1").strip().lower() in ("0", "false", "no", "off"):
         return False
     try:
-        from context_budget import get_context_profile
-        from instance_registry import get_active_instance_id, get_instance
+        from agent.policies import get_context_profile
+        from agent.storage import get_active_instance_id, get_instance
 
         inst = get_instance(get_active_instance_id())
         if inst is not None and inst.auto_apply_patches is not None:
@@ -511,7 +511,7 @@ def read_file_region(file_path: str, start_line: int, end_line: int) -> str:
 
 
 def create_buffer_file(file_path: str, content: str) -> str:
-    """Create a new file in the buffer (max ~80 lines recommended)."""
+    """Create a new file in the buffer. Recommend keeping files small."""
     state = _load_state()
     if not state:
         return "❌ Error: No active code project. Use init_code_project first."
@@ -732,13 +732,13 @@ def write_project_markdown(file_path: str, content: str) -> str:
         if text.endswith("```"):
             text = text[:-3].strip()
     try:
-        from doc_write_policy import truncate_write_content
+        from agent.policies import truncate_write_content
 
         text, trunc_note = truncate_write_content(text)
     except ImportError:
         trunc_note = None
     try:
-        from doc_write_policy import looks_incomplete_markdown
+        from agent.policies import looks_incomplete_markdown
 
         incomplete = looks_incomplete_markdown(text, file_path=norm)
         if incomplete:
@@ -784,7 +784,7 @@ def append_project_markdown(file_path: str, content: str) -> str:
     if not chunk:
         return "❌ append content is empty."
     try:
-        from doc_write_policy import APPEND_PROJECT_MARKDOWN_MAX_CHARS
+        from agent.policies import APPEND_PROJECT_MARKDOWN_MAX_CHARS
 
         if len(chunk) > APPEND_PROJECT_MARKDOWN_MAX_CHARS:
             return (
@@ -869,7 +869,7 @@ def _pytest_path_args(state: dict, target: str) -> str:
 
 def run_pytest(target: str = "") -> str:
     """Run pytest on target path or project test_targets (syncs dirty files first)."""
-    from language_registry import run_tests
+    from agent.coding import run_tests
 
     state = _load_state()
     if not state:

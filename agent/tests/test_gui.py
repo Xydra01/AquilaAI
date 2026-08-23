@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 # Add the parent 'agent' directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt  # noqa: F401 — used by qtbot.mouseClick
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 # We must instantiate a QApplication before creating any QWidgets for testing
@@ -18,7 +18,7 @@ def qapp():
         app = QApplication(sys.argv)
     return app
 
-import gui
+from agent import gui
 
 # Dynamically find the main window class
 MainWindowClass = next(
@@ -34,6 +34,9 @@ def test_agent_worker_signals(qtbot, qapp):
     # Mock the LLM's unified task runner so the test runs instantly and doesn't hit the API
     mock_agent = MagicMock()
     mock_agent.run_unified_task.return_value = "✅ Task complete!"
+    mock_agent.client.model_name = "aquila"
+    mock_agent.client.warmup.return_value = (True, "Model ready.")
+    mock_agent.client.ensure_warmup.return_value = (True, "Model ready.")
     with patch('gui.get_agent', return_value=mock_agent):
         # Use qtbot to wait for the background thread to emit the finished_signal
         with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
@@ -42,6 +45,27 @@ def test_agent_worker_signals(qtbot, qapp):
         # Verify the signal carried the exact result from the mock (including the worker's prepend string)
         assert blocker.args == ["✅ Task Completed:\n✅ Task complete!"]
         assert mock_agent.run_unified_task.called
+
+
+def test_agent_worker_approve_and_run_does_not_unbound_extract(qtbot, qapp):
+    """Approve-and-run path must import extract_plan_review_result (regression for UnboundLocalError)."""
+    worker = gui.AgentWorker(
+        task_name="approved_task",
+        prompt="Do something",
+        mode="research",
+        execute_approved=True,
+    )
+    mock_agent = MagicMock()
+    mock_agent.approve_and_run_task.return_value = "Report written (10167 bytes)."
+    mock_agent.client.model_name = "aquila"
+    mock_agent.client.warmup.return_value = (True, "Model ready.")
+    with patch("gui.get_agent", return_value=mock_agent):
+        with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
+            worker.start()
+    text = blocker.args[0]
+    assert not text.startswith("❌ Error")
+    assert "Task Completed" in text or "Report written" in text
+    assert mock_agent.approve_and_run_task.called
 
 def test_ui_button_states_on_finish(qtbot, qapp):
     """TDD Goal: Ensure the Stop button disables and Run/Resume re-enable when a task finishes."""
@@ -141,3 +165,30 @@ def test_stream_chat_token_ui_update(qtbot, qapp):
         pytest.fail(f"stream_chat_token raised an AttributeError: {e}")
 
     assert "Hello World" in page.chat_history.toPlainText()
+
+
+def test_thinking_stream_uses_separate_pane(qtbot, qapp):
+    """Thinking tokens must not appear as literal HTML in the main chat history."""
+    if not MainWindowClass:
+        pytest.skip("Main window class not found in gui.py")
+
+    window = MainWindowClass()
+    qtbot.addWidget(window)
+    window.mode_selector.setCurrentText("Chat Mode")
+    rail = window.chat_page.agent_rail
+    rail.begin_assistant_stream()
+    rail.stream_thinking_token("Plan the revision.")
+    qapp.processEvents()
+
+    chat_plain = rail.chat_history.toPlainText()
+    assert "<details" not in chat_plain.lower()
+    assert "Plan the revision." not in chat_plain
+    assert "Plan the revision." in rail.thinking_view.toPlainText()
+    assert rail.thinking_toggle.isChecked()
+    assert "▾ Thinking" in rail.thinking_toggle.text()
+
+    rail.stream_chat_token("Answer starts.")
+    qapp.processEvents()
+    assert not rail.thinking_view.isVisible()
+    assert "Aquila" in rail.chat_history.toPlainText()
+    assert "Answer starts." in rail.chat_history.toPlainText()

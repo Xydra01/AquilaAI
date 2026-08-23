@@ -3,7 +3,7 @@ import json
 import inspect
 from pathlib import Path
 
-from workspace_paths import agent_data_path
+from agent.storage import agent_data_path
 
 DRAFT_DIR = agent_data_path("Agent-Drafts")
 DRAFT_DIR.mkdir(parents=True, exist_ok=True)
@@ -23,7 +23,12 @@ def init_document(title: str, synopsis: str) -> str:
     return f"✅ Document '{title}' initialized. You may now begin writing sections."
 
 def write_section(section_header: str, content: str) -> str:
-    """Appends a new chunk/section of text to the active document."""
+    """Appends a new chunk/section of text to the active document.
+    
+    Args:
+        section_header: Short markdown header for this section (e.g. '# 1. Executive Summary'). Do NOT put the body text here.
+        content: Detailed markdown body content for this section. Write as a single continuous line using \\n for newlines.
+    """
     state_file = ACTIVE_DRAFT_FILE
     if not state_file.exists():
         return "❌ Error: No active document found. Use init_document first."
@@ -95,7 +100,7 @@ def compile_final_document(file_name: str) -> str:
         clean_file_name = file_name.replace(".md", "")
         
         # Ensure it saves to the correct directory
-        save_path = Path("Agent-Drafts") / f"{clean_file_name}.md"
+        save_path = DRAFT_DIR / f"{clean_file_name}.md"
         
         # Compile the markdown
         markdown_content = f"# {state_data.get('title', 'Untitled Document')}\n\n"

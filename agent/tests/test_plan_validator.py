@@ -6,9 +6,12 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from plan_validator import (
+from agent.core import (
     BUDGET_RUBRIC,
+    expand_dynamic_research_plan,
     expand_research_plan,
+    expand_offline_research_plan,
+    expand_dynamic_offline_research_plan,
     validate_and_tune_plan,
     infer_step_kind,
     get_step_kind_hint,
@@ -141,3 +144,62 @@ def test_expand_omits_explore_note_when_brief_ran():
     )
     assert "Explore brief already ran" in note
     assert expanded["steps"][0]["step_kind"] == "search"
+
+
+def test_expand_dynamic_research_plan_two_steps(monkeypatch):
+    monkeypatch.setenv("AQUILA_DYNAMIC_LOOP", "1")
+    plan = {"steps": [{"description": "Research AI safety"}]}
+    expanded, note = expand_dynamic_research_plan(plan, "AI safety")
+    assert len(expanded["steps"]) == 2
+    assert [s["step_kind"] for s in expanded["steps"]] == ["work", "finalize"]
+    assert expanded.get("dynamic_plan") is True
+    assert "Dynamic" in note
+
+
+def test_validate_uses_dynamic_plan_when_flag_on(monkeypatch):
+    monkeypatch.setenv("AQUILA_DYNAMIC_LOOP", "1")
+    plan = {
+        "status": "in_progress",
+        "current_step_index": 0,
+        "steps": [{"description": "Research topic", "max_iterations": 2}],
+    }
+    tuned, notes = validate_and_tune_plan(plan, "research", "exoplanets")
+    kinds = [s["step_kind"] for s in tuned["steps"]]
+    assert kinds == ["work", "finalize"]
+    assert any("Dynamic" in n for n in notes)
+
+
+def test_expand_offline_research_plan_three_steps():
+    plan = {"steps": [{"description": "x"}]}
+    expanded, note = expand_offline_research_plan(plan, "local topic")
+    assert len(expanded["steps"]) == 3
+    assert [s["step_kind"] for s in expanded["steps"]] == [
+        "read",
+        "synthesize",
+        "finalize",
+    ]
+    assert expanded.get("offline_research") is True
+    assert "Offline" in note
+
+
+def test_validate_offline_research_plan(monkeypatch):
+    monkeypatch.delenv("AQUILA_DYNAMIC_LOOP", raising=False)
+    plan = {"steps": [{"description": "Research from PDFs"}]}
+    tuned, notes = validate_and_tune_plan(
+        plan, "research", "hornworm diet", offline_research=True
+    )
+    kinds = [s["step_kind"] for s in tuned["steps"]]
+    assert kinds == ["read", "synthesize", "finalize"]
+    assert any("Offline" in n for n in notes)
+
+
+def test_validate_offline_dynamic_research_plan(monkeypatch):
+    monkeypatch.setenv("AQUILA_DYNAMIC_LOOP", "1")
+    plan = {"steps": [{"description": "Research from attachments"}]}
+    tuned, notes = validate_and_tune_plan(
+        plan, "research", "local notes", offline_research=True
+    )
+    kinds = [s["step_kind"] for s in tuned["steps"]]
+    assert kinds == ["work", "finalize"]
+    assert tuned.get("offline_research") is True
+    assert any("offline" in n.lower() for n in notes)

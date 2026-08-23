@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from context_budget import resolve_context_profile
-from web_enrichment import (
+from agent.policies import resolve_context_profile
+from agent.research import (
     SourceRegistry,
     enrich_search_result,
     extract_urls_from_search_result,
@@ -32,7 +32,7 @@ def test_extract_urls_from_search_result():
 
 def test_pick_urls_skips_seen_and_ranks():
     urls = [
-        "https://reddit.com/x",
+        "https://example.org/x",
         "https://stanford.edu/y",
         "https://github.com/z",
     ]
@@ -42,16 +42,37 @@ def test_pick_urls_skips_seen_and_ranks():
     assert picks[0][0] == "https://stanford.edu/y"
 
 
+def test_pick_urls_skips_dictionary():
+    urls = [
+        "https://dictionary.cambridge.org/lightweight",
+        "https://hub.docker.com/r/linuxserver/radicale",
+    ]
+    titles = {
+        normalize_url("https://dictionary.cambridge.org/lightweight"): "Lightweight definition"
+    }
+    picks = pick_urls_to_scrape(urls, set(), 2, titles)
+    assert len(picks) == 1
+    assert "hub.docker.com" in picks[0][0]
+
+
 def test_source_registry_dedupes_and_orders():
     reg = SourceRegistry()
-    assert reg.register("https://Example.com/a/", title="A", via="auto_scrape")
-    assert not reg.register("https://example.com/a", via="read_webpage")
-    assert reg.register("https://b.org", via="read_webpage")
+    assert reg.register("https://Example.org/a/", title="A", via="auto_scrape")
+    assert not reg.register("https://example.org/a", via="read_webpage")
+    assert reg.register("https://arxiv.org/abs/123", via="read_webpage")
     assert len(reg.records) == 2
     bib = reg.format_bibliography_markdown()
     assert "## References" in bib
     assert "[A]" in bib
-    assert "b.org" in bib
+    assert "arxiv.org" in bib
+
+
+def test_source_registry_skips_junk_urls():
+    reg = SourceRegistry()
+    assert not reg.register("https://www.chegg.com/homework")
+    assert not reg.register("https://dictionary.cambridge.org/x")
+    assert reg.register("https://github.com/org/repo")
+    assert len(reg.records) == 1
 
 
 def test_strip_existing_references_section():
@@ -61,7 +82,8 @@ def test_strip_existing_references_section():
 
 
 @patch("tool_library.web_tools.read_webpage")
-def test_enrich_search_result_appends_scrape(mock_read):
+def test_enrich_search_result_appends_scrape(mock_read, monkeypatch):
+    monkeypatch.setenv("AQUILA_AUTO_SCRAPE", "1")
     mock_read.return_value = "Page body text"
     profile = resolve_context_profile("aquila-tq-32k")
     seen: set[str] = set()
@@ -78,8 +100,10 @@ def test_enrich_search_result_appends_scrape(mock_read):
 
 
 @patch("tool_library.web_tools.read_webpage")
-def test_enrich_respects_tier_url_count(mock_read):
+def test_enrich_respects_tier_url_count(mock_read, monkeypatch):
+    monkeypatch.setenv("AQUILA_AUTO_SCRAPE", "1")
     mock_read.return_value = "content"
+    monkeypatch.setenv("AQUILA_CONTEXT_TIER", "max")
     profile = resolve_context_profile("aquila-tq-96k")
     seen: set[str] = set()
     result = (

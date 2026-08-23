@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import initialize_json_ledger, read_json_state, advance_json_state
+from agent.core import initialize_json_ledger, read_json_state, advance_json_state
 
 def test_state_machine_progression(tmp_path):
     """

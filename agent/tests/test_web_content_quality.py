@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from web_content_quality import analyze_fetched_page, format_tool_result_for_quality
+from agent.research import analyze_fetched_page, format_tool_result_for_quality
 
 SPRINGER_PREVIEW = """
 # Emerging Trends and Future Research Directions in Plankton Studies

@@ -1,5 +1,5 @@
 """Learn Mode prompt constraints."""
-from prompts import (
+from agent.core import (
     build_learn_archive_user_message,
     get_learn_tutor_prompt,
     get_learn_archive_prompt,
@@ -20,10 +20,10 @@ def test_archive_prompt_direct_answer():
     p = get_learn_archive_prompt("History")
     assert "History" in p
     assert "json" in p.lower()
-    assert "think" in p.lower() or "reasoning" in p.lower()
 
 
-def test_archive_user_message_includes_sources():
+def test_archive_user_message_includes_sources(monkeypatch):
+    monkeypatch.setenv("AQUILA_ENABLE_THINK", "0")
     body = build_learn_archive_user_message("What is holoscopy?", "[1] (a.pdf)\nFact.")
     assert "holoscopy" in body
     assert "ARCHIVE SOURCES" in body

@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from loop_engine import LoopEngine
-from web_enrichment import SourceRegistry
+from agent.core import LoopEngine
+from agent.research import SourceRegistry
 
 
 @pytest.fixture

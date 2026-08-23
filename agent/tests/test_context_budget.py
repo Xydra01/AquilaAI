@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from context_budget import (
+from agent.policies import (
     get_context_profile,
     reset_runtime_context,
     resolve_context_profile,
@@ -23,10 +23,10 @@ def _reset_ctx(monkeypatch):
 def test_model_name_infers_96k():
     profile = resolve_context_profile("aquila-tq-96k")
     assert profile.num_ctx == 98304
-    assert profile.tier == "max"
-    assert profile.auto_scrape_urls == 3
-    assert profile.scrape_char_cap == 40_000
-    assert profile.max_scrape_chars_per_turn == 60_000
+    assert profile.tier == "extended"  # TurboQuant models auto-use extended tier
+    assert profile.auto_scrape_urls == 2
+    assert profile.scrape_char_cap == 28_000
+    assert profile.max_scrape_chars_per_turn == 30_000
 
 
 def test_model_name_infers_64k():
@@ -39,15 +39,15 @@ def test_model_name_infers_64k():
 def test_model_name_infers_32k():
     profile = resolve_context_profile("aquila-tq-32k")
     assert profile.num_ctx == 32768
-    assert profile.tier == "standard"
-    assert profile.auto_scrape_urls == 1
+    assert profile.tier == "extended"
+    assert profile.auto_scrape_urls == 2
 
 
 def test_num_ctx_override_env(monkeypatch):
     monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
     profile = resolve_context_profile("aquila-tq-96k")
     assert profile.num_ctx == 8192
-    assert profile.tier == "compact"
+    assert profile.tier == "extended"
 
 
 def test_forced_tier_env(monkeypatch):

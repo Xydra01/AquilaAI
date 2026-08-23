@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from tool_catalog import (
+from agent.policies import (
     TOOL_ALIASES,
     build_executable_registry,
     resolve_tool_name,

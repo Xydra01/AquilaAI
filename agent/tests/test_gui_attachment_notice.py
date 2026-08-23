@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from gui_formatting import format_attachment_notice_html
+from agent.gui import format_attachment_notice_html
 
 
 def test_attachment_notice_lists_files_and_chunks():

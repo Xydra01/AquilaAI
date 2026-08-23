@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from tools import normalize_workspace_path
+from agent.core import normalize_workspace_path
 from tool_library import code_canvas_tools
 
 

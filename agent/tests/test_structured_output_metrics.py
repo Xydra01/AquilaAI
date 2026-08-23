@@ -11,7 +11,7 @@ import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import (
+from agent.core import (
     OllamaClient,
     assemble_agent_response,
     build_strict_schema,
@@ -170,7 +170,12 @@ def structured_client():
     model = os.getenv("OLLAMA_MODEL", "aquila").strip()
     if not _model_available(model):
         pytest.fail(f"Model {model!r} not found on Ollama at {_base_url()}")
-    return OllamaClient()
+    client = OllamaClient()
+    os.environ["AQUILA_SKIP_WARMUP"] = "0"
+    ok, msg = client.ensure_warmup()
+    if not ok:
+        pytest.fail(f"warmup failed: {msg}")
+    return client
 
 
 def test_live_structured_success_rate(structured_client):

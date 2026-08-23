@@ -3,8 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from instance_registry import (
+from agent.storage import (
     create_instance,
+    delete_instance,
     ensure_default_instance,
     get_active_instance_id,
     get_instance,
@@ -45,3 +46,19 @@ def test_workspace_summary_path_exists_after_create():
     path = workspace_summary_path(inst.id)
     assert path.is_file()
     assert "Workspace summary" in path.read_text(encoding="utf-8")
+
+
+def test_delete_instance_removes_data_and_switches_active():
+    inst = create_instance("Disposable")
+    set_active_instance_id(inst.id)
+    assert get_instance(inst.id) is not None
+    delete_instance(inst.id)
+    assert get_instance(inst.id) is None
+    assert get_active_instance_id() == "default"
+    assert not workspace_summary_path(inst.id).exists()
+
+
+def test_delete_default_instance_raises():
+    ensure_default_instance()
+    with pytest.raises(ValueError, match="default"):
+        delete_instance("default")

@@ -5,8 +5,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from instance_registry import create_instance, ensure_default_instance
-from persona_registry import create_persona, get_persona
+from agent.storage import create_instance, ensure_default_instance
+from agent.storage import create_persona, get_persona
 from tool_library.persona_tools import (
     INIT_DOC_MIN_CHARS,
     clear_active_persona_build,

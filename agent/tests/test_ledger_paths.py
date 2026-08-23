@@ -3,7 +3,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from gui_state import resolve_ledger_path, render_step_ledger_html
+from agent.gui import resolve_ledger_path, render_step_ledger_html
 from conftest import load_fixture_ledger
 
 

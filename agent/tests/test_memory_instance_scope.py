@@ -1,6 +1,6 @@
 import pytest
 
-from memory import DualMemorySystem
+from agent.storage import DualMemorySystem
 
 
 @pytest.fixture

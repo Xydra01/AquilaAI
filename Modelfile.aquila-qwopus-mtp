@@ -1,0 +1,3 @@
+# DEPRECATED — MTP GGUF is not supported as a primary Ollama model.
+# Use modelfiles/Modelfile.Qwopus (standard Coder GGUF) instead.
+# See docs/ollama-qwopus.md

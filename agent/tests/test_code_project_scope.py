@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from tool_library import code_canvas_tools
 from tool_library import coding_tools
-from loop_engine import LoopEngine
+from agent.core import LoopEngine
 
 
 @pytest.fixture
@@ -75,7 +75,7 @@ def test_resolve_tool_path_and_read_file_in_place(code_workspace):
         "files": [],
         "test_targets": [],
     })
-    from tools import get_code_project_root, read_file, resolve_tool_path
+    from agent.core import get_code_project_root, read_file, resolve_tool_path
 
     assert get_code_project_root() == proj.resolve()
     assert resolve_tool_path("backend/main.py") == (proj / "backend" / "main.py").resolve()
@@ -112,7 +112,7 @@ def test_write_file_blocked_outside_project(code_workspace):
         "files": [],
         "test_targets": [],
     })
-    from tools import write_file
+    from agent.core import write_file
 
     blocked = write_file("../escape.md", "nope")
     assert "CODE MODE" in blocked
@@ -136,3 +136,34 @@ def test_write_project_markdown(code_workspace):
     result = code_canvas_tools.write_project_markdown("ARCHITECTURE.md", body)
     assert "✅" in result
     assert (proj / "ARCHITECTURE.md").read_text(encoding="utf-8").startswith("# Pink Sapphire Cove")
+
+
+def test_resolve_tool_path_bypasses_project_for_global_data(code_workspace):
+    proj = code_workspace / "proj"
+    proj.mkdir()
+    code_canvas_tools._save_state({
+        "project_name": "proj",
+        "root": str(proj),
+        "workspace_mode": "in_place",
+        "files": [],
+        "test_targets": [],
+    })
+    from agent.core import resolve_tool_path
+    
+    # Create a draft file in the global drafts directory
+    draft_dir = code_workspace / "Agent-Drafts"
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    draft_file = draft_dir / "sqlite_wal_windows.md"
+    draft_file.write_text("wal guide", encoding="utf-8")
+    
+    # 1. Resolve relative path to global draft file
+    res_rel = resolve_tool_path("Agent-Drafts/sqlite_wal_windows.md")
+    assert res_rel.resolve() == draft_file.resolve()
+    
+    # 2. Resolve absolute path to global draft file
+    res_abs = resolve_tool_path(str(draft_file))
+    assert res_abs.resolve() == draft_file.resolve()
+    
+    # 3. Resolve path with relative dot segments (one level up for the project root in test)
+    res_dots = resolve_tool_path(f"../Agent-Drafts/sqlite_wal_windows.md")
+    assert res_dots.resolve() == draft_file.resolve()

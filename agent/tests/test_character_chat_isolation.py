@@ -5,9 +5,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from gui_pages.character_page import CharacterPage
-from instance_registry import create_instance, ensure_default_instance
-from persona_registry import create_persona, load_chat_history, save_chat_history
+from agent.gui.gui_pages.character_page import CharacterPage
+from agent.storage import create_instance, ensure_default_instance
+from agent.storage import create_persona, load_chat_history, save_chat_history
 
 
 @pytest.fixture(autouse=True)

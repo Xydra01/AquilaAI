@@ -7,8 +7,8 @@ import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import OllamaClient, AQUILA_ACTION_SCHEMA, parse_agent_response
-from prompts import get_chat_prompt
+from agent.core import OllamaClient, AQUILA_ACTION_SCHEMA, parse_agent_response
+from agent.core import get_chat_prompt
 
 pytestmark = pytest.mark.live
 
@@ -32,10 +32,9 @@ def require_ollama():
         )
 
 
-def test_live_chat_mode_natural_language():
-    client = OllamaClient()
+def test_live_chat_mode_natural_language(ollama_warmed):
     prompt = get_chat_prompt("No facts.", "No experiences.")
-    result = client.chat(
+    result = ollama_warmed.chat(
         [
             {"role": "system", "content": prompt},
             {"role": "user", "content": "Say hello in one short sentence."},
@@ -43,31 +42,31 @@ def test_live_chat_mode_natural_language():
         temperature=0.5,
         stream=False,
         timeout=90,
+        surface="chat",
     )
     text = result["message"]["content"]
     assert text.strip()
     assert not text.strip().startswith("{")
 
 
-def test_live_task_mode_json_output():
-    client = OllamaClient()
+def test_live_task_mode_json_output(ollama_warmed):
     messages = [
         {
             "role": "system",
-            "content": "You must output strict JSON with reasoning and tools keys only.",
+            "content": "You must output strict JSON with a 'reasoning' string field and a 'tools' array.",
         },
-        {"role": "user", "content": "Call list_directory on path '.'"},
-        {"role": "assistant", "content": '```json\n{\n  "reasoning": "'},
+        {"role": "user", "content": "Call list_directory on path '.' Make sure to include the reasoning field."},
     ]
-    from main import get_global_agent
+    from agent.core import get_global_agent
 
-    result = client.chat(
+    result = ollama_warmed.chat(
         messages,
         temperature=0.2,
         format=get_global_agent().action_schema,
         stream=False,
         timeout=120,
+        surface="act",
     )
-    parsed = parse_agent_response('```json\n{\n  "reasoning": "' + result["message"]["content"])
+    parsed = parse_agent_response(result["message"]["content"])
     assert isinstance(parsed.get("reasoning"), str)
     assert isinstance(parsed.get("tools"), list)

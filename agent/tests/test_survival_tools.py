@@ -7,7 +7,7 @@ from unittest.mock import patch
 # Add the parent 'agent' directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from tools import read_file, write_file, replace_in_file, list_directory
+from agent.core import read_file, write_file, replace_in_file, list_directory
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):

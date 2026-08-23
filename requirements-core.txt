@@ -1,0 +1,56 @@
+# Aquila OS 3.5 — Core Dependencies
+# Only packages directly imported by agent/ code.
+# Install with: pip install -r requirements-core.txt
+#
+# The full environment freeze is in requirements.txt (includes transitive deps
+# and experimental packages). Use requirements-core.txt for clean installs.
+
+# --- GUI ---
+PySide6>=6.8
+PySide6-Fluent-Widgets>=1.7
+
+# --- LLM / inference ---
+requests>=2.31
+pydantic>=2.7
+
+# --- Memory ---
+chromadb>=1.0
+onnxruntime>=1.17                # Bundled MiniLM ONNX embeddings (no download at runtime)
+tokenizers>=0.19                 # Tokenizer for MiniLM ONNX
+# sentence-transformers optional; Aquila ships MiniLM ONNX instead of ST downloads
+
+# --- Web research ---
+beautifulsoup4>=4.12
+cloudscraper>=1.2.71
+markdownify>=0.12
+
+# --- File parsing ---
+PyMuPDF>=1.24                    # PDF text extraction (fitz)
+python-docx>=1.1                 # DOCX parsing
+openpyxl>=3.1                    # Excel attachment support (optional)
+Pillow>=10.0                     # Image conversions and TIFF parsing
+
+# --- Rendering ---
+Markdown>=3.6                    # HTML rendering in GUI
+
+# --- Remote companion ---
+fastapi>=0.110
+uvicorn>=0.29
+starlette>=0.37
+python-multipart>=0.0.7          # FastAPI file uploads
+websockets>=12.0                 # WebSocket transport
+httpx-sse>=0.4                   # SSE client for MCP
+
+# --- MCP integration ---
+mcp>=1.0
+
+# --- System ---
+psutil>=5.9                      # Process management
+python-dotenv>=1.0               # .env loading
+rich>=13.0                       # Console logging
+imageio-ffmpeg>=0.5              # Multimodal tool support
+
+# --- Development / testing ---
+pytest>=8.0
+pytest-qt>=4.3
+flake8>=7.0

@@ -6,7 +6,7 @@ import tempfile
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from run_logger import RunLogger, _truncate
+from agent.core import RunLogger, _truncate
 
 
 def test_truncate_flags():

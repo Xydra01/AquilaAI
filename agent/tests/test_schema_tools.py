@@ -3,7 +3,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import AQUILA_ACTION_SCHEMA, get_executable_tools
+from agent.core import AQUILA_ACTION_SCHEMA, get_executable_tools
 
 
 def test_schema_built_from_filtered_tools():

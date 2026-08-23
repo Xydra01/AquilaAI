@@ -8,7 +8,7 @@ import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import OllamaClient, parse_agent_response
+from agent.core import OllamaClient, parse_agent_response
 
 pytestmark = pytest.mark.live
 
@@ -57,11 +57,10 @@ def require_ollama():
         pytest.skip("Ollama not reachable — start scripts/ollama-serve-turboquant.ps1")
 
 
-def test_live_large_context_pong():
+def test_live_large_context_pong(ollama_warmed):
     """Prefill-heavy user message; ensures high num_ctx does not OOM immediately."""
-    client = OllamaClient()
     filler = "word " * 12_000
-    result = client.chat(
+    result = ollama_warmed.chat(
         [{"role": "user", "content": f"{filler}\n\nReply with exactly: pong"}],
         temperature=0.1,
         stream=False,
@@ -71,11 +70,11 @@ def test_live_large_context_pong():
     assert "pong" in content or len(content) > 0
 
 
-def test_live_strict_json_after_filler():
+def test_live_strict_json_after_filler(ollama_warmed):
     """Strict JSON tool schema still parses after a large user prefill."""
-    from main import build_strict_schema, get_executable_tools
+    from agent.core import build_strict_schema, get_executable_tools
 
-    client = OllamaClient()
+    client = ollama_warmed
     filler = _PREFILL_WORD * _PREFILL_REPEATS
     # Small schema keeps the health check focused on context size, not 74-tool anyOf size.
     tools = {k: get_executable_tools()[k] for k in ("list_directory",)}
@@ -90,12 +89,13 @@ def test_live_strict_json_after_filler():
             ),
         },
     ]
-    result = client.chat(
+    result = ollama_warmed.chat(
         messages,
         temperature=0.1,
         format=schema,
         stream=False,
         timeout=300,
+        surface="act",
     )
     content = result["message"]["content"]
     parsed = _parse_live_schema_response(content)

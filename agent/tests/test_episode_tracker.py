@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from episode_tracker import (
+from agent.core import (
     StepRunState,
     episode_count_from_history,
     should_inject_checkpoint_nudge,

@@ -1,4 +1,13 @@
-# TurboQuant Ollama on port 11435 (stock default is ollama-serve-stock.ps1 on 11434).
-# Aquila: OLLAMA_BASE_URL=http://127.0.0.1:11435  OLLAMA_MODEL=aquila-tq-64k
-# See docs/ollama-dual-setup.md
-& "$PSScriptRoot\ollama-serve-turboquant.ps1" -Port 11435 @args
+# RETIRED: this PowerShell script now forwards to the cross-platform bash version.
+# Prefer running scripts/ollama-serve-turboquant-port.sh directly (Git Bash on Windows).
+# This shim is transitional and will be removed in a future release.
+$ErrorActionPreference = "Stop"
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Sh = Join-Path $ScriptDir "ollama-serve-turboquant-port.sh"
+$Bash = Get-Command bash -ErrorAction SilentlyContinue
+if (-not $Bash) {
+    Write-Error "Git Bash 'bash' not found on PATH. Install Git for Windows: https://git-scm.com/download/win"
+    exit 1
+}
+& $Bash.Source $Sh @args
+exit $LASTEXITCODE

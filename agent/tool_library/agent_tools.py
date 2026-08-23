@@ -1,8 +1,8 @@
 # Tools that help Aquila function and complete tasks
 import inspect
 from rich.console import Console
-from memory_singleton import get_active_memory
-from context_budget import get_context_profile
+from agent.storage import get_active_memory
+from agent.policies import get_context_profile
 
 # --- NEW: QT THREADING BRIDGE ---
 USER_INPUT_CALLBACK = None
@@ -64,14 +64,43 @@ def _utf8_byte_chunks(text: str, max_bytes: int) -> list[str]:
             break
     return chunks
 
+def _note_similarity(new_text: str, existing_text: str) -> float:
+    """Jaccard similarity on word sets. Fast, no dependencies."""
+    import re
+    new_words = set(re.findall(r'\b\w+\b', new_text.lower()))
+    existing_words = set(re.findall(r'\b\w+\b', existing_text.lower()))
+    if not new_words or not existing_words:
+        return 0.0
+    intersection = new_words & existing_words
+    union = new_words | existing_words
+    return len(intersection) / len(union) if union else 0.0
 
-def save_research_note(task_name: str, gathered_data: str) -> str:
+
+def save_research_note(gathered_data: str, task_name: str | None = None) -> str:
     """
     CRITICAL RESEARCH TOOL: Use this to save facts, URLs, outlines, and data you find.
     Instead of trying to hold information in your head, save it to your SQLite scratchpad.
     Large payloads are split into multiple scratchpad rows (no silent truncation).
+
+    The OS binds notes to the active task id — do not pass task_name in JSON.
     """
+    from agent.core import resolve_task_id
+
+    task_name = resolve_task_id(task_name)
     data = gathered_data or ""
+    
+    # --- NEW: Deduplication check ---
+    existing_notes = get_active_memory().get_scratchpad_notes(task_name) or ""
+    if existing_notes.strip() and data.strip():
+        similarity = _note_similarity(data, existing_notes)
+        if similarity > 0.85:
+            return (
+                "❌ OS BLOCK: This note is ≥85% similar to existing scratchpad content. "
+                "Add NEW facts not already saved, or use a different tool. "
+                f"(similarity: {similarity:.0%})"
+            )
+    # --- END NEW ---
+    
     limit = _scratchpad_byte_limit()
     chunks = _utf8_byte_chunks(data, limit)
     memory = get_active_memory()
@@ -99,12 +128,12 @@ def subagent_explore(user_request: str, mode: str = "code") -> str:
     Request OS exploration brief (when runtime is wired) or fall back to recon tools.
     USE WHEN: first episode of explore step; otherwise use get_directory_tree + read_code_outline.
     """
-    from explore_agent import get_explore_runtime
+    from agent.core import get_explore_runtime
 
     rt = get_explore_runtime()
     if rt.get("client") and rt.get("executor"):
         try:
-            from explore_agent import run_brief
+            from agent.core import run_brief
 
             brief = run_brief(
                 client=rt["client"],
@@ -124,13 +153,17 @@ def subagent_explore(user_request: str, mode: str = "code") -> str:
     )
 
 
-def summarize_sources(task_name: str, max_chars: int = 2000) -> str:
+def summarize_sources(max_chars: int = 2000, task_name: str | None = None) -> str:
     """
     Return a capped summary of scratchpad notes for synthesize steps.
     USE WHEN: research synthesize step before final_report.
-    """
-    from tool_result import format_tool_result
 
+    The OS binds reads to the active task id — do not pass task_name in JSON.
+    """
+    from agent.core import resolve_task_id
+    from agent.core import format_tool_result
+
+    task_name = resolve_task_id(task_name)
     try:
         max_chars = int(max_chars)
     except (TypeError, ValueError):
@@ -141,26 +174,30 @@ def summarize_sources(task_name: str, max_chars: int = 2000) -> str:
     return format_tool_result("OK", "Sources / notes summary", notes)
 
 
-def checkpoint_step(task_name: str, summary: str) -> str:
+def checkpoint_step(summary: str, task_name: str | None = None) -> str:
     """
     Save an explicit checkpoint for the current plan step (scratchpad).
     USE WHEN: mid-step milestone before continuing tools.
     The OS also auto-checkpoints on step advance.
     """
-    return save_research_note(task_name, f"[checkpoint]\n{summary or ''}")
+    return save_research_note(f"[checkpoint]\n{summary or ''}", task_name=task_name)
 
 
 def save_task_deliverable_tool(
-    task_name: str,
     content: str,
     deliverable_type: str = "creation",
+    task_name: str | None = None,
 ) -> str:
     """
     Write a task deliverable file under Agent-Creations or Agent-Research.
     deliverable_type: creation | research
-    """
-    from main import save_task_deliverable
 
+    The OS binds the file to the active task id — do not pass task_name in JSON.
+    """
+    from agent.core import save_task_deliverable
+    from agent.core import resolve_task_id
+
+    task_name = resolve_task_id(task_name)
     mode = "research" if (deliverable_type or "").strip().lower() == "research" else "task"
     path = save_task_deliverable(task_name, mode, content or "", None)
     if path:
@@ -169,18 +206,22 @@ def save_task_deliverable_tool(
 
 
 def read_all_research_notes(
-    task_name: str,
     max_chars: int | None = None,
     tail: bool = True,
+    task_name: str | None = None,
 ) -> str:
     """
     Retrieve research notes from the scratchpad for the current task.
 
     Guardrail: by default this returns a capped view to prevent prompt blowups on 32k.
     Use max_chars to explicitly request a larger window when needed.
-    """
-    from context_budget import get_context_profile
 
+    The OS binds reads to the active task id — do not pass task_name in JSON.
+    """
+    from agent.policies import get_context_profile
+    from agent.core import resolve_task_id
+
+    task_name = resolve_task_id(task_name)
     notes = get_active_memory().get_scratchpad_notes(task_name) or ""
     if not notes.strip() or "No research notes found" in notes:
         return notes
@@ -200,7 +241,7 @@ def read_all_research_notes(
 
     slice_text = notes[-cap:] if tail else notes[:cap]
     marker = (
-        f"\n... [truncated to {cap} chars; call read_all_research_notes(task_name, max_chars=...) "
+        f"\n... [truncated to {cap} chars; call read_all_research_notes(max_chars=...) "
         "for more]"
     )
     return slice_text + marker

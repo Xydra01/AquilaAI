@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from prompts import (
+from agent.core import (
     get_autonomous_prompt,
     get_research_prompt,
     get_writing_prompt,

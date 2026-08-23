@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import JSON_REASONING_PREFILL, assemble_agent_response, parse_agent_response
+from agent.core import JSON_REASONING_PREFILL, assemble_agent_response, parse_agent_response
 
 
 def test_assemble_continuation_only():

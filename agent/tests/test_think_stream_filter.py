@@ -1,5 +1,5 @@
 """Qwen think-block stripping for conversational stream."""
-from main import _ThinkStreamFilter
+from agent.core import _ThinkStreamFilter
 
 
 def test_strips_think_block_before_answer():

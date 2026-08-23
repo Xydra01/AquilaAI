@@ -1,0 +1,5 @@
+# Low VRAM — full Aquila at reduced context (optional on <6 GB NVIDIA)
+FROM qwen3.5:9b
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.2

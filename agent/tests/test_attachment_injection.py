@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import format_attachment_context, Agent
+from agent.core import format_attachment_context, Agent
 
 
 def test_format_attachment_context_empty():
@@ -17,7 +17,7 @@ def test_format_attachment_context_empty():
 def test_format_attachment_context_includes_chunk():
     chunks = ["File content here"]
     result = format_attachment_context(chunks)
-    assert "ATTACHED CONTEXT" in result
+    assert "<attached_files>" in result
     assert "File content here" in result
 
 
@@ -51,4 +51,4 @@ def test_generate_plan_includes_attachment(monkeypatch):
     )
     assert plan  # valid JSON string returned
     assert "SECRET_ATTACHMENT_DATA" in captured["content"]
-    assert "ATTACHED CONTEXT" in captured["content"]
+    assert "<attached_files>" in captured["content"]

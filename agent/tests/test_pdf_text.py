@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from pdf_text import configure_mupdf_quiet, extract_pdf_text
+from agent.coding import configure_mupdf_quiet, extract_pdf_text
 
 pymupdf = pytest.importorskip("pymupdf")
 

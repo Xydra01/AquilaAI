@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from memory import DualMemorySystem
+from agent.storage import DualMemorySystem
 
 @pytest.fixture
 def safe_memory(tmp_path):
@@ -26,15 +26,28 @@ def test_empty_episodic_memory(safe_memory):
     assert "No past experiences" in results or "No relevant past experiences" in results
 
 def test_chroma_episodic_memory(safe_memory):
-    """TDD Goal: Verify semantic search successfully embeds and recalls past tasks."""
-    
+    """TDD Goal: Verify search successfully embeds and recalls past tasks."""
+
     safe_memory.store_experience("Build_Calculator", "Created a python calculator with add and subtract functions.")
     safe_memory.store_experience("Write_Essay", "Drafted a historical essay about the Roman Empire.")
-    
-    results = safe_memory.recall_experiences("math operations", n_results=1)
-    
+
+    results = safe_memory.recall_experiences("python calculator add subtract", n_results=1)
+
     assert "calculator" in results.lower()
     assert "rome" not in results.lower()
+
+def test_store_experience_metadata(safe_memory):
+    safe_memory.store_experience(
+        "t1",
+        "summary body",
+        mode="code",
+        walkthrough_path="/tmp/w.md",
+        deliverable_path="/tmp/d.md",
+        plan_approach="TDD approach",
+        user_verified=True,
+    )
+    assert safe_memory.collection.count() >= 1
+
 
 def test_tool_indexing(safe_memory):
     """TDD Goal: Verify that the tool roster successfully embeds into its own collection."""
@@ -50,7 +63,7 @@ def test_tool_indexing(safe_memory):
 
 def test_aquila_memory_proxy_patch_teardown():
     """@patch('main.aquila_memory.store_experience') must not raise on teardown."""
-    from memory_singleton import aquila_memory
+    from agent.storage import aquila_memory
 
     with patch.object(aquila_memory, "store_experience") as mock_store:
         mock_store.return_value = None

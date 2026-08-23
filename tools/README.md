@@ -4,14 +4,14 @@ Portable installs only — not committed to git.
 
 | Path | Install | Port | Purpose |
 |------|---------|------|---------|
-| `ollama-stock/` | `.\scripts\install-ollama-stock.ps1` | **11434** | **Default** — Qwen 3.5, HauhauCS, `aquila_heretic` |
-| `ollama-turboquant/` | `.\scripts\install-ollama-turboquant-pr.ps1` | **11435** | Optional TurboQuant — `aquila-tq-*` |
+| `ollama-stock/` | `./scripts/install-ollama-stock.sh` | **11434** | **Default** — Qwen 3.5, HauhauCS, `aquila_heretic` |
+| `ollama-turboquant/` | `./scripts/install-ollama-turboquant-pr.sh` | **11435** | Optional TurboQuant — `aquila-tq-*` |
 
-**Start servers**
+**Start servers** (Git Bash on Windows, native bash on macOS/Linux)
 
-```powershell
-.\scripts\ollama-serve-stock.ps1              # 11434
-.\scripts\ollama-serve-turboquant-port.ps1    # 11435
+```bash
+./scripts/ollama-serve-stock.sh              # 11434
+./scripts/ollama-serve-turboquant-port.sh    # 11435
 ```
 
 Quit **system tray Ollama** (0.24.x) before using 11434.

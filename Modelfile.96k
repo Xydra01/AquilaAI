@@ -1,0 +1,5 @@
+# Aquila max context (96k) — For Stock Ollama
+FROM qwen3.5:9b
+
+PARAMETER num_ctx 98304
+PARAMETER temperature 0.2

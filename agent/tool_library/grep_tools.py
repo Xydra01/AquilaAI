@@ -6,8 +6,8 @@ import inspect
 import os
 from pathlib import Path
 
-from tools import is_safe_path, resolve_tool_path, should_skip_dir
-from tool_result import format_tool_result
+from agent.core import is_safe_path, resolve_tool_path, should_skip_dir
+from agent.core import format_tool_result
 
 
 def grep_repo(

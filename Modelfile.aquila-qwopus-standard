@@ -1,0 +1,7 @@
+# DEPRECATED — use modelfiles/Modelfile.Qwopus and scripts/ollama-create-qwopus.sh
+# (This file had a broken hand-rolled TEMPLATE that broke native thinking.)
+
+FROM hf.co/Jackrong/Qwopus3.5-9B-Coder-GGUF:Q4_K_M
+
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.2

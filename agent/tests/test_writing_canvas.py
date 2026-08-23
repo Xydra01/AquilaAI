@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from writing_canvas import (
+from agent.coding import (
     markdown_from_draft,
     parse_markdown_to_draft,
     sync_canvas_to_draft,

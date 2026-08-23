@@ -1,0 +1,5 @@
+# CPU-only preset — lower context for RAM / speed
+FROM qwen3.5:9b
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.2

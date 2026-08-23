@@ -1,0 +1,316 @@
+================================================================================
+                         WELCOME TO AQUILA OS (3.5)
+              A local AI assistant that can actually do work on your PC
+================================================================================
+
+This document is for anyone curious about Aquila — whether you have never
+touched a command line, or you build software for a living. Skip to the
+section that matches you best.
+
+
+--------------------------------------------------------------------------------
+THE SHORT VERSION (30 SECONDS)
+--------------------------------------------------------------------------------
+
+Aquila is a desktop app that runs a smart assistant entirely on your computer.
+Unlike a website chatbot, Aquila can:
+
+  - Search the web and write research reports
+  - Edit files and run tests in your code projects
+  - Draft long documents section by section
+  - Break big requests into steps and work through them autonomously
+  - Remember facts and notes you save between sessions
+
+Your prompts and files stay on your machine. Aquila talks to a local AI engine
+(Ollama) — not a cloud service you have to pay per message.
+
+
+--------------------------------------------------------------------------------
+FOR EVERYONE: WHAT IS AQUILA, IN PLAIN LANGUAGE?
+--------------------------------------------------------------------------------
+
+Think of Aquila as a helpful coworker who lives on your computer.
+
+  - You open the app and pick a "mode" depending on what you want.
+  - You describe what you need in normal English.
+  - Aquila figures out a plan, uses tools (search, read files, write files,
+    run commands), and shows you progress as it goes.
+  - When it finishes, you get real outputs: markdown reports, edited code,
+    draft documents — saved to folders you can open yourself.
+
+It is NOT just a chat window that types back at you. It is built to finish
+tasks, not only answer questions.
+
+Privacy in one sentence:
+  The AI model runs locally (on your PC). Aquila is designed so your work
+  does not need to be uploaded to OpenAI, Google, or similar services.
+
+
+--------------------------------------------------------------------------------
+HOW IS THIS DIFFERENT FROM CHATGPT / CLAUDE / COPILOT?
+--------------------------------------------------------------------------------
+
+                    Chat website          Aquila OS
+  ---------------------------------------------------------------------------
+  Where it runs     Company's servers     Your computer
+  Can edit files    Usually no            Yes (with your permission)
+  Multi-step jobs   You guide each step   Aquila plans and executes steps
+  Web research      Built-in (cloud)      Private search via local Docker*
+  Long documents    One big reply         Writing mode builds section by section
+  Code projects     Paste snippets        Opens your repo, runs tests, patches files
+
+  * Web search uses SearXNG in Docker on your machine — a private search
+    aggregator, not a paid API key to Bing or Google.
+
+
+--------------------------------------------------------------------------------
+THE WORKSPACES (MODES) — PICK THE RIGHT TOOL FOR THE JOB
+--------------------------------------------------------------------------------
+
+  CHAT MODE
+    Best for: quick questions, brainstorming, explaining concepts.
+    Like: texting a knowledgeable friend.
+    Example: "Explain why leap years exist in two paragraphs."
+
+  AUTONOMOUS TASK MODE
+    Best for: multi-step projects that mix several kinds of work.
+    Like: giving an assistant a project brief and checking in on progress.
+    Example: "Research topic X, then draft a summary document, then save it
+              as a file in my project folder."
+
+  RESEARCH MODE
+    Best for: web research turned into a structured report with sources.
+    Like: a junior analyst who searches, reads pages, takes notes, and writes
+          a final report.
+    Example: "Compare local vs cloud AI costs for small businesses in 2026."
+    Tip: You can keep a personal research journal in the app; Aquila reads it
+         on every step so your notes are never forgotten mid-task.
+
+  WRITING MODE
+    Best for: essays, guides, documentation, long markdown documents.
+    Like: a writing partner who drafts one section at a time and compiles
+          the full document when done.
+    Example: "Write a 5-section guide on home network security."
+
+  CODE MODE
+    Best for: Python-first development with tests (TDD-style workflow).
+    Like: a coding partner with a built-in editor, file tree, and test runner.
+    Example: "Add pytest coverage for the auth module and fix failing tests."
+
+  CHARACTER AI MODE
+    Best for: roleplay and persona-based conversation (not task automation).
+    Like: a character from a story or game who stays in character.
+    You create a persona, optionally feed it lore documents, then chat.
+
+  LEARN MODE
+    Best for: structured learning — courses, syllabi, and document archives.
+    Like: a tutor plus a "study this pile of PDFs" workspace.
+
+  SETTINGS
+    Not a task mode — configure which AI model to use, connection options,
+    and advanced behavior. Most people only touch this once during setup.
+
+
+--------------------------------------------------------------------------------
+FOR CASUAL USERS: WHAT DO I NEED? IS THIS FOR ME?
+--------------------------------------------------------------------------------
+
+You need:
+  - A Windows or macOS computer (Linux works for developers running from source)
+  - A decent amount of RAM (16 GB recommended) and ideally a GPU
+  - Ollama installed (free local AI runtime — like a engine Aquila drives)
+  - For web research: Docker (runs a private search helper in the background)
+
+You do NOT need:
+  - To know how to code
+  - A monthly subscription to a cloud AI service
+  - To trust a company with your documents (they stay local)
+
+Good fit if you want:
+  - Private research and writing on sensitive topics
+  - An assistant that saves real files you can keep
+  - Control over what the AI can touch on your disk
+
+Maybe not a fit if you want:
+  - Zero setup — Aquila is powerful but not "open browser tab and go"
+  - The absolute smartest model on earth (local models trade some capability
+    for privacy and no usage fees)
+  - Fully hands-off magic with zero review (you should skim outputs, especially
+    for research and code)
+
+
+--------------------------------------------------------------------------------
+FOR INTERMEDIATE USERS: HOW DOES IT ACTUALLY WORK?
+--------------------------------------------------------------------------------
+
+Aquila has two layers:
+
+  1. THE APP (Aquila OS)
+     A desktop program (PySide6) with separate workspaces per mode, file
+     attachments, progress logs, and saved task state.
+
+  2. THE BRAIN (local LLM via Ollama)
+     A fine-tuned workflow model (based on Qwen 3.5 9B, family name "aquila")
+     running through Ollama on localhost — typically port 11434.
+
+The important design choice:
+  The model does not "run code" by typing Python into chat. Instead, every
+  action turn, the model outputs strict JSON describing which TOOL to call
+  (search the web, write a file, run pytest, save a note, etc.). Aquila's
+  "operating system" layer executes those tools, records results, and sends
+  them back for the next turn.
+
+That loop looks like:
+
+  Plan (optional)  -->  Step 1: think + call tools  -->  see results
+                    -->  Step 2: think + call tools  -->  see results
+                    -->  ...
+                    -->  Final report saved to disk
+
+Task progress is saved in JSON "ledgers" on disk (Agent-Tasks/, Agent-Plans/).
+If you close the app mid-task, you can often resume where you left off.
+
+Memory:
+  - SQLite stores durable facts you ask it to remember
+  - ChromaDB stores searchable episodic memory (past tool use, notes)
+  - Per-instance "Agent Memory" in Chat is separate notes you edit yourself
+
+Web search:
+  SearXNG runs in Docker at localhost:8080. Aquila queries it; no API keys.
+
+
+--------------------------------------------------------------------------------
+FOR DEVELOPERS: ARCHITECTURE IN ONE PAGE
+--------------------------------------------------------------------------------
+
+Stack:
+  - Python 3.11+, PySide6 GUI, Ollama /api/chat native API
+  - Strict JSON schema constrained decoding for tool turns (Pydantic validation)
+  - LoopEngine (agent/core/loop_engine.py): reflect/act turns, step budgets,
+    milestone tracking, parse-error recovery
+  - DualMemorySystem: SQLite facts + Chroma episodic vectors (bundled MiniLM
+    ONNX in packaged builds — no surprise S3 download)
+  - MCP bridge: external tools as mcp__{server}__{tool} in schema
+  - Remote Companion: FastAPI + PWA over Tailscale (optional)
+
+Key paths (user data root, typically %LOCALAPPDATA%/Aquila on Windows):
+  Agent-Tasks/     Autonomous + writing + code ledgers
+  Agent-Plans/     Research ledgers
+  Agent-Research/  Research deliverables (.md)
+  Agent-Drafts/    Writing deliverables
+  Agent-Code/      Code canvas buffer + synced workspace
+  Agent-Logs/      Human .log + JSONL event streams per run
+  Agent-Instances/ Per-instance profiles and chat memory
+
+Models:
+  - aquila / aquila_qwopus — stock Ollama :11434 (Qwopus Coder recommended GPU)
+  - aquila-tq-{32k,64k,96k} — TurboQuant extended context on :11435
+  - Modelfile sets num_ctx; agent applies surface-specific timeouts and caps
+
+Testing:
+  pytest suite (~80 modules, 600+ tests) including live Ollama smoke tests
+  when OLLAMA_MODEL is available.
+
+Repo entry points:
+  README.md          User-facing setup and modes
+  ARCHITECTURE.md    Deep internal map
+  agent/gui/gui.py   Desktop shell
+  agent/core/main.py Agent + OllamaClient + planning
+
+
+--------------------------------------------------------------------------------
+A SIMPLE ANALOGY (ALL LEVELS)
+--------------------------------------------------------------------------------
+
+  Cloud chatbot     = asking a smart stranger on the phone
+  Aquila OS         = hiring an assistant with a desk in your house
+
+  The assistant can use your filing cabinet (files), call the library
+  (web search), type up reports (writing mode), and work in your workshop
+  (code mode). You set the rules. The work stays home.
+
+
+--------------------------------------------------------------------------------
+WHAT A FIRST SESSION MIGHT LOOK LIKE
+--------------------------------------------------------------------------------
+
+  1. Install Aquila + Ollama + (optional) Docker for search
+  2. Open Aquila, create an "instance" (a workspace profile)
+  3. Try Chat: ask a question, watch it stream back
+  4. Try Research: give a topic, watch the plan appear, approve it, see the
+     execution log fill in, open the finished .md report
+  5. Glance at Agent-Logs/ if something fails — JSONL events show each LLM
+     call, tool run, and timeout
+
+Expect learning curve on step 4 — research and autonomous modes are where
+Aquila shines, but they take longer than chat because real work is happening.
+
+
+--------------------------------------------------------------------------------
+HONEST LIMITS (WORTH KNOWING UP FRONT)
+--------------------------------------------------------------------------------
+
+  - Local models can hallucinate or miss nuance — verify important facts
+  - First run may download large model files (several GB) via Ollama
+  - GPU strongly recommended; CPU-only is slow
+  - Code mode is Python-first (pytest/flake8); other languages have lighter support
+  - Aquila executes tools on YOUR machine — treat it like running scripts yourself
+  - Some features (Remote Companion, MCP, Learn Mode) are newer — expect rough edges
+
+
+--------------------------------------------------------------------------------
+COMING IN FUTURE VERSIONS
+--------------------------------------------------------------------------------
+
+  Planned for 4.0 (not shipped yet):
+  - Global user preferences / cross-instance memory editor in Settings
+  - Deeper inter-modal orchestration UI
+
+  See README.md "Known limitations and 4.0 direction" for the living roadmap.
+
+
+--------------------------------------------------------------------------------
+WHERE TO GO NEXT
+--------------------------------------------------------------------------------
+
+  New user setup       README.md (Installation + Quick start)
+  Character AI         docs/cai-mode.md
+  Learn Mode           docs/learn-mode.md
+  Remote phone access  docs/remote-companion.md
+  Developer deep dive  ARCHITECTURE.md
+
+  Project home: Aquila OS — local-first autonomous agent
+  Version this intro matches: 3.5
+
+
+--------------------------------------------------------------------------------
+QUESTIONS PEOPLE OFTEN ASK
+--------------------------------------------------------------------------------
+
+  Q: Is my data sent to the cloud?
+  A: The AI inference runs locally via Ollama. Aquila is built for local-first
+     use. Web research fetches public web pages through your own search stack.
+
+  Q: Do I need to pay for API credits?
+  A: No cloud LLM API required. You need hardware capable of running the model.
+
+  Q: Can it access my whole hard drive?
+  A: Tools operate within configured workspace roots and project scopes. Code
+     mode especially constrains writes to the active project. Still: only run
+     Aquila on machines and folders you trust it to touch.
+
+  Q: How is this different from "Agent" features in Cursor or Copilot?
+  A: Aquila is a standalone OS-style agent framework with its own GUI, memory,
+     ledgers, and mode-specific workflows — not an IDE plugin. You can integrate
+     via MCP, but it is designed to run as its own environment.
+
+  Q: What model should I use?
+  A: For most GPU users: aquila_qwopus on port 11434. For very long context
+     workloads: TurboQuant variants on 11435 (see docs/ollama-turboquant.md).
+
+
+================================================================================
+Thank you for your interest in Aquila. Start with Chat, then try Research or
+Writing when you want to see what "agent" means in practice — not just talk,
+but finished work you can keep.
+================================================================================

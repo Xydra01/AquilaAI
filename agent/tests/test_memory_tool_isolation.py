@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from memory import DualMemorySystem
+from agent.storage import DualMemorySystem
 
 
 @pytest.fixture
@@ -33,12 +33,12 @@ def test_tool_collections_are_per_instance(mem_a, mem_b):
     assert "beta" in mem_b.tool_collection.name
 
 
-def test_recover_scratchpad_wrong_task_slug(mem_a):
+def test_recover_scratchpad_does_not_cross_tasks(mem_a):
     mem_a.save_scratchpad_note(
         "wrong_topic_slug",
         "## EXECUTIVE SUMMARY\n\n" + ("Detail. " * 120),
     )
-    from research_deliverable import recover_research_body
+    from agent.research import recover_research_body
 
     body = recover_research_body(mem_a, "conductacomprehensive_1779419640")
-    assert "EXECUTIVE SUMMARY" in body
+    assert body == ""

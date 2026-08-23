@@ -1,6 +1,11 @@
 # Build Ollama from PR #15505 (full TurboQuant: tq3, tq3k, ...).
 # Uses Visual Studio + NVIDIA nvcc (required - LLVM/clang CUDA builds fail at runtime with PTX errors).
 #
+# NOTE: Unlike the other scripts, this one is NOT a thin shim. The Windows GPU
+# build genuinely needs the MSVC Developer Shell, so the PowerShell build logic
+# is kept here. For macOS/Linux use the bash port (install-ollama-turboquant-pr.sh),
+# which the bash version also delegates back to here when run on Windows.
+#
 # Usage:
 #   .\scripts\install-ollama-turboquant-pr.ps1
 #   .\scripts\install-ollama-turboquant-pr.ps1 -RebuildCuda   # only redo ggml-cuda.dll

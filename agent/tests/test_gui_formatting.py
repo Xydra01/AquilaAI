@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from gui_formatting import format_ledger_html, pretty_json_text
+from agent.gui import format_ledger_html, pretty_json_text
 
 
 def test_pretty_json_text():

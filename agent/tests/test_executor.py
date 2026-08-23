@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import ToolExecutor
+from agent.core import ToolExecutor
 
 #Dummy Tools for Testing
 def mock_say_hello(name: str):

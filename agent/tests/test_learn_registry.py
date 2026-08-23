@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from learn_registry import (
+from agent.storage import (
     advance_mastery_on_pass,
     create_course,
     create_archive,

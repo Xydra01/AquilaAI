@@ -6,9 +6,9 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import gui
-from instance_registry import create_instance, ensure_default_instance
-from persona_registry import create_persona, initialization_path
+from agent import gui
+from agent.storage import create_instance, ensure_default_instance
+from agent.storage import create_persona, initialization_path
 
 
 @pytest.fixture(autouse=True)

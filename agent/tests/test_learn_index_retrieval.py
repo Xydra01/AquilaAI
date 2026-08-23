@@ -1,5 +1,5 @@
 """Learn index retrieval caps and formatting."""
-from learn_index import format_retrieval_block
+from agent.storage import format_retrieval_block
 
 
 def test_format_retrieval_caps_total_chars():

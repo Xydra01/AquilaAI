@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from tool_catalog import TOOL_ALIASES, build_executable_registry
+from agent.policies import TOOL_ALIASES, build_executable_registry
 
 
 def test_alias_targets_exist():

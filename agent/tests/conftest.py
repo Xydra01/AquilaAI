@@ -10,7 +10,10 @@ import pytest
 AGENT_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = AGENT_DIR.parent
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+sys.path.insert(0, str(AGENT_DIR.parent))
+import agent
 sys.path.insert(0, str(AGENT_DIR))
+
 
 
 def _configure_windows_utf8_stdio() -> None:
@@ -39,6 +42,52 @@ def pytest_configure(config):
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
     os.environ.setdefault("CHROMA_TELEMETRY", "False")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Unit tests rely on mocking network calls; warmup would change call order/endpoints
+    # and break test expectations when `.env` enables warmup.
+    os.environ["AQUILA_SKIP_WARMUP"] = "1"
+
+
+@pytest.fixture(autouse=True)
+def sanitize_test_environment():
+    """Prevent user shell or module-level load_dotenv from bleeding into test assertions."""
+    os.environ.pop("AQUILA_DYNAMIC_LOOP", None)
+    os.environ.pop("OLLAMA_MODEL", None)
+    os.environ.pop("AQUILA_TASK_EPISODE_MAX", None)
+    os.environ.pop("AQUILA_REPEAT_PENALTY", None)
+    os.environ.pop("AQUILA_TQ_REPEAT_PENALTY", None)
+    os.environ.pop("AQUILA_STREAM_GUARD", None)
+    os.environ.pop("OLLAMA_NUM_CTX", None)
+    os.environ.pop("AQUILA_CONTEXT_TIER", None)
+    os.environ.pop("AQUILA_KILL_SWITCH_MODE", None)
+    os.environ.pop("AQUILA_LIGHT_RESEARCH_SCRAPE_CHAR_CAP", None)
+    os.environ.pop("AQUILA_LIGHT_RESEARCH_MAX_READS", None)
+    os.environ.pop("AQUILA_LIGHT_RESEARCH_READ_MAX_CHARS", None)
+    os.environ.pop("AQUILA_LIGHT_RESEARCH_MAX_SEARCHES", None)
+    os.environ.pop("AQUILA_LIGHT_RESEARCH_MAX_QUERY_WORDS", None)
+    os.environ.pop("AQUILA_LIGHT_RESEARCH_USER_URL_READS", None)
+    os.environ.pop("AQUILA_TIMEOUT_PER_1K_TOKENS", None)
+    os.environ.pop("AQUILA_COMPACT_CHAT", None)
+    os.environ.pop("LIGHT_RESEARCH_MAX_URLS", None)
+    os.environ.pop("LIGHT_RESEARCH_MAX_SEARCHES", None)
+    os.environ.pop("LIGHT_RESEARCH_MAX_QUERY_WORDS", None)
+    os.environ.pop("LIGHT_RESEARCH_USER_URL_READS", None)
+    os.environ["AQUILA_SKIP_WARMUP"] = "1"
+    os.environ["AQUILA_WARMUP_ON_START"] = "0"
+    # Tests should not block on user plan approval.
+    os.environ["AQUILA_PLAN_REVIEW"] = "0"
+    yield
+
+
+def _ollama_reachable() -> bool:
+    import requests
+
+    base = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
+    try:
+        return (
+            requests.get(f"{base.rstrip('/')}/api/tags", timeout=3).status_code == 200
+        )
+    except Exception:
+        return False
 
 
 def _cleanup_qt_runtime() -> None:
@@ -89,11 +138,13 @@ def _qt_test_cleanup(request):
 def reset_singleton_caches():
     """Close Chroma clients after each test — do not eagerly reopen on setup."""
     yield
-    from context_budget import reset_runtime_context
-    from memory_singleton import reset_memory_cache
+    from agent.policies import reset_runtime_context
+    from agent.storage import reset_memory_cache
+    from agent.core import reset_agent_instances
 
     reset_memory_cache()
     reset_runtime_context()
+    reset_agent_instances()
 
 
 @pytest.fixture(autouse=True)
@@ -115,6 +166,21 @@ def _announce_live_test(request):
         print(f"\n>>> LIVE test (Ollama — may take several minutes): {request.node.nodeid}", flush=True)
 
 
+
+
+@pytest.fixture(scope="session")
+def ollama_warmed():
+    """Session-scoped Ollama client with model warmed (live tests only)."""
+    if not _ollama_reachable():
+        pytest.skip("Ollama not reachable")
+    from agent.core import OllamaClient
+
+    os.environ["AQUILA_SKIP_WARMUP"] = "0"
+    client = OllamaClient()
+    ok, msg = client.ensure_warmup()
+    if not ok:
+        pytest.skip(f"warmup failed: {msg}")
+    return client
 
 
 @pytest.fixture
@@ -151,7 +217,7 @@ def tmp_agent_dirs(tmp_path, monkeypatch):
         (tmp_path / name).mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
-    from memory_singleton import reset_memory_cache
+    from agent.storage import reset_memory_cache
 
     reset_memory_cache()
     return tmp_path

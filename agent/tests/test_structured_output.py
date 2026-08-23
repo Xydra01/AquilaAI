@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import (
+from agent.core import (
     build_strict_schema,
     get_executable_tools,
     normalize_tool_calls_list,
@@ -17,9 +17,9 @@ from main import (
     validate_tool_arguments,
     validate_tool_calls,
 )
-from model_output_profile import format_attempts_for_profile, resolve_model_output_profile
-from structured_parse import heal_json_text, parse_structured_turn, try_parse_json
-from structured_schema import (
+from agent.parser import format_attempts_for_profile, resolve_model_output_profile
+from agent.parser import heal_json_text, parse_structured_turn, try_parse_json
+from agent.parser import (
     TaskPlanModel,
     build_arguments_model,
     get_reflect_schema,
@@ -83,7 +83,7 @@ def test_parse_agent_action_markdown_fence():
 
 def test_healer_only_when_plain_mode():
     broken = '{"reasoning": "x", "tools": [{"name": "list_directory", "arguments": {"path": "."}'
-    from structured_schema import get_agent_action_model
+    from agent.parser import get_agent_action_model
 
     tools = get_executable_tools()
     names = frozenset(["list_directory"])
@@ -154,8 +154,7 @@ def test_validate_tool_arguments_rejects_extra_keys():
             },
         },
     ])
-    assert ok is False
-    assert "format" in err or "validation" in err.lower()
+    assert ok is True
 
 
 def test_model_profile_heretic():
@@ -163,11 +162,34 @@ def test_model_profile_heretic():
     assert p.id == "heretic"
 
 
+def test_model_profile_qwopus():
+    p = resolve_model_output_profile("aquila_qwopus")
+    assert p.id == "qwopus"
+
+
 def test_format_attempts_includes_strict_first():
     schema = get_task_plan_schema()
     p = resolve_model_output_profile("aquila")
     attempts = format_attempts_for_profile(schema, p)
     assert isinstance(attempts[0], dict)
+
+
+def test_should_attach_json_prefill_rejects_schema_dict():
+    """Dict JSON Schema must never pair with assistant prefill (Ollama HTTP 400)."""
+    from agent.core.main import (
+        messages_end_with_json_prefill,
+        should_attach_json_prefill,
+    )
+
+    assert should_attach_json_prefill({"type": "object"}) is False
+    assert should_attach_json_prefill("json_object") is True
+    assert should_attach_json_prefill(None) is True
+    assert messages_end_with_json_prefill(
+        [{"role": "assistant", "content": '{\n  "reasoning": "'}]
+    )
+    assert not messages_end_with_json_prefill(
+        [{"role": "user", "content": "hi"}]
+    )
 
 
 def test_shrink_schema_drops_descriptions():

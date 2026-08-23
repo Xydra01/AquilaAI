@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from recon_policy import (
+from agent.policies import (
     CODE_RECON_PINNED,
     expand_code_documentation_plan,
     is_documentation_task,
@@ -14,9 +14,9 @@ from recon_policy import (
     pinned_tools_for_code_step,
     routing_document_for_tool,
 )
-from tool_policy import build_allowed_tool_names
-from loop_engine import LoopEngine
-from path_visit_registry import PathVisitRegistry
+from agent.policies import build_allowed_tool_names
+from agent.core import LoopEngine
+from agent.coding import PathVisitRegistry
 
 
 def test_pinned_recon_on_code_explore():
@@ -68,7 +68,7 @@ def test_normalize_search_files_doubled_agent_code():
 
 
 def test_resolve_tool_path_strips_agent_code_prefix(tmp_path, monkeypatch):
-    from tools import resolve_tool_path
+    from agent.core import resolve_tool_path
     from tool_library import code_canvas_tools
 
     code_dir = tmp_path / "Agent-Code"

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
-from gui_richtext import SmartScrollTextEdit
+from agent.gui import SmartScrollTextEdit
 
 
 @pytest.fixture(scope="module")

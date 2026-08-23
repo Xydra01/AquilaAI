@@ -7,8 +7,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from tools import get_code_project_root, is_safe_path, resolve_tool_path
-from tool_result import format_tool_result
+from agent.core import get_code_project_root, is_safe_path, resolve_tool_path
+from agent.core import format_tool_result
 
 _ALLOW_PREFIXES = (
     "pytest",

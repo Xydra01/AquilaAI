@@ -9,7 +9,7 @@ import psutil
 import inspect
 
 # Firewall Import
-from tools import is_safe_path, resolve_tool_path, should_skip_dir
+from agent.core import is_safe_path, resolve_tool_path, should_skip_dir
 
 def search_in_file(file_path: str, keyword: str = None, **kwargs) -> str:
     """Searches for a keyword in a file."""

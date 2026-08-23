@@ -8,7 +8,7 @@ import requests
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import OllamaClient, AQUILA_ACTION_SCHEMA, parse_agent_response
+from agent.core import OllamaClient, AQUILA_ACTION_SCHEMA, parse_agent_response
 
 pytestmark = pytest.mark.live
 
@@ -33,9 +33,8 @@ def require_ollama():
         )
 
 
-def test_live_non_streaming_shape():
-    client = OllamaClient()
-    result = client.chat(
+def test_live_non_streaming_shape(ollama_warmed):
+    result = ollama_warmed.chat(
         [{"role": "user", "content": "Reply with exactly: pong"}],
         temperature=0.1,
         stream=False,
@@ -47,24 +46,23 @@ def test_live_non_streaming_shape():
     assert len(result["message"]["content"]) > 0
 
 
-def test_live_strict_json_schema():
-    client = OllamaClient()
+def test_live_strict_json_schema(ollama_warmed):
+    from agent.core import get_global_agent
+
     messages = [
         {"role": "system", "content": "Output JSON only with reasoning and tools array."},
         {"role": "user", "content": "List current directory using list_directory tool."},
-        {"role": "assistant", "content": '```json\n{\n  "reasoning": "'},
     ]
-    from main import get_global_agent
 
-    result = client.chat(
+    result = ollama_warmed.chat(
         messages,
         temperature=0.1,
         format=get_global_agent().action_schema,
         stream=False,
         timeout=120,
+        surface="act",
     )
     content = result["message"]["content"]
-    full = '```json\n{\n  "reasoning": "' + content
-    parsed = parse_agent_response(full)
+    parsed = parse_agent_response(content)
     assert "tools" in parsed
     assert isinstance(parsed.get("tools"), list)
