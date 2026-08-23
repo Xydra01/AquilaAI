@@ -389,6 +389,189 @@ class CapabilityResearchPolicy(ResearchPolicy):
         return f"Completed capability {cap_id}."
 
 
+class CapabilityPersonaPolicy(CharacterBuildPolicy):
+    """Character build act loop policy for capability invocations."""
+
+    _WRITE_CAPS = frozenset({"cap.persona.write_initialization@v1"})
+    _FINALIZE_CAPS = frozenset({"cap.persona.finalize@v1"})
+    _GATHER_CAPS = frozenset({"cap.persona.gather_lore@v1"})
+    _INGEST_CAPS = frozenset({"cap.persona.ingest_sources@v1"})
+
+    def forbidden_capabilities_on_step(self) -> frozenset[str]:
+        if self.step_kind in ("read", "search"):
+            return self._WRITE_CAPS | self._FINALIZE_CAPS
+        if self.step_kind == "synthesize":
+            return self._GATHER_CAPS
+        return frozenset()
+
+    def validate_capability_call(
+        self,
+        cap_id: str,
+        *,
+        tools_succeeded: set[str] | None = None,
+        **kwargs,
+    ) -> str | None:
+        cap_id = (cap_id or "").strip()
+        forbidden = self.forbidden_capabilities_on_step()
+        if cap_id in forbidden:
+            if cap_id in self._WRITE_CAPS:
+                return (
+                    f"❌ OS BLOCK: {self.step_kind} step is ingest only. "
+                    "Use cap.persona.ingest_sources@v1 or gather_lore; "
+                    "write_initialization belongs on synthesize."
+                )
+            if cap_id in self._GATHER_CAPS:
+                return (
+                    "❌ OS BLOCK: gather_lore is not used on synthesize. "
+                    "Call cap.persona.write_initialization@v1."
+                )
+            return (
+                f"❌ OS BLOCK: `{cap_id}` is not allowed on persona {self.step_kind}."
+            )
+        succeeded = tools_succeeded or set()
+        if (
+            cap_id in self._INGEST_CAPS
+            and "cap.persona.ingest_sources@v1" in succeeded
+        ):
+            return (
+                "❌ OS BLOCK: Ingest already ran this step. "
+                "Call mark_objective_complete to advance."
+            )
+        if (
+            cap_id in self._WRITE_CAPS
+            and "cap.persona.write_initialization@v1" in succeeded
+        ):
+            return (
+                "❌ OS BLOCK: initialization.md already written this step. "
+                "Advance to finalize."
+            )
+        return None
+
+    def should_auto_advance_after_capability(
+        self,
+        cap_id: str,
+        result_ok: bool,
+        *,
+        step_kind: str = "",
+    ) -> bool:
+        if not result_ok:
+            return False
+        kind = (step_kind or self.step_kind or "").strip().lower()
+        if cap_id in self._INGEST_CAPS and kind in ("read", "search"):
+            return True
+        if cap_id in self._GATHER_CAPS and kind == "search":
+            return True
+        if cap_id in self._WRITE_CAPS and kind == "synthesize":
+            return True
+        return False
+
+    def advance_summary_for_capability(self, cap_id: str) -> str:
+        if cap_id in self._INGEST_CAPS:
+            return "Ingested persona source material into scratchpad."
+        if cap_id in self._GATHER_CAPS:
+            return "Gathered persona lore."
+        if cap_id in self._WRITE_CAPS:
+            return "Wrote initialization.md."
+        if cap_id in self._FINALIZE_CAPS:
+            return "Finalized persona."
+        return f"Completed capability {cap_id}."
+
+
+class CapabilityLearnPolicy(LearnSyllabusPolicy):
+    """Learn syllabus build act loop policy for capability invocations."""
+
+    _WRITE_CAPS = frozenset({"cap.learn.write_syllabus@v1"})
+    _FINALIZE_CAPS = frozenset({"cap.learn.finalize_course@v1"})
+    _GATHER_CAPS = frozenset({"cap.learn.gather_topic_sources@v1"})
+    _INGEST_CAPS = frozenset({"cap.learn.ingest_course_materials@v1"})
+    _ASSESS_CAPS = frozenset({"cap.learn.generate_assessments@v1"})
+
+    def forbidden_capabilities_on_step(self) -> frozenset[str]:
+        if self.step_kind in ("read", "search"):
+            return self._WRITE_CAPS | self._FINALIZE_CAPS | self._ASSESS_CAPS
+        if self.step_kind == "synthesize":
+            return self._GATHER_CAPS
+        return frozenset()
+
+    def validate_capability_call(
+        self,
+        cap_id: str,
+        *,
+        tools_succeeded: set[str] | None = None,
+        **kwargs,
+    ) -> str | None:
+        cap_id = (cap_id or "").strip()
+        forbidden = self.forbidden_capabilities_on_step()
+        if cap_id in forbidden:
+            if cap_id in self._WRITE_CAPS:
+                return (
+                    f"❌ OS BLOCK: {self.step_kind} step is ingest only. "
+                    "write_syllabus belongs on synthesize."
+                )
+            return (
+                f"❌ OS BLOCK: `{cap_id}` is not allowed on syllabus {self.step_kind}."
+            )
+        succeeded = tools_succeeded or set()
+        if (
+            cap_id in self._INGEST_CAPS
+            and "cap.learn.ingest_course_materials@v1" in succeeded
+        ):
+            return (
+                "❌ OS BLOCK: Course materials already ingested this step. "
+                "Call mark_objective_complete to advance."
+            )
+        if (
+            cap_id in self._WRITE_CAPS
+            and "cap.learn.write_syllabus@v1" in succeeded
+        ):
+            return (
+                "❌ OS BLOCK: syllabus.json already written this step. "
+                "Advance to finalize."
+            )
+        if cap_id not in (
+            "cap.learn.write_syllabus@v1",
+            "cap.learn.ingest_course_materials@v1",
+            "cap.learn.gather_topic_sources@v1",
+            "cap.learn.finalize_course@v1",
+            "cap.learn.generate_assessments@v1",
+        ) and cap_id.startswith("cap.learn."):
+            return (
+                f"❌ OS BLOCK: Unknown/forbidden learn capability `{cap_id}`. "
+                "On synthesize use only `cap.learn.write_syllabus@v1` with "
+                "arguments.content = syllabus JSON string."
+            )
+        return None
+
+    def should_auto_advance_after_capability(
+        self,
+        cap_id: str,
+        result_ok: bool,
+        *,
+        step_kind: str = "",
+    ) -> bool:
+        if not result_ok:
+            return False
+        kind = (step_kind or self.step_kind or "").strip().lower()
+        if cap_id in self._INGEST_CAPS and kind in ("read", "search"):
+            return True
+        if cap_id in self._GATHER_CAPS and kind == "search":
+            return True
+        if cap_id in self._WRITE_CAPS and kind == "synthesize":
+            return True
+        return False
+
+    def advance_summary_for_capability(self, cap_id: str) -> str:
+        if cap_id in self._INGEST_CAPS:
+            return "Ingested course research into scratchpad."
+        if cap_id in self._GATHER_CAPS:
+            return "Gathered topic sources."
+        if cap_id in self._WRITE_CAPS:
+            return "Wrote syllabus.json."
+        if cap_id in self._FINALIZE_CAPS:
+            return "Finalized course."
+        return f"Completed capability {cap_id}."
+
+
 def get_step_policy(
     mode: str,
     step_kind: str,
@@ -398,13 +581,13 @@ def get_step_policy(
     offline_research: bool = False,
 ) -> StepPolicy:
     if mode == "character_build":
-        return CharacterBuildPolicy(
+        return CapabilityPersonaPolicy(
             mode=mode,
             step_kind=step_kind,
             persona_research_lore=persona_research_lore,
         )
     if mode == "learn_syllabus_build":
-        return LearnSyllabusPolicy(
+        return CapabilityLearnPolicy(
             mode=mode,
             step_kind=step_kind,
             learn_syllabus_web=learn_syllabus_web,

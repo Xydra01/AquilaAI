@@ -50,6 +50,22 @@ MILESTONE_CAPABILITY_HINTS: dict[str, dict[str, list[str]]] = {
         "progress": ["cap.research.synthesize_notes@v1"],
         "deliver": ["cap.research.finalize_deliverable@v1"],
     },
+    "character_build": {
+        "ingest": ["cap.persona.gather_lore@v1", "cap.persona.ingest_sources@v1"],
+        "progress": ["cap.persona.write_initialization@v1"],
+        "deliver": ["cap.persona.finalize@v1"],
+    },
+    "learn_syllabus_build": {
+        "ingest": [
+            "cap.learn.gather_topic_sources@v1",
+            "cap.learn.ingest_course_materials@v1",
+        ],
+        "progress": [
+            "cap.learn.write_syllabus@v1",
+            "cap.learn.generate_assessments@v1",
+        ],
+        "deliver": ["cap.learn.finalize_course@v1"],
+    },
 }
 
 
@@ -60,6 +76,11 @@ def milestone_hints_for_mode(
     capability: bool = False,
 ) -> dict[str, list[str]]:
     mode_norm = (mode or "task").strip().lower()
+    if capability and mode_norm in MILESTONE_CAPABILITY_HINTS:
+        if mode_norm == "research":
+            key = "research_offline" if offline else "research"
+            return MILESTONE_CAPABILITY_HINTS.get(key, {})
+        return MILESTONE_CAPABILITY_HINTS.get(mode_norm, {})
     if mode_norm != "research":
         return MILESTONE_TOOL_HINTS.get(mode_norm, {})
     key = "research_offline" if offline else "research"
@@ -74,6 +95,11 @@ def milestone_hint_mode_key(
     capability: bool = False,
 ) -> str:
     mode_norm = (mode or "task").strip().lower()
+    if capability and mode_norm in (
+        "character_build",
+        "learn_syllabus_build",
+    ):
+        return mode_norm
     if mode_norm != "research":
         return mode_norm
     if capability:
@@ -316,7 +342,44 @@ class MilestoneTracker:
         if cap_id.endswith("finalize_deliverable@v1") and ok:
             self.record_tool("finish_task", summary or "ok", mode=mode)
             self.note_final_report()
-
+            return
+        if cap_id == "cap.persona.gather_lore@v1" and ok:
+            self.record_tool("web_search", summary or "ok", mode=mode)
+            self.record_tool("read_webpage", summary or "ok", mode=mode)
+            self.record_tool("save_research_note", summary or "ok", mode=mode)
+            return
+        if cap_id == "cap.persona.ingest_sources@v1" and ok:
+            self.record_tool("save_research_note", summary or "ok", mode=mode)
+            return
+        if cap_id == "cap.persona.write_initialization@v1" and ok:
+            self.record_tool("write_persona_file", summary or "ok", mode=mode)
+            self.state.deliverable_draft = True
+            return
+        if cap_id == "cap.persona.finalize@v1" and ok:
+            self.record_tool("finalize_persona", summary or "ok", mode=mode)
+            self.record_tool("finish_task", summary or "ok", mode=mode)
+            self.note_final_report()
+            return
+        if cap_id == "cap.learn.gather_topic_sources@v1" and ok:
+            self.record_tool("web_search", summary or "ok", mode=mode)
+            self.record_tool("read_webpage", summary or "ok", mode=mode)
+            self.record_tool("save_research_note", summary or "ok", mode=mode)
+            return
+        if cap_id == "cap.learn.ingest_course_materials@v1" and ok:
+            self.record_tool("save_research_note", summary or "ok", mode=mode)
+            return
+        if cap_id == "cap.learn.write_syllabus@v1" and ok:
+            self.record_tool("write_syllabus_file", summary or "ok", mode=mode)
+            self.state.deliverable_draft = True
+            return
+        if cap_id == "cap.learn.generate_assessments@v1" and ok:
+            self.record_tool("generate_assessment", summary or "ok", mode=mode)
+            return
+        if cap_id == "cap.learn.finalize_course@v1" and ok:
+            self.record_tool("finalize_course", summary or "ok", mode=mode)
+            self.record_tool("finish_task", summary or "ok", mode=mode)
+            self.note_final_report()
+            return
     def note_final_report(self) -> None:
         self._saw_final_report = True
         self.state.deliverable_draft = True

@@ -38,6 +38,9 @@ from .step_policies import (
     CharacterBuildPolicy,
     LearnSyllabusPolicy,
     ResearchPolicy,
+    CapabilityResearchPolicy,
+    CapabilityPersonaPolicy,
+    CapabilityLearnPolicy,
     get_step_policy,
 )
 from .think_policy import (

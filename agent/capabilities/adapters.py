@@ -1,7 +1,10 @@
-"""Step-kind to capability mapping for research act loop."""
+"""Step-kind to capability mapping for capability-act modes."""
 from __future__ import annotations
 
-# Default capability per legacy step_kind (online research)
+# ---------------------------------------------------------------------------
+# Research (online / offline)
+# ---------------------------------------------------------------------------
+
 STEP_KIND_DEFAULT_CAPABILITY: dict[str, str] = {
     "explore": "cap.research.explore_brief@v1",
     "search": "cap.research.gather_web_sources@v1",
@@ -18,7 +21,6 @@ OFFLINE_STEP_KIND_DEFAULT_CAPABILITY: dict[str, str] = {
     "finalize": "cap.research.finalize_deliverable@v1",
 }
 
-# Allowed capabilities per step for LLM schema (subset)
 STEP_CAPABILITY_ALLOWLIST: dict[str, frozenset[str]] = {
     "explore": frozenset({"cap.research.explore_brief@v1"}),
     "search": frozenset({
@@ -68,7 +70,6 @@ OFFLINE_STEP_CAPABILITY_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
 }
 
-# Template plans: step_kind -> capability_id
 TEMPLATE_CAPABILITY_STEPS: list[tuple[str, str]] = [
     ("search", "cap.research.gather_web_sources@v1"),
     ("read", "cap.research.gather_web_sources@v1"),
@@ -92,14 +93,90 @@ OFFLINE_DYNAMIC_TEMPLATE_CAPABILITY_STEPS: list[tuple[str, str]] = [
     ("finalize", "cap.research.finalize_deliverable@v1"),
 ]
 
+# ---------------------------------------------------------------------------
+# Character build (persona)
+# ---------------------------------------------------------------------------
+
+PERSONA_STEP_KIND_DEFAULT: dict[str, str] = {
+    "search": "cap.persona.gather_lore@v1",
+    "read": "cap.persona.ingest_sources@v1",
+    "synthesize": "cap.persona.write_initialization@v1",
+    "finalize": "cap.persona.finalize@v1",
+}
+
+PERSONA_LORE_STEP_KIND_DEFAULT: dict[str, str] = dict(PERSONA_STEP_KIND_DEFAULT)
+
+PERSONA_STEP_ALLOWLIST: dict[str, frozenset[str]] = {
+    "search": frozenset({"cap.persona.gather_lore@v1"}),
+    "read": frozenset({"cap.persona.ingest_sources@v1"}),
+    "synthesize": frozenset({"cap.persona.write_initialization@v1"}),
+    "finalize": frozenset({"cap.persona.finalize@v1"}),
+}
+
+PERSONA_TEMPLATE_STEPS: list[tuple[str, str]] = [
+    ("read", "cap.persona.ingest_sources@v1"),
+    ("synthesize", "cap.persona.write_initialization@v1"),
+    ("finalize", "cap.persona.finalize@v1"),
+]
+
+PERSONA_LORE_TEMPLATE_STEPS: list[tuple[str, str]] = [
+    ("search", "cap.persona.gather_lore@v1"),
+    ("read", "cap.persona.ingest_sources@v1"),
+    ("synthesize", "cap.persona.write_initialization@v1"),
+    ("finalize", "cap.persona.finalize@v1"),
+]
+
+# ---------------------------------------------------------------------------
+# Learn syllabus build
+# ---------------------------------------------------------------------------
+
+LEARN_STEP_KIND_DEFAULT: dict[str, str] = {
+    "search": "cap.learn.gather_topic_sources@v1",
+    "read": "cap.learn.ingest_course_materials@v1",
+    "synthesize": "cap.learn.write_syllabus@v1",
+    "finalize": "cap.learn.finalize_course@v1",
+}
+
+LEARN_STEP_ALLOWLIST: dict[str, frozenset[str]] = {
+    "search": frozenset({"cap.learn.gather_topic_sources@v1"}),
+    "read": frozenset({"cap.learn.ingest_course_materials@v1"}),
+    # Synthesize is write-only — assessments are optional after a successful write
+    # (kept off the schema so the model does not invent fake read_* caps).
+    "synthesize": frozenset({"cap.learn.write_syllabus@v1"}),
+    "finalize": frozenset({"cap.learn.finalize_course@v1"}),
+}
+
+LEARN_TEMPLATE_STEPS: list[tuple[str, str]] = [
+    ("read", "cap.learn.ingest_course_materials@v1"),
+    ("synthesize", "cap.learn.write_syllabus@v1"),
+    ("finalize", "cap.learn.finalize_course@v1"),
+]
+
+LEARN_WEB_TEMPLATE_STEPS: list[tuple[str, str]] = [
+    ("search", "cap.learn.gather_topic_sources@v1"),
+    ("read", "cap.learn.ingest_course_materials@v1"),
+    ("synthesize", "cap.learn.write_syllabus@v1"),
+    ("finalize", "cap.learn.finalize_course@v1"),
+]
+
 
 def default_capability_for_step(
     step_kind: str,
     *,
+    mode: str = "research",
     offline: bool = False,
     has_attachments: bool = False,
+    persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
 ) -> str | None:
     kind = (step_kind or "").strip().lower()
+    mode_norm = (mode or "research").strip().lower()
+
+    if mode_norm == "character_build":
+        return PERSONA_STEP_KIND_DEFAULT.get(kind)
+    if mode_norm == "learn_syllabus_build":
+        return LEARN_STEP_KIND_DEFAULT.get(kind)
+
     use_offline = offline or (has_attachments and kind in ("read", "work"))
     table = (
         OFFLINE_STEP_KIND_DEFAULT_CAPABILITY
@@ -112,13 +189,30 @@ def default_capability_for_step(
 def allowed_capabilities_for_step(
     step_kind: str,
     *,
+    mode: str = "research",
     offline: bool = False,
     has_attachments: bool = False,
     is_final_step: bool = False,
+    persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
 ) -> frozenset[str]:
     kind = (step_kind or "work").strip().lower()
+    mode_norm = (mode or "research").strip().lower()
     if is_final_step or kind == "finalize":
         kind = "finalize"
+
+    if mode_norm == "character_build":
+        allowed = PERSONA_STEP_ALLOWLIST.get(kind)
+        if allowed:
+            return allowed
+        return frozenset({"cap.persona.ingest_sources@v1"})
+
+    if mode_norm == "learn_syllabus_build":
+        allowed = LEARN_STEP_ALLOWLIST.get(kind)
+        if allowed:
+            return allowed
+        return frozenset({"cap.learn.ingest_course_materials@v1"})
+
     if offline:
         table = OFFLINE_STEP_CAPABILITY_ALLOWLIST
     elif has_attachments and kind in ("read", "work"):
@@ -136,10 +230,27 @@ def allowed_capabilities_for_step(
     return frozenset({"cap.research.gather_web_sources@v1"})
 
 
-def attach_capability_ids_to_plan(plan: dict, *, offline: bool = False) -> dict:
+def attach_capability_ids_to_plan(
+    plan: dict,
+    *,
+    offline: bool = False,
+    mode: str = "research",
+    persona_research_lore: bool = False,
+    learn_syllabus_web: bool = False,
+) -> dict:
     """Ensure each step has capability_id derived from step_kind when missing."""
     steps = plan.get("steps") or []
-    defaults = OFFLINE_STEP_KIND_DEFAULT_CAPABILITY if offline else STEP_KIND_DEFAULT_CAPABILITY
+    mode_norm = (mode or "research").strip().lower()
+    if mode_norm == "character_build":
+        defaults = PERSONA_STEP_KIND_DEFAULT
+    elif mode_norm == "learn_syllabus_build":
+        defaults = LEARN_STEP_KIND_DEFAULT
+    else:
+        defaults = (
+            OFFLINE_STEP_KIND_DEFAULT_CAPABILITY
+            if offline
+            else STEP_KIND_DEFAULT_CAPABILITY
+        )
     for step in steps:
         if not isinstance(step, dict):
             continue

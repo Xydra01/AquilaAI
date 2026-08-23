@@ -767,6 +767,13 @@ def expand_character_build_plan(
     plan["steps"] = new_steps
     plan["current_step_index"] = 0
     plan["status"] = "in_progress"
+    from agent.capabilities.adapters import attach_capability_ids_to_plan
+
+    attach_capability_ids_to_plan(
+        plan,
+        mode="character_build",
+        persona_research_lore=persona_research_lore,
+    )
     note = f"Expanded character_build plan from {old_count} to {len(new_steps)} steps."
     return plan, note
 
@@ -828,6 +835,13 @@ def expand_learn_syllabus_plan(
     plan["steps"] = new_steps
     plan["current_step_index"] = 0
     plan["status"] = "in_progress"
+    from agent.capabilities.adapters import attach_capability_ids_to_plan
+
+    attach_capability_ids_to_plan(
+        plan,
+        mode="learn_syllabus_build",
+        learn_syllabus_web=learn_syllabus_web,
+    )
     return plan, f"Expanded learn_syllabus_build plan from {old_count} to {len(new_steps)} steps."
 
 
@@ -1133,6 +1147,81 @@ def validate_and_tune_plan(
             plan["capability_recipe"] = recipe.recipe_id
         except ImportError:
             pass
+
+    if mode_key == "character_build":
+        from agent.capabilities.adapters import attach_capability_ids_to_plan
+
+        attach_capability_ids_to_plan(
+            plan,
+            mode="character_build",
+            persona_research_lore=persona_research_lore,
+        )
+        try:
+            from agent.functions.persona import resolve_recipe as resolve_persona_recipe
+
+            recipe = resolve_persona_recipe(persona_research_lore=persona_research_lore)
+            plan["capability_recipe"] = recipe.recipe_id
+        except ImportError:
+            pass
+        req_short = (user_request or "the persona").strip()[:200]
+        tool_leak_tokens = (
+            "web_search",
+            "read_webpage",
+            "save_research_note",
+            "write_persona_file",
+            "finalize_persona",
+            "read_all_research_notes",
+            "finish_task",
+        )
+        for step in plan.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            kind = (step.get("step_kind") or "work").strip().lower()
+            desc_lower = (step.get("description") or "").lower()
+            if any(tok in desc_lower for tok in tool_leak_tokens):
+                canonical = mode_step_description(
+                    "character_build", kind, user_request
+                )
+                step["description"] = f"{canonical} Topic: {req_short}."
+                notes.append(f"Step: replaced tool-language description for {kind}.")
+
+    if mode_key == "learn_syllabus_build":
+        from agent.capabilities.adapters import attach_capability_ids_to_plan
+
+        attach_capability_ids_to_plan(
+            plan,
+            mode="learn_syllabus_build",
+            learn_syllabus_web=learn_syllabus_web,
+        )
+        try:
+            from agent.functions.learn import resolve_recipe as resolve_learn_recipe
+
+            recipe = resolve_learn_recipe(learn_syllabus_web=learn_syllabus_web)
+            plan["capability_recipe"] = recipe.recipe_id
+        except ImportError:
+            pass
+        req_short = (user_request or "the course").strip()[:200]
+        tool_leak_tokens = (
+            "web_search",
+            "read_webpage",
+            "save_research_note",
+            "write_syllabus_file",
+            "finalize_course",
+            "generate_assessment",
+            "read_all_research_notes",
+            "finish_task",
+        )
+        for step in plan.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            kind = (step.get("step_kind") or "work").strip().lower()
+            desc_lower = (step.get("description") or "").lower()
+            if any(tok in desc_lower for tok in tool_leak_tokens):
+                canonical = mode_step_description(
+                    "learn_syllabus_build", kind, user_request
+                )
+                step["description"] = f"{canonical} Topic: {req_short}."
+                notes.append(f"Step: replaced tool-language description for {kind}.")
 
     return plan, notes
 

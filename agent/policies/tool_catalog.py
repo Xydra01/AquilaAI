@@ -14,7 +14,15 @@ TOOL_ALIASES: dict[str, str] = {
 
 INTERNAL_TOOL_NAMES = frozenset({"_index_codebase"})
 
-ALL_MODES = frozenset({"task", "code", "research", "writing", "autonomous", "character_build"})
+ALL_MODES = frozenset({
+    "task",
+    "code",
+    "research",
+    "writing",
+    "autonomous",
+    "character_build",
+    "learn_syllabus_build",
+})
 
 STEP_KINDS_ALL = frozenset({
     "explore", "search", "read", "code", "verify", "synthesize", "write",

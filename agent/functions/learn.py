@@ -1,0 +1,65 @@
+"""Learn syllabus function module — mode-facing entry points."""
+from __future__ import annotations
+
+from agent.capabilities.adapters import (
+    LEARN_TEMPLATE_STEPS,
+    LEARN_WEB_TEMPLATE_STEPS,
+    attach_capability_ids_to_plan,
+)
+from agent.functions.recipes import RECIPE_REGISTRY, Recipe, get_recipe
+
+
+def resolve_recipe(*, learn_syllabus_web: bool = False) -> Recipe:
+    if learn_syllabus_web:
+        return (
+            get_recipe("fn.learn.syllabus_web")
+            or RECIPE_REGISTRY["fn.learn.syllabus_web"]
+        )
+    return get_recipe("fn.learn.syllabus") or RECIPE_REGISTRY["fn.learn.syllabus"]
+
+
+def build_capability_plan_from_recipe(
+    recipe: Recipe,
+    user_request: str,
+    *,
+    learn_syllabus_web: bool = False,
+) -> dict:
+    template = LEARN_WEB_TEMPLATE_STEPS if learn_syllabus_web else LEARN_TEMPLATE_STEPS
+    from agent.core.plan_validator import BUDGET_RUBRIC
+
+    req = (user_request or "Course").strip()[:500]
+    steps: list[dict] = []
+    for kind, cap_id in template:
+        _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
+        steps.append({
+            "status": "pending",
+            "description": f"{kind}: {req}",
+            "step_kind": kind,
+            "capability_id": cap_id,
+            "params": {"topic": req} if "gather" in cap_id or "ingest" in cap_id else {},
+            "max_iterations": default,
+        })
+    plan = {
+        "status": "in_progress",
+        "current_step_index": 0,
+        "steps": steps,
+        "capability_recipe": recipe.recipe_id,
+    }
+    return attach_capability_ids_to_plan(
+        plan,
+        mode="learn_syllabus_build",
+        learn_syllabus_web=learn_syllabus_web,
+    )
+
+
+def run_recipe_step(recipe: Recipe, step_index: int, ctx, *, extra_params: dict | None = None):
+    from agent.capabilities import run_capability
+    from agent.capabilities.base import CapabilityResult
+
+    if step_index < 0 or step_index >= len(recipe.capability_ids):
+        return CapabilityResult.failure("bad_index", f"Step index {step_index} out of range.")
+    cap_id = recipe.capability_ids[step_index]
+    params = dict(extra_params or {})
+    if "topic" not in params and ctx.user_request:
+        params.setdefault("topic", ctx.user_request)
+    return run_capability(cap_id, ctx, params)

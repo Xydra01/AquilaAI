@@ -282,7 +282,9 @@ class LoopEngine:
         explore_tool_turns = 0
         timeout_compress_used = False
         outline_logged_this_step = False
-        source_registry = SourceRegistry() if self.mode == "research" else None
+        source_registry = (
+            SourceRegistry() if self._uses_capability_act() else None
+        )
         self._research_deliverable_draft: str | None = None
         self._persona_read_autosave_done = False
         loop_coach = LoopCoach(
@@ -692,8 +694,8 @@ class LoopEngine:
                             "Continue if needed — tools are not phase-locked."
                             if self._dynamic_loop_active
                             else (
-                                " Use research capabilities then advance."
-                                if self._capability_research_active()
+                                " Use capabilities then advance."
+                                if self._uses_capability_act()
                                 else " Use `save_research_note` then `mark_objective_complete`."
                             )
                         )
@@ -1364,37 +1366,41 @@ class LoopEngine:
                     if (
                         not has_advance
                         and not has_finish
-                        and self.mode == "research"
+                        and self._uses_capability_act()
                         and cap_batch.get("last_cap_ok")
                         and cap_batch.get("last_cap_id")
                     ):
-                        from agent.policies.step_policies import CapabilityResearchPolicy
-
                         cap_policy = get_step_policy(
                             self.mode,
                             step_kind,
+                            persona_research_lore=self.persona_research_lore,
+                            learn_syllabus_web=self.learn_syllabus_web,
                             offline_research=self.offline_research,
                         )
                         last_cap = str(cap_batch["last_cap_id"])
-                        if isinstance(cap_policy, CapabilityResearchPolicy) and (
-                            cap_policy.should_auto_advance_after_capability(
-                                last_cap,
-                                True,
-                                step_kind=step_kind,
-                            )
+                        advance_fn = getattr(
+                            cap_policy, "should_auto_advance_after_capability", None
+                        )
+                        if callable(advance_fn) and advance_fn(
+                            last_cap,
+                            True,
+                            step_kind=step_kind,
                         ):
                             has_advance = True
-                            advance_summary = cap_policy.advance_summary_for_capability(
-                                last_cap
+                            summary_fn = getattr(
+                                cap_policy, "advance_summary_for_capability", None
+                            )
+                            advance_summary = (
+                                summary_fn(last_cap)
+                                if callable(summary_fn)
+                                else f"Completed {last_cap}."
                             )
                             last_tool_output += (
                                 f"\n\n✅ OS: {advance_summary} Advancing to next plan step."
                             )
 
                 for i, tc in enumerate(tool_calls):
-                    if self.mode == "research":
-                        break
-                    if self._capability_research_active() and capability_calls:
+                    if self._uses_capability_act():
                         break
                     tool_name = tc.get("name", "")
                     
@@ -3219,32 +3225,34 @@ class LoopEngine:
             )
         elif self.mode == "character_build" and step_kind == "synthesize":
             hint = (
-                "Lore is in the SCRATCHPAD section below. write_persona_file once for "
-                "initialization.md (800+ chars) including a **Scene agency** section "
-                "(proactive play, minimal questions, no assistant deferral), then "
-                "mark_objective_complete. Do NOT call summarize_sources. "
-                "read_all_research_notes at most once."
+                "SCRATCHPAD below. Call ONLY `cap.persona.write_initialization@v1` "
+                'with arguments.content = full initialization.md text (≥800 chars), '
+                "including a Scene agency section. Do NOT invent tool names."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "search":
             hint = (
-                "Web research for syllabus: web_search and read_webpage; "
-                "save_research_note once with distilled findings, then mark_objective_complete. "
-                "Do NOT call read_all_research_notes (use active task name from OS header). "
-                "No write_syllabus_file on this step."
+                "Web research: call `cap.learn.gather_topic_sources@v1` once with topic. "
+                "Do NOT invent other capability IDs. No write_syllabus on this step."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "read":
             hint = (
-                "Course ingest: save_research_note once with user topic and attachments, "
-                "then mark_objective_complete. Do NOT call read_all_research_notes on this step."
+                "Course ingest: call `cap.learn.ingest_course_materials@v1` once. "
+                "Do NOT invent read_all_research_notes or tool names."
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "synthesize":
             hint = (
-                "SCRATCHPAD below. write_syllabus_file once with valid JSON: ≥8 nodes, "
-                "≥5 sub-units with parent_id (module/lesson tree), specific titles, "
-                "mastery_tier 0 per node. Shallow 3-node outlines are rejected."
+                "SCRATCHPAD below (already ingested). Call ONLY "
+                "`cap.learn.write_syllabus@v1` with "
+                'arguments: {"content": "<syllabus JSON string>"}. '
+                "Requirements: ≥8 nodes, ≥5 with parent_id, specific titles, mastery_tier 0. "
+                "Do NOT call read_all_research_notes, generate_assessments, or invent IDs. "
+                "Example: "
+                '{"reasoning":"Writing syllabus.","capabilities":[{"id":'
+                '"cap.learn.write_syllabus@v1","arguments":{"content":'
+                '"{\\"version\\":1,\\"nodes\\":[...]}"}}]}'
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "finalize":
-            hint = "Call finalize_course then finish_task."
+            hint = "Call `cap.learn.finalize_course@v1` (empty arguments ok)."
         elif self._dynamic_loop_active and step_kind in ("work", "micro"):
             if self.offline_research and self.mode == "research":
                 hint = (
@@ -3340,8 +3348,8 @@ class LoopEngine:
                 if len(notes) > cap:
                     notes = (
                         notes[:cap]
-                        + "\n... [step brief capped — call read_all_research_notes once "
-                        "if you need remaining scratchpad text, then write_persona_file]"
+                        + "\n... [step brief capped — synthesize from this excerpt; "
+                        "call write_syllabus / write_initialization with full content]"
                     )
             parts.append(f"--- SCRATCHPAD (prior steps) ---\n{notes}\n--- END SCRATCHPAD ---")
         if self.mode == "research" and self.human_research_notes:
@@ -3970,8 +3978,19 @@ class LoopEngine:
                     out[sig] = f"❌ Error - {exc}"
         return out
 
+    CAPABILITY_ACT_MODES = frozenset({
+        "research",
+        "character_build",
+        "learn_syllabus_build",
+    })
+
+    def _uses_capability_act(self) -> bool:
+        """True when this mode's act turn uses capabilities[] (not tools[])."""
+        return self.mode in self.CAPABILITY_ACT_MODES
+
     def _capability_research_active(self) -> bool:
-        return self.mode == "research"
+        """Compatibility alias — prefer `_uses_capability_act` for new call sites."""
+        return self._uses_capability_act()
 
     def _has_attachment_sources(self, text_chunks: list | None = None) -> bool:
         chunks = text_chunks if text_chunks is not None else getattr(
@@ -3994,9 +4013,12 @@ class LoopEngine:
 
         allowed = allowed_capabilities_for_step(
             step_kind,
+            mode=self.mode,
             offline=self.offline_research,
             has_attachments=self._has_attachment_sources(),
             is_final_step=is_final_step,
+            persona_research_lore=self.persona_research_lore,
+            learn_syllabus_web=self.learn_syllabus_web,
         )
         self._schema_tool_names = allowed
         require_report = is_final_step or step_kind == "finalize"
@@ -4084,25 +4106,29 @@ class LoopEngine:
         finish_ok = False
         last_cap_id = ""
         last_cap_ok = False
-        from agent.policies.step_policies import CapabilityResearchPolicy
+        from agent.policies import get_step_policy
 
-        cap_policy = None
-        if isinstance(getattr(self, "_step_policy", None), CapabilityResearchPolicy):
-            cap_policy = self._step_policy
-        elif self.mode == "research":
-            from agent.policies import get_step_policy
-
+        cap_policy = getattr(self, "_step_policy", None)
+        if not hasattr(cap_policy, "validate_capability_call"):
             cap_policy = get_step_policy(
                 self.mode,
                 step_kind,
+                persona_research_lore=self.persona_research_lore,
+                learn_syllabus_web=self.learn_syllabus_web,
                 offline_research=self.offline_research,
             )
         step_caps = caps_succeeded if caps_succeeded is not None else set()
+        finalize_caps = frozenset({
+            "cap.research.finalize_deliverable@v1",
+            "cap.persona.finalize@v1",
+            "cap.learn.finalize_course@v1",
+        })
         for call in capability_calls:
             cap_id = call.get("id", "")
             args = dict(call.get("arguments") or {})
-            if cap_policy and isinstance(cap_policy, CapabilityResearchPolicy):
-                block = cap_policy.validate_capability_call(
+            validate_fn = getattr(cap_policy, "validate_capability_call", None)
+            if callable(validate_fn):
+                block = validate_fn(
                     cap_id,
                     tools_succeeded=step_caps,
                 )
@@ -4114,12 +4140,29 @@ class LoopEngine:
                 args.setdefault("report_body", pending_final_report)
             if not args.get("topic"):
                 args.setdefault("topic", getattr(self, "_user_request", "") or task_name)
+            if cap_id == "cap.learn.write_syllabus@v1":
+                from agent.capabilities.learn.write_syllabus import coerce_syllabus_content
+
+                coerced = coerce_syllabus_content(args)
+                if coerced:
+                    args = {"content": coerced}
             self.console.log_tool_start(f"cap:{cap_id}", args)
             result = run_capability(cap_id, ctx, args)
             executed += 1
             last_cap_id = cap_id
             last_cap_ok = bool(result.ok)
             text = result.summary or (result.error_message or "No output.")
+            if (
+                not result.ok
+                and cap_id == "cap.learn.write_syllabus@v1"
+                and "content" in (result.error_message or "").lower()
+            ):
+                text += (
+                    "\n\n❌ OS HINT: Call `cap.learn.write_syllabus@v1` with "
+                    'arguments.content set to the full syllabus JSON string '
+                    '(or put nodes/title fields directly in arguments). '
+                    "Do not invent read_all_research_notes."
+                )
             if result.data:
                 text += f"\n(data keys: {', '.join(sorted(result.data.keys()))})"
             last_parts.append(f"Capability '{cap_id}' result:\n{text}\n")
@@ -4142,7 +4185,7 @@ class LoopEngine:
                 self._milestone_tracker.record_capability(
                     cap_id, result, mode=self.mode
                 )
-            if cap_id.endswith("finalize_deliverable@v1") and result.ok:
+            if cap_id in finalize_caps and result.ok:
                 finish_ok = True
         return {
             "executed": executed,

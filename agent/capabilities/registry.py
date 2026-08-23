@@ -68,6 +68,8 @@ def capability_input_schema(capability_id: str) -> dict[str, Any] | None:
 def _register_all() -> None:
     """Import capability modules to populate registry."""
     from . import dev  # noqa: F401
+    from . import learn  # noqa: F401
+    from . import persona  # noqa: F401
     from . import planning  # noqa: F401
     from . import research  # noqa: F401
     from . import web  # noqa: F401

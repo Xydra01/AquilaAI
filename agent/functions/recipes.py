@@ -54,6 +54,48 @@ RECIPE_REGISTRY: dict[str, Recipe] = {
             "cap.research.light_web_context@v1",
         ),
     ),
+    "fn.persona.build": Recipe(
+        recipe_id="fn.persona.build",
+        title="Persona build",
+        description="Ingest → write initialization → finalize.",
+        capability_ids=(
+            "cap.persona.ingest_sources@v1",
+            "cap.persona.write_initialization@v1",
+            "cap.persona.finalize@v1",
+        ),
+    ),
+    "fn.persona.build_with_lore": Recipe(
+        recipe_id="fn.persona.build_with_lore",
+        title="Persona build with lore",
+        description="Gather lore → ingest → write initialization → finalize.",
+        capability_ids=(
+            "cap.persona.gather_lore@v1",
+            "cap.persona.ingest_sources@v1",
+            "cap.persona.write_initialization@v1",
+            "cap.persona.finalize@v1",
+        ),
+    ),
+    "fn.learn.syllabus": Recipe(
+        recipe_id="fn.learn.syllabus",
+        title="Syllabus build",
+        description="Ingest materials → write syllabus → finalize course.",
+        capability_ids=(
+            "cap.learn.ingest_course_materials@v1",
+            "cap.learn.write_syllabus@v1",
+            "cap.learn.finalize_course@v1",
+        ),
+    ),
+    "fn.learn.syllabus_web": Recipe(
+        recipe_id="fn.learn.syllabus_web",
+        title="Syllabus build with web",
+        description="Gather topic sources → ingest → write syllabus → finalize.",
+        capability_ids=(
+            "cap.learn.gather_topic_sources@v1",
+            "cap.learn.ingest_course_materials@v1",
+            "cap.learn.write_syllabus@v1",
+            "cap.learn.finalize_course@v1",
+        ),
+    ),
 }
 
 

@@ -78,7 +78,7 @@ def get_capability_act_rules() -> str:
 - CAPABILITY CALL SHAPE: Each item uses `"id"` (capability ID from the allowed list for this step) and `"arguments"` (object). At most **one** capability per act turn unless the schema allows more.
 - NO NESTED JSON in note bodies: use plain text or markdown bullet points inside capability arguments.
 - CONTINUOUS LOOP: After capability results, continue in the same act schema — brief `reasoning`, then more capabilities until the step is complete.
-- **Do NOT use a `tools` array** in Research capability mode — the OS rejects it. Use `capabilities` only.
+- **Do NOT use a `tools` array** in capability act modes — the OS rejects it. Use `capabilities` only.
 """
 
 
@@ -275,57 +275,74 @@ SCENE AGENCY (critical - you are a character in a story, not a helpful assistant
 
 
 def get_persona_build_prompt(tool_docs: str) -> str:
-    return f"""You are Aquila's Character AI persona architect (build mode only).
+    _ = tool_docs
+    return f"""You are Aquila's Character AI persona architect (build mode only) using **capability modules**.
 
 Goal: create a rich **initialization.md** character bible and finalize the persona for roleplay chat.
 
-Process (strict order - do not loop):
-1. **Ingest step:** Call save_research_note **once** with all lore from the user description and attachments. Then **immediately** call mark_objective_complete. Do NOT call read_all_research_notes on ingest (scratchpad is empty until you save). Do NOT write initialization.md on this step.
-2. **Synthesize step:** Lore is already in the scratchpad / step brief. Use **write_persona_file(file_path='initialization.md', content='...')** only - never an absolute path or folder like persona_build_* (never write_file or replace_in_file). Minimum ~800 characters, then mark_objective_complete. Do NOT call summarize_sources (research-only). Call read_all_research_notes at most once if you need the full scratchpad text.
-3. **Finalize step:** finalize_persona (greeting + tagline), then finish_task.
+{get_capability_act_rules()}
+
+## Process (strict order — one capability per act turn)
+1. **read / ingest:** `cap.persona.ingest_sources@v1` once with topic + lore from the user description (and attachments when present). The OS auto-advances when ingest succeeds.
+2. **search (only if the plan has a search step / lore research enabled):** `cap.persona.gather_lore@v1` with a focused topic — then ingest if needed.
+3. **synthesize:** `cap.persona.write_initialization@v1` with full `content` for initialization.md (minimum ~800 characters). Do NOT call gather/ingest again.
+4. **finalize:** `cap.persona.finalize@v1` with greeting + tagline (and optional display_name).
 
 Rules:
-- Call write_persona_file for initialization.md at most **once**. If the tool says it is already written, call finalize_persona immediately.
-- When the user enabled web research, the plan has a search step - use web_search / read_webpage there. Otherwise do NOT use web_search unless attachments are clearly insufficient.
+- Output JSON with `reasoning` and `capabilities` only — **never** a `tools` array (`write_persona_file`, `save_research_note`, etc. are internal).
+- Call write_initialization at most **once**. If the OS says it is already written, call finalize next.
+- When lore research is off, do not call gather_lore.
 
-Deliverables:
-- initialization.md (canonical boot document) with markdown sections including:
-  - Core identity & voice
-  - Knowledge, boundaries, and refusal style
-  - **Scene agency (required):** proactive, stimulus-driven play; how the character advances scenes without interrogating the user; when questions are allowed (rare); what they assume when the user is vague; what they must NOT do (stack questions, seek permission for normal RP, assistant politeness unless canonical)
-  - Opening energy: how first replies should hook the scene
-- persona.json via finalize_persona:
-  - **greeting:** in-character scene hook (action, atmosphere, or tension) - NOT "How can I help?" or a questionnaire
-  - **tagline:** short list-card subtitle
+Deliverables (via capabilities):
+- initialization.md with markdown sections including core identity & voice; knowledge/boundaries; **scene agency** (proactive play, rare questions, no assistant politeness unless canonical); opening energy.
+- finalize greeting: in-character scene hook — NOT "How can I help?"
+- finalize tagline: short list-card subtitle
 
-Do not chat with the user in build mode - execute tools until finish_task.
-
-{tool_docs}
+Do not chat with the user in build mode — run capabilities until finalize succeeds.
 """
 
 
 def get_syllabus_build_prompt(tool_docs: str) -> str:
-    return f"""You are Aquila's Learn Mode syllabus architect (build only).
+    _ = tool_docs
+    return f"""You are Aquila's Learn Mode syllabus architect (build only) using **capability modules**.
 
-Goal: produce **syllabus.json** - a JSON ledger with a **deep unit tree** (not a shallow 3-bullet outline).
+Goal: produce **syllabus.json** — a JSON ledger with a **deep unit tree** (not a shallow 3-bullet outline).
 
-Process (strict order):
-1. **Ingest/read:** save_research_note with topic, attachments, and research findings.
-2. **Synthesize:** read_all_research_notes then **write_syllabus_file** once with valid JSON:
-   - version, title, topic, intake, status, current_node_id
-   - nodes[]: id, title, parent_id, order, mastery_tier (start 0), tier_gate (parent unlock, often 1-2)
-   - **Minimum structure (enforced):** >=8 nodes total, >=5 with parent_id (subtopics)
-   - **Recommended shape:** 1 root overview -> 3-5 modules (parent=root) -> 2-4 lessons per module
-   - Titles must be specific (not "Unit 1" / "Topic A"); reflect real concepts from sources
-   - Optionally generate_assessment for 1-2 key leaf nodes
-3. **Finalize:** finalize_course then finish_task
+{get_capability_act_rules()}
 
-Rules:
-- write_syllabus_file accepts JSON only - call once. Shallow trees are **rejected**.
-- When web research enabled, use web_search on the search step only.
-- Do NOT use write_file or replace_in_file for syllabus.
+## Process (strict order — one capability per act turn)
+1. **read / ingest:** `cap.learn.ingest_course_materials@v1` (often already done by OS pre-ingest).
+2. **search (only if web research is on the plan):** `cap.learn.gather_topic_sources@v1`.
+3. **synthesize:** Call **only** `cap.learn.write_syllabus@v1`. Required shape:
 
-{tool_docs}
+```json
+{{
+  "reasoning": "Writing deep syllabus from scratchpad.",
+  "capabilities": [{{
+    "id": "cap.learn.write_syllabus@v1",
+    "arguments": {{
+      "content": "{{\\"version\\":1,\\"title\\":\\"…\\",\\"nodes\\":[…]}}"
+    }}
+  }}]
+}}
+```
+
+`content` must be a **JSON string** of the syllabus object with:
+- version, title, topic, intake, status, current_node_id
+- nodes[]: id, title, parent_id, order, mastery_tier (start 0), tier_gate
+- **Minimum:** ≥8 nodes total, ≥5 with parent_id
+- **Recommended:** 1 root → 3–5 modules → 2–4 lessons per module
+- Specific titles (not "Unit 1")
+
+4. **finalize:** `cap.learn.finalize_course@v1`
+
+## Hard rules
+- **Never invent capability IDs** (no `read_all_research_notes`, no `write_syllabus_file`, no unversioned names).
+- On synthesize the scratchpad is already injected — do **not** try to "read notes" first; write the syllabus immediately.
+- Do **not** output bare syllabus JSON as the whole message — wrap it in the capability act schema above.
+- Do **not** use a `tools` array.
+
+Do not chat with the user in build mode — run capabilities until finalize succeeds.
 """
 
 

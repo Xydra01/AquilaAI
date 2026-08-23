@@ -24,9 +24,11 @@ def test_character_prompt_encourages_proactive_scene_agency():
     assert "question" in prompt.lower()
 
 
-def test_persona_build_prompt_mentions_tools():
-    prompt = get_persona_build_prompt("- `write_persona_file(path, content)`: write")
+def test_persona_build_prompt_mentions_capabilities():
+    prompt = get_persona_build_prompt("- ignored tool docs -")
     assert "initialization.md" in prompt
-    assert "finalize_persona" in prompt
-    assert "write_persona_file" in prompt
-    assert "Scene agency" in prompt
+    assert "cap.persona.write_initialization@v1" in prompt
+    assert "cap.persona.finalize@v1" in prompt
+    assert "capabilities" in prompt
+    assert "tools" in prompt.lower()  # warns not to use tools array
+    assert "scene agency" in prompt.lower()

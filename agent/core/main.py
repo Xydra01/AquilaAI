@@ -1579,6 +1579,26 @@ def parse_agent_response(
         data = try_parse_json(clean) or try_parse_json(heal_json_text(clean))
         if isinstance(data, dict) and isinstance(data.get("capabilities"), list):
             return data
+        # Bare syllabus JSON (common learn synthesize mistake) → wrap as write_syllabus
+        if (
+            isinstance(data, dict)
+            and isinstance(data.get("nodes"), list)
+            and (
+                not cap_names
+                or "cap.learn.write_syllabus@v1" in cap_names
+            )
+        ):
+            import json as _json
+
+            return {
+                "reasoning": "Recovered bare syllabus JSON into write_syllabus capability.",
+                "capabilities": [
+                    {
+                        "id": "cap.learn.write_syllabus@v1",
+                        "arguments": {"content": _json.dumps(data, ensure_ascii=False)},
+                    }
+                ],
+            }
         if not quiet and err:
             console.print(f"[bold red]⚠️ Capability parse error: {err}[/bold red]")
         return {}
@@ -3432,8 +3452,15 @@ Set approval_status to "draft".
             except Exception:
                 pass
         
-        if not os.path.exists(task_file) or mode in ("character_build", "learn_syllabus_build"):
-            if mode in ("character_build", "learn_syllabus_build") and os.path.exists(task_file):
+        # Fresh plan when missing. Character/Learn may rebuild on a new Start click,
+        # but NEVER wipe an already-approved plan (execute_approved=True) — that
+        # caused an infinite plan-review loop after Approve.
+        force_fresh_plan = (
+            mode in ("character_build", "learn_syllabus_build")
+            and not execute_approved
+        )
+        if not os.path.exists(task_file) or force_fresh_plan:
+            if force_fresh_plan and os.path.exists(task_file):
                 try:
                     os.remove(task_file)
                 except OSError:
@@ -3538,21 +3565,23 @@ Set approval_status to "draft".
                 user_request=user_request,
                 mode=mode,
                 offline_research=offline_research,
-                capability_research=(mode == "research"),
+                capability_research=(
+                    mode in ("research", "character_build", "learn_syllabus_build")
+                ),
             )
-            cap_research_on = mode == "research"
-            if mode == "research":
+            if mode in ("research", "character_build", "learn_syllabus_build"):
                 try:
                     from agent.capabilities.adapters import attach_capability_ids_to_plan
-                    from agent.functions.research import resolve_recipe
 
-                    if cap_research_on:
+                    if mode == "research":
+                        from agent.functions.research import resolve_recipe
+
                         has_attachments = any(
                             c and str(c).strip() for c in (text_chunks or [])
                         )
                         effective_offline = offline_research or has_attachments
                         attach_capability_ids_to_plan(
-                            plan_data, offline=effective_offline
+                            plan_data, offline=effective_offline, mode=mode
                         )
                         attachment_paths = [
                             getattr(ch, "path", "") or str(ch)
@@ -3565,6 +3594,28 @@ Set approval_status to "draft".
                             attachments=attachment_paths,
                         )
                         plan_data["capability_recipe"] = recipe.recipe_id
+                    elif mode == "character_build":
+                        from agent.functions.persona import resolve_recipe as resolve_persona
+
+                        attach_capability_ids_to_plan(
+                            plan_data,
+                            mode=mode,
+                            persona_research_lore=persona_research_lore,
+                        )
+                        plan_data["capability_recipe"] = resolve_persona(
+                            persona_research_lore=persona_research_lore
+                        ).recipe_id
+                    elif mode == "learn_syllabus_build":
+                        from agent.functions.learn import resolve_recipe as resolve_learn
+
+                        attach_capability_ids_to_plan(
+                            plan_data,
+                            mode=mode,
+                            learn_syllabus_web=learn_syllabus_web,
+                        )
+                        plan_data["capability_recipe"] = resolve_learn(
+                            learn_syllabus_web=learn_syllabus_web
+                        ).recipe_id
                 except ImportError:
                     pass
             plan_data["micro_plan"] = micro_plan_used

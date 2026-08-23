@@ -102,6 +102,8 @@ from .preferences import (
     set_export_env_on_save,
 )
 from .learn_index import (
+    DEFAULT_RETRIEVAL_MAX_CHARS,
+    DEFAULT_SEARCH_TOP_K,
     index_course_sources,
     index_archive,
     search_index,
