@@ -98,13 +98,14 @@ The doc is a conversation that **evolves**. Earlier sections float ideas that la
 | S6 | Condenser segments = system prompt / self-notes / tail | D:L63-75 | R6 refined: prefix also pins the **active recipe schema**, the anchored block also carries **module state snapshots** (D:L576-577) |
 | S7 | `llama_kv_cache_seq_rm(ctx, 0, P+1, -1)` | D:L571, D:L583 | **Factual correction:** not in llama.cpp anymore. Current API is `llama_memory_seq_rm` / `llama_memory_seq_pos_max` (`tools/llama-cpp-turboquant/include/llama.h:714,766`) [measured]. Verify again against upstream at M5 (D4 = upstream) |
 
-**Ideas the doc raised and never closed out** (not superseded, not reaffirmed):
+**Ideas the doc left open, now settled by the user (2026-11-02):**
 
-- **Escape hatch 1:** plugin scripts in `/tools/plugins/` + `manifest.json`, with JSON over stdin/stdout (D:L308-316). It was written in primitives language. Later the doc offers DLL modules (R13 Option B) for extensibility. See D5.
-- **Escape hatch 2: "skill crystallization"** via `register_new_recipe(recipe_json)`, generalizing a sequence of *primitive* calls into a recipe (D:L318-324). Under R12 an agent-authored recipe would be a cartridge (modules + exposed actions + hooks), not a primitive sequence. See D9.
-- **`llm_micro_pass`** (an isolated LLM call inside a recipe, D:L283-289, D:L302). The cartridge format has no equivalent field. See D9.
-- **Sandboxed scripting (sol2/Lua)** as a "Phase 2 upgrade if recipes hit a ceiling" (D:L238). Deferred.
-- **How users author recipes** (config files vs CLI/GUI builder vs "Architect Agent") is asked at D:L348 and never answered. See D8.
+- **Escape hatch 1, plugin scripts + `manifest.json`** (D:L308-316): **KEPT (D5).** Reframed for modules [proposal]: each `tools/plugins/<name>/manifest.json` declares a *script module* (id, actions with JSON input schemas, command per action). A `ScriptModule` adapter implements `IAgentModule` over it, running JSON on stdin and reading the result from stdout, so recipes load it like any compiled module.
+- **Escape hatch 2, `register_new_recipe`** (D:L318-324): **KEPT (D9)**, reframed: the agent saves a *cartridge* (modules + exposed actions + hooks + checklist), not a primitive sequence.
+- **`llm_micro_pass`** (D:L283-289, D:L302): **KEPT (D9)**, reframed [proposal]: a hook type usable in `pre_llm_hooks` / post hooks that runs one isolated LLM call (own system prompt, no main-context or KV pollution) and injects only its output.
+- **Recipe nesting** (from S4): **KEPT (D9)** [proposal]: a cartridge may `include` another cartridge's modules/hooks/checklist.
+- **How users author recipes** (D:L348): **GUI builder (D8).** The doc's "no-code tool maker" trap (D:L239) is about building *tools*; a builder that edits cartridge *configuration* is the option the doc itself lists at D:L348. Planned with QtNodes (`GUI_EVALUATION.md` F2). The Architect Agent is noted as a later idea.
+- **Sandboxed scripting (sol2/Lua)** as a "Phase 2 upgrade if recipes hit a ceiling" (D:L238): still deferred.
 
 **Other checks against local source:**
 
@@ -122,19 +123,19 @@ The doc is a conversation that **evolves**. Earlier sections float ideas that la
 | Package | Files | LOC | Role | C++ disposition [proposal] |
 |---|---:|---:|---|---|
 | `agent/core` | 36 | 22168 | Brain: Ollama client, Agent, loop engine, planner, prompts, tools firewall, MCP, harness | Split; rewrite loop; see section 4 |
-| `agent/gui` | 29 | 9052 | PySide6 desktop app, 9 workspaces | Decision D3 |
+| `agent/gui` | 29 | 9052 | PySide6 desktop app, 9 workspaces | Qt 6 Widgets in C++ (D3 recommendation, `GUI_EVALUATION.md`); canvas expanded (D10); recipe builder (D8) |
 | `agent/tool_library` | 20 | 4191 | 74 tools merged into `ALL_TOOLS` | Absorbed into the 4 core modules as internal code + a few exposed actions each (R9-R11); see section 5.1 |
 | `agent/storage` | 15 | 3984 | SQLite facts, Chroma vectors, instances, personas, learn, settings | Port (SQLite C API + vector index) |
 | `agent/policies` | 15 | 3719 | Context budget/tiers, tool catalogs, step policies, think policy | Becomes `RuntimeTierConfig` (R16) + `ContextCondenser` (R6) + recipe `expose_actions` scoping (R12) |
 | `agent/capabilities` | 57 | 3266 | 44 versioned capabilities (Pydantic in → `CapabilityResult`) | Batched behavior becomes module actions (R10/R11). Per-mode step policies become recipe cartridges (R12) |
-| `agent/remote` | 13 | 2963 | FastAPI + WS server (52 routes) for PWA `webapp/` | Defer; keep HTTP/WS contract |
+| `agent/remote` | 13 | 2963 | FastAPI + WS server (52 routes) for PWA `webapp/` | Rebuild in C++, keep the HTTP/WS contract so `webapp/` keeps working (D6) |
 | `agent/parser` | 8 | 2656 | Strict schema builder, JSON parse/heal, Ollama diagnostics | Replace with nlohmann/json + schema → GBNF |
 | `agent/research` | 10 | 1731 | Web enrichment, URL registry, content quality, light research | Port into KnowledgeModule (R11) |
 | `agent/coding` | 7 | 1250 | File parser (PDF/DOCX/images), language registry, light coding | Port; PDF via MuPDF C |
 | `agent/aquila_runtime` | 12 | 1170 | Hardware detection, Ollama/Docker/SearXNG bootstrap, paths | Port `hardware_profile` → `ComputeProfile` |
 | `agent/functions` | 9 | 870 | Recipes (intent → capability list), writing brief/scope | Replace with recipe cartridges (R12) |
-| `agent/vision` | 6 | 779 | torch CNN classifier (experimental) | Out of scope for core |
-| `agent/tasks` | 1 | 243 | Headless data processor | Defer |
+| `agent/vision` | 6 | 779 | torch CNN classifier (experimental) | **Out (D6).** Only imported by `agent/tasks/data_processor.py` [measured], so it leaves with data processing |
+| `agent/tasks` | 1 | 243 | Headless data processor | **Out (D6):** data processing mode is being rethought |
 | `agent` (`agent/__init__.py`) | 1 | 120 | Legacy import aliases (`import main`, ...) | Drop |
 | `scripts` | 3 py + 40 sh/ps1 | 994 (py) | Health check, Ollama install/serve, harness gate, packaging preflight | Keep as tooling; C++ build adds its own |
 | `tests` (root) | 6 | 570 | Vision calibration scripts | Out of scope |
@@ -200,7 +201,9 @@ Core files, by role:
 | Logging | `agent/core/run_logger.py` (console + JSONL) |
 | Facade | `agent/core/__init__.py` |
 
-**Current direction in the repo** (`docs/reliability-plan/README.md`) [doc]: "One dumb loop, sharp tools, batched capabilities." Phases 0-3 are marked done, and Phase 4 (unified ~300-line `agent_loop.py`) is not started. Code mode already bypasses `LoopEngine` (`loop_engine.py:187-191` raises for `mode=code`). The *loop shape* lines up with the design doc (one simple deterministic loop, R2), so the C++ `AgentLoop` should take its turn mechanics from `code_agent.run_tool_session`, *not* from `LoopEngine`. The *tool shape* does not line up: the Python code loop calls flat stateless tools, while the doc calls for stateful modules (R9). See D10.
+**Current direction in the repo** (`docs/reliability-plan/README.md`) [doc]: "One dumb loop, sharp tools, batched capabilities." Phases 0-3 are marked done, and Phase 4 (unified ~300-line `agent_loop.py`) is not started. Code mode already bypasses `LoopEngine` (`loop_engine.py:187-191` raises for `mode=code`). The *loop shape* lines up with the design doc (one simple deterministic loop, R2), so the C++ `AgentLoop` should take its turn mechanics from `code_agent.run_tool_session`, *not* from `LoopEngine`. The *tool shape* does not line up: the Python code loop calls flat stateless tools, while the doc calls for stateful modules (R9).
+
+**Scope note (user, D10):** the reliability plan's move *away from Code Canvas* to direct filesystem tools was made for the successor framework **Lacerta**, not for Aquila. That's also why the plan links `lacerta-*.md` docs that aren't in this repo (H8). Aquila keeps and expands the canvas. So for Aquila-cpp the reliability plan informs the *loop* (simple, harness-gated) but not the *edit model*.
 
 ---
 
@@ -227,12 +230,25 @@ These are parity oracles and starting points, not 1:1 ports. [code]
 
 | Module | Doc actions | Python sources of behavior/state | Notable gap vs doc |
 |---|---|---|---|
-| **WorkspaceModule** | `inspect_symbol`, `surgical_edit`, `revert_file` | Code Canvas (in-memory project buffer, `pending_patches` accept/reject): `agent/tool_library/code_canvas_tools.py` (`read_code_outline:447`, `replace_symbol:640`, `apply_unified_patch:570`, `replace_lines:541`, patches `:144-175`). Direct FS tools: `agent/tool_library/code_agent_tools.py` (`read_file:38`, `write_file:87`, `search_replace:137`, `list_dir:189`, `grep:201`, `find_files:209`). Path firewall: `agent/core/tools.py` (`is_safe_path`, `resolve_tool_path`). Symbols: `git_tools.find_references:66` | Doc: back up in RAM, **reject/roll back** bad edits. Python `write_file` writes to disk even on a syntax error and just reports it (`code_agent_tools.py:128-131`). Python had a buffer design (Canvas), but the reliability plan dropped it for code mode in favor of direct FS. **D10** |
+| **WorkspaceModule** | `inspect_symbol`, `surgical_edit`, `revert_file` | Code Canvas (in-memory project buffer, `pending_patches` accept/reject): `agent/tool_library/code_canvas_tools.py` (`read_code_outline:447`, `replace_symbol:640`, `apply_unified_patch:570`, `replace_lines:541`, patches `:144-175`). Direct FS tools: `agent/tool_library/code_agent_tools.py` (`read_file:38`, `write_file:87`, `search_replace:137`, `list_dir:189`, `grep:201`, `find_files:209`). Path firewall: `agent/core/tools.py` (`is_safe_path`, `resolve_tool_path`). Symbols: `git_tools.find_references:66` **D10 decided: canvas buffer model.** Edits land in RAM buffers as pending patches, get validated (rollback on bad syntax, per the doc), then are accepted and synced to disk. **Code Canvas (`code_canvas_tools.py`) is the primary parity oracle**; the direct FS tools are secondary. Python's `write_file` keeps broken edits (`code_agent_tools.py:128-131`); the C++ module must not |
 | **ExecutionModule** | `run_build_and_diagnose`, `run_test_suite`, `exec_sandboxed_cmd` | `agent/tool_library/run_tools.py` (`run_command:38`), `shell_tools.run_terminal_command:65`, `agent/coding/language_registry.py` (`run_linter:82`, `run_tests:192`), `code_canvas_tools.run_pytest:879`, `agent/core/code_run_diagnostics.py` | Python returns truncated raw output. The doc dedups logs and returns the top 5 error blocks. No persistent env/PID/ring-buffer state |
 | **KnowledgeModule** | `search_local_docs`, `fetch_and_clean_url`, `store_fact` | `agent/storage/memory.py` (SQLite facts + Chroma), `agent/storage/embeddings.py`, `agent/tool_library/web_tools.py` (`web_search:48`, `read_webpage:129`), `agent/research/*` (enrichment, content quality, URL registry), `agent/storage/learn_index.py`, `agent_tools.store_fact:27` / `query_past_experience:23`, `coding_tools.semantic_code_search:138` | Python has no local page cache layer equivalent to "repeated lookups cost zero network I/O". Chroma needs a C++ replacement (H10) |
 | **OrchestratorModule** | `checkpoint_notes`, `trigger_context_condense`, `complete_recipe` | `agent/core/run_state.py` (`TaskRunContext`, `checkpoint_capability`), `agent/policies/context_manager.py`, `agent/core/implementation_plan.py` + `cap.plan.update_checklist@v1`, `agent_tools.checkpoint_step:177` / `save_research_note:79`, `agent/core/tools.py` (`mark_objective_complete:453`, `finish_task:460`) | Python doesn't validate required scratchpad fields before a wipe. The step-advance wipe is triggered by the planner/loop, not by the module |
 
-Domain areas with no named module in the doc: writing drafts, learn/syllabus, personas, research deliverables. The doc allows "4 to 6" modules (D:L352), so these could become 1-2 more modules (e.g. a Document/Authoring module) or recipe cartridges over Workspace + Knowledge. **D11**
+### 5.2 Proposed additions (D11: user invited improvements) [proposal]
+
+The doc's four modules cover code, execution, knowledge, and meta. Aquila also has writing, Character AI, and Learn, each of which owns **persistent domain state**, which is exactly what R9 says belongs in a module rather than in the LLM's context.
+
+| Proposal | What it owns | Actions (sketch) | Why a module, not just a recipe | Python sources |
+|---|---|---|---|---|
+| **Shared `CanvasBuffer` core** (a library, not a module) | In-RAM documents, versioned edits, pending patches, anchored selections (`{doc, range, text, context}`), undo/redo, diff | n/a (used by Workspace + Document) | D10 wants the *same* Gemini-style live-edit experience for code and writing. One buffer engine serves both modules and the GUI canvas, so the GUI just renders buffer events | `code_canvas_tools.py` (buffer + `pending_patches`), `agent/coding/writing_canvas.py`, `writing_tools.py`, selection subcalls `code_ide_page.py:263` / `writing_page.py:521` |
+| **DocumentModule** (writing canvas) | Active draft, outline/sections, sources attached, compile state | `outline`, `draft_section`, `revise_selection`, `compile_document` | Writing has its own structure (sections, outline, compile) that code doesn't; today it lives in `Agent-Drafts/active_draft_state.json` and 6 `cap.writing.*` capabilities | `writing_tools.py`, `capabilities/writing/*`, `functions/writing*.py` |
+| **PersonaModule** (Character AI) | Active persona bible, user prefs, chat history, build state | `load_persona`, `write_initialization`, `update_preferences`, `finalize_persona` | Persona state must survive context wipes and stay out of the rolling tail. In-character chat temperature/prompting is persona-owned | `storage/persona_registry.py`, `tool_library/persona_tools.py`, `capabilities/persona/*` |
+| **LearnModule** (Classroom + Archives) | Course/syllabus, mastery tiers, assessment results, archive index handle | `write_syllabus`, `generate_assessment`, `record_result`, `set_mastery_tier`, `search_archive` | Mastery/assessment state is long-lived and per-course; retrieval uses KnowledgeModule underneath | `storage/learn_registry.py`, `storage/learn_index.py`, `tool_library/learn_tools.py`, `capabilities/learn/*` |
+
+Research stays a **recipe cartridge** over Knowledge + Document (+ Orchestrator); it has no state of its own beyond sources and notes, which KnowledgeModule already owns.
+
+Count: 4 core + 3 domain = **7 modules, one over the doc's "4 to 6"** (D:L352). Alternative if you'd rather stay within 6: fold Persona into Document (both are "authored artifacts"). I'd keep them separate because their state and lifecycles differ.
 
 ---
 
@@ -303,15 +319,17 @@ Order follows R5 (data structures → execution sandbox → orchestration loop),
 
 | Milestone | Scope | Proof of done |
 |---|---|---|
-| M0 | CMake + presets (MSVC+CUDA release, clang ASan/UBSan debug), FetchContent deps, CI | Clean configure+build on both presets; a deliberate leak test fails under ASan |
+| M0 | CMake + presets (MSVC+CUDA release, clang ASan/UBSan debug), FetchContent deps, CI. **Install the Qt 6.11 MSVC SDK** (+WebEngine); not present today | Clean configure+build on both presets; a deliberate leak test fails under ASan; a minimal Qt Widgets window builds and links |
 | M1 | Core value types: Message, `ActionSchema`, `ActionResult`, `ToolInteraction`, `AgentScratchpad` (R7 schema), recipe cartridge struct (R12), JSON round-trip | Golden JSON fixtures, byte-equal round-trip; recipe JSON from D:L433-477 parses and re-serializes |
 | M2 | `IInferenceBackend` (KV ops in the interface from day one) + `OllamaHttpBackend` (parity scaffold; KV ops degrade to resending the full prompt) | Same request payload as Python for fixed inputs (recorded fixtures); live smoke "pong" |
-| M3 | `IAgentModule` + compile-time `ModuleRegistry` (R13) + **WorkspaceModule** and **ExecutionModule** (state, actions, RAM backups/rollback, log dedup) with the path firewall | Fixture repo: action results checked against Python tool outputs where behavior overlaps; bad edits are rejected with the file untouched; `export → restore` snapshot round-trip |
+| M3 | `IAgentModule` + compile-time `ModuleRegistry` (R13) + **`CanvasBuffer` core** (5.2) + **WorkspaceModule** (canvas buffer model, D10) and **ExecutionModule** (log dedup) with the path firewall | Fixture repo: results checked against Code Canvas outputs (`code_canvas_tools.py`) where behavior overlaps; a bad edit is rejected and both buffer and disk are untouched; pending patch accept → sync writes exactly the diff; `export → restore` snapshot round-trip |
 | M4 | `AgentLoop` + `ContextCondenser` (3 segments, R6) + **OrchestratorModule** + `RuntimeTierConfig` (R16) + one code recipe cartridge with a `post_llm_validation_hook` | Harness scenario `code_smoke_file` passes 3/3 on C++ (Python baseline 3/3 [doc]); the loop refuses to exit while the hook fails (forced-failure test) |
 | M5 | `LlamaCppBackend` (upstream): KV checkpoint/rollback (`llama_memory_seq_rm`), GBNF for the R14 action call | Post-wipe prefill token count measured < full prompt; invalid JSON impossible in N trials |
 | M6 | **KnowledgeModule** (SQLite + vector + embeddings + page cache) | Reads existing `fact_graph.db`; recall@k on fixture matches Python within tolerance |
-| M7 | Recipe cartridges for research / writing / learn / persona (+ any extra modules from D11) | Capability parity scenarios re-expressed as cartridge tests |
-| M8 | Surfaces: CLI first, then GUI / Remote / MCP per decisions below | Per surface |
+| M7 | DocumentModule, PersonaModule, LearnModule (5.2, if approved) + recipe cartridges for research / writing / learn / persona; `ScriptModule` over `manifest.json` plugins (D5); `register_new_recipe`, nesting, `llm_micro_pass` (D9) | Capability parity scenarios re-expressed as cartridge tests; a sample plugin manifest loads and runs via stdin/stdout |
+| M8 | CLI surface + **Qt 6 Widgets GUI shell** (D3): all current pages ported (G1-G12 in `GUI_EVALUATION.md`) | Each row G1-G12 has a passing check (manual QA list from Python `docs/workspace-qa-*.md` re-run on C++) |
+| M9 | **Live canvas** for code + writing (D10, F1) + **GUI recipe builder** on QtNodes (D8, F2) | Highlight → agent edit → inline pending patch → accept/undo, scripted UI test; builder round-trips cartridge JSON losslessly |
+| M10 | Remote server (52-route HTTP/WS contract, `webapp/` unchanged), MCP client + host, setup wizard, packaging (D6) | Existing `webapp/` works against the C++ server; MCP host tools listed by a client |
 
 ---
 
@@ -323,16 +341,17 @@ Decided (2026-11-02, by user):
 - **D2 Inference: DECIDED.** Ollama over HTTP first (M2-M4, parity), then direct llama.cpp with KV control (M5).
 - **D4 llama.cpp source: DECIDED.** Upstream `ggml-org/llama.cpp`. Open follow-up: check whether the local fork's uncommitted Qwen 3.5 edits (section 1) are needed upstream.
 
-Still open:
+- **D5 Extensibility: DECIDED.** `manifest.json` plugin scripts (reframed as script modules, section 2.2). MCP client/host is still rebuilt as an *integration surface* under D6; it's not the plugin mechanism.
+- **D6 Scope: DECIDED.** Remake **everything** except Data Processing mode (to be rethought). That also drops `agent/vision/` (only used by data processing). In scope: all modes, GUI, Remote Companion, MCP, setup wizard, packaging, memory/sleep cycle, instances.
+- **D7 Push: DONE.** `Aquila-cpp` pushed; remote == local `9cc8367` at push time.
+- **D8 Recipe authoring: DECIDED.** GUI builder (QtNodes, M9). The Architect Agent stays a later idea.
+- **D9 Primitives-era leftovers: DECIDED.** Keep `register_new_recipe`, recipe nesting, `llm_micro_pass`, all reframed for cartridges (section 2.2).
+- **D10 Edit model: DECIDED.** Canvas buffer model. Aquila keeps and expands the canvas into a Gemini-style live canvas for code *and* writing. The move away from Canvas was for Lacerta (section 4 note).
 
-- **D3 GUI:** Port PySide6 → Qt6 C++ Widgets, keep the Python GUI as a client of the C++ core over a local API, or go CLI/Remote-PWA only at first?
-- **D5 Extensibility:** Which escape hatch carries forward? Plugin scripts with `manifest.json` (D:L308-316, framed for primitives), DLL modules (R13 Option B), MCP stdio (already in Python), or none for v1?
-- **D6 Scope cut:** Which modes ship in the first C++ release (Code only? + Research? Character/Learn later?) Vision/data-processing out?
-- **D7 Push Aquila-cpp:** Push the branch to GitHub now, or keep it local until M0 builds? (Making it the GitHub default branch is a separate choice.)
-- **D8 Recipe authoring:** Config files by hand, a CLI/GUI builder, or an "Architect Agent" generating cartridge JSON? (asked at D:L348, unanswered)
-- **D9 Leftovers from the primitives design:** Keep `register_new_recipe` (agent-authored cartridges), recipe nesting, and `llm_micro_pass`, reframed for cartridges, or drop them?
-- **D10 WorkspaceModule edit model:** The doc wants in-RAM buffers + backups + rollback (closest Python: Code Canvas). The repo's reliability plan moved code mode *away* from Canvas to direct FS writes. Buffer-then-commit, or write-through with RAM backup?
-- **D11 Module set:** Are the 4 core modules enough, or add 1-2 (e.g. Document/Authoring for writing, learn, and personas)? The doc allows 4-6 (D:L352).
+Proposed, awaiting your OK:
+
+- **D3 GUI:** user preference was to keep PySide6 unless something better keeps all functionality. Evaluation (`GUI_EVALUATION.md`) recommends **Qt 6 Widgets in C++**: it covers all 12 current capability rows plus canvas/builder/low-RAM, ports class-for-class, and drops the GPL/paid `qfluentwidgets`. PySide6 (option A) covers today's rows but keeps Python and the license issue.
+- **D11 Modules:** add `CanvasBuffer` core + DocumentModule + PersonaModule + LearnModule (section 5.2), 7 modules total.
 
 ---
 
@@ -344,3 +363,4 @@ Still open:
 | 2026-11-02 | Added H14 (partial test baseline; suite deferred per user) |
 | 2026-11-02 | Pinned Python reference at `759212a` (H1 resolved); created orphan `Aquila-cpp` worktree; moved recon to `docs/recon/`; recorded D1/D2/D4; added local llama.cpp patch note and D7 |
 | 2026-11-02 | Re-read design doc (now `docs/design/aquila-cpp-design.md`). Section 2 split into governing R1-R18 vs superseded S1-S7 (primitives → coarse modules, primitive-piping recipes → cartridges, 1-3 threads → single-threaded). Crosswalk, dispositions, and milestones re-aligned to modules. Added 5.1 module source map and D8-D11 |
+| 2026-11-02 | User answers: D5/D6/D8/D9/D10 decided, D7 pushed. Added `GUI_EVALUATION.md` (D3 recommendation: Qt 6 Widgets C++), section 5.2 module proposals (D11), Lacerta scope note, M8-M10 for GUI/canvas/builder/remote/MCP; vision + data processing out |
