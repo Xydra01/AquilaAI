@@ -14,6 +14,9 @@ CMakeUserPresets.json
 *.gguf
 *.bin
 
+# Tool logs
+aqtinstall.log
+
 # Python (recon tooling)
 __pycache__/
 *.pyc
