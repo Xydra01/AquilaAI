@@ -1,0 +1,29 @@
+{
+  "active_objective": "Refactor src/condenser.cpp to the 3-segment KV layout",
+  "current_hypothesis": "The wipe recomputes tokens from the stale tail",
+  "verified_facts": [
+    "recent_tools_ holds at most 3 entries",
+    "estimate_base_tokens() ignores verified_facts"
+  ],
+  "failed_approaches_do_not_repeat": [
+    "Clearing recent_tools_ on wipe (breaks immediate coherence)"
+  ],
+  "next_immediate_action": "inspect_symbol condenser.cpp wipe_and_condense",
+  "checklist": [
+    {
+      "id": "c1",
+      "text": "Analyze existing class interface from pre-hook output",
+      "status": "done"
+    },
+    {
+      "id": "c2",
+      "text": "Apply surgical edits to implementation",
+      "status": "pending"
+    },
+    {
+      "id": "c3",
+      "text": "Benchmark prefill",
+      "status": "skipped"
+    }
+  ]
+}

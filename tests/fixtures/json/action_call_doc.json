@@ -1,0 +1,9 @@
+{
+  "thought": "Need to check the header signature before patching.",
+  "module": "WorkspaceModule",
+  "action": "inspect_symbol",
+  "args": {
+    "file": "condenser.hpp",
+    "name": "ContextCondenser"
+  }
+}

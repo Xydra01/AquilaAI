@@ -1,6 +1,12 @@
 add_library(aquila_core STATIC
     version.cpp
-    deps_probe.cpp)
+    deps_probe.cpp
+    json.cpp
+    types/message.cpp
+    types/action.cpp
+    types/tool_interaction.cpp
+    types/scratchpad.cpp
+    types/recipe.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)

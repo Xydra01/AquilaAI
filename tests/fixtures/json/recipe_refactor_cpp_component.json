@@ -1,0 +1,50 @@
+{
+  "recipe_id": "refactor_cpp_component",
+  "goal_template": "Refactor {{target_file}} to comply with: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "./src",
+        "pinned_files": [
+          "{{target_file}}"
+        ]
+      },
+      "expose_actions": [
+        "inspect_symbol",
+        "surgical_edit",
+        "revert_file"
+      ]
+    },
+    {
+      "module": "ExecutionModule",
+      "initial_state": {
+        "build_cmd": "cmake --build ./build --target unit_tests"
+      },
+      "expose_actions": [
+        "run_build_and_diagnose"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [
+    {
+      "module": "WorkspaceModule",
+      "action": "inspect_symbol",
+      "args": {
+        "file": "{{target_file}}",
+        "name": "*"
+      }
+    }
+  ],
+  "scratchpad_checklist": [
+    "Analyze existing class interface from pre-hook output",
+    "Apply surgical edits to implementation",
+    "Verify zero compiler errors via run_build_and_diagnose"
+  ],
+  "post_llm_validation_hook": {
+    "module": "ExecutionModule",
+    "action": "run_build_and_diagnose",
+    "must_succeed": true,
+    "on_failure_instruction": "Your final edit did not compile. Review the error output above and fix it before completing the recipe."
+  }
+}
