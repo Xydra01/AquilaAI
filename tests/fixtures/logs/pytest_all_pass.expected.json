@@ -1,0 +1,13 @@
+{
+  "log": "pytest_all_pass.txt",
+  "errors": 0,
+  "warnings": 0,
+  "tests": {
+    "passed": 2,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "blocks": []
+}

@@ -1,0 +1,49 @@
+template_spam.cpp:2:52: error: no member named 'missing' in 'A'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:12: note: in instantiation of function template specialization 'poke<A>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |            ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'B'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:24: note: in instantiation of function template specialization 'poke<B>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                        ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'C'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:36: note: in instantiation of function template specialization 'poke<C>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                                    ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'D'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:48: note: in instantiation of function template specialization 'poke<D>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                                                ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'E'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:60: note: in instantiation of function template specialization 'poke<E>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                                                            ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'F'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:72: note: in instantiation of function template specialization 'poke<F>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                                                                        ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'G'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:84: note: in instantiation of function template specialization 'poke<G>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                                                                                    ^
+template_spam.cpp:2:52: error: no member named 'missing' in 'H'
+    2 | template <class T> int poke(const T& v) { return v.missing(); }
+      |                                                  ~ ^
+template_spam.cpp:4:96: note: in instantiation of function template specialization 'poke<H>' requested here
+    4 |     return poke(A{}) + poke(B{}) + poke(C{}) + poke(D{}) + poke(E{}) + poke(F{}) + poke(G{}) + poke(H{});
+      |                                                                                                ^
+8 errors generated.

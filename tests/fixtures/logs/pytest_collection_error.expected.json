@@ -1,0 +1,23 @@
+{
+  "log": "pytest_collection_error.txt",
+  "errors": 1,
+  "warnings": 0,
+  "tests": {
+    "passed": 0,
+    "failed": 0,
+    "errors": 1,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "blocks": [
+    {
+      "file": "test_broken.py",
+      "line": 0,
+      "col": 0,
+      "severity": "error",
+      "code": "collection",
+      "message": "error during collection",
+      "count": 1
+    }
+  ]
+}

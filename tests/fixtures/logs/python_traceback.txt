@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "<project>\tb.py", line 10, in <module>
+    main()
+  File "<project>\tb.py", line 7, in main
+    return load("does-not-exist.txt")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<project>\tb.py", line 2, in load
+    with open(path) as f:
+         ^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'does-not-exist.txt'

@@ -1,0 +1,13 @@
+{
+  "log": "pytest_no_tests.txt",
+  "errors": 0,
+  "warnings": 0,
+  "tests": {
+    "passed": 0,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "blocks": []
+}

@@ -1,0 +1,29 @@
+broken.cpp:2:37: error: expected ';' after return statement
+    2 | int add(int a, int b) { return a + b }
+      |                                     ^
+      |                                     ;
+broken.cpp:4:17: error: no viable conversion from 'int' to 'std::string' (aka 'basic_string<char>')
+    4 |     std::string s = 42;
+      |                 ^   ~~
+F:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/llvm-mingw-20260505-ucrt-x86_64/include/c++/v1/string:1002:71: note: candidate constructor not viable: no known conversion from 'int' to 'const std::string &' for 1st argument
+ 1002 |   _LIBCPP_CONSTEXPR_SINCE_CXX20 _LIBCPP_STRING_INTERNAL_MEMORY_ACCESS basic_string(const basic_string& __str)
+      |                                                                       ^            ~~~~~~~~~~~~~~~~~~~~~~~~~
+F:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/llvm-mingw-20260505-ucrt-x86_64/include/c++/v1/string:1022:55: note: candidate constructor not viable: no known conversion from 'int' to 'std::string &&' for 1st argument
+ 1022 |   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 basic_string(basic_string&& __str)
+      |                                                       ^            ~~~~~~~~~~~~~~~~~~~~
+F:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/llvm-mingw-20260505-ucrt-x86_64/include/c++/v1/string:1062:55: note: candidate constructor template not viable: no known conversion from 'int' to 'const char * _Nonnull' for 1st argument
+ 1062 |   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 basic_string(const _CharT* _LIBCPP_DIAGNOSE_NULLPTR __s) {
+      |                                                       ^            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+F:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/llvm-mingw-20260505-ucrt-x86_64/include/c++/v1/string:1197:55: note: candidate constructor not viable: no known conversion from 'int' to 'initializer_list<char>' for 1st argument
+ 1197 |   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 basic_string(initializer_list<_CharT> __il) {
+      |                                                       ^            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+F:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/llvm-mingw-20260505-ucrt-x86_64/include/c++/v1/string:987:64: note: explicit constructor is not a candidate
+  987 |   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 explicit basic_string(const allocator_type& __a)
+      |                                                                ^
+F:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/llvm-mingw-20260505-ucrt-x86_64/include/c++/v1/string:1156:64: note: explicit constructor is not a candidate
+ 1156 |   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 explicit basic_string(const _Tp& __t) {
+      |                                                                ^
+broken.cpp:5:12: error: use of undeclared identifier 'undeclared_value'
+    5 |     return undeclared_value;
+      |            ^~~~~~~~~~~~~~~~
+3 errors generated.

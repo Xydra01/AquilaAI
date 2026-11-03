@@ -1,0 +1,23 @@
+{
+  "log": "pytest_mixed.txt",
+  "errors": 0,
+  "warnings": 0,
+  "tests": {
+    "passed": 2,
+    "failed": 1,
+    "errors": 0,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "blocks": [
+    {
+      "file": "test_m.py",
+      "line": 0,
+      "col": 0,
+      "severity": "failure",
+      "code": "test_bad",
+      "message": "AssertionError: one is not two",
+      "count": 1
+    }
+  ]
+}

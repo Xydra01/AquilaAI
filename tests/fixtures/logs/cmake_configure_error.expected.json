@@ -1,0 +1,16 @@
+{
+  "log": "cmake_configure_error.txt",
+  "errors": 1,
+  "warnings": 0,
+  "blocks": [
+    {
+      "file": "CMakeLists.txt",
+      "line": 3,
+      "col": 0,
+      "severity": "error",
+      "code": "",
+      "message": "Unknown CMake command \"not_a_real_command\".",
+      "count": 1
+    }
+  ]
+}

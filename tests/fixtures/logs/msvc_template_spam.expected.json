@@ -1,0 +1,16 @@
+{
+  "log": "msvc_template_spam.txt",
+  "errors": 8,
+  "warnings": 0,
+  "blocks": [
+    {
+      "file": "template_spam.cpp",
+      "line": 2,
+      "col": 0,
+      "severity": "error",
+      "code": "C2039",
+      "message": "'missing': is not a member of 'A'",
+      "count": 8
+    }
+  ]
+}

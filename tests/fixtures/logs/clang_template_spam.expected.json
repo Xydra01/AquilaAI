@@ -1,0 +1,16 @@
+{
+  "log": "clang_template_spam.txt",
+  "errors": 8,
+  "warnings": 0,
+  "blocks": [
+    {
+      "file": "template_spam.cpp",
+      "line": 2,
+      "col": 52,
+      "severity": "error",
+      "code": "",
+      "message": "no member named 'missing' in 'A'",
+      "count": 8
+    }
+  ]
+}

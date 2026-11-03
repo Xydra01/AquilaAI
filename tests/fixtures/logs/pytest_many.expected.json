@@ -1,0 +1,41 @@
+{
+  "log": "pytest_many.txt",
+  "errors": 0,
+  "warnings": 0,
+  "tests": {
+    "passed": 2,
+    "failed": 3,
+    "errors": 0,
+    "skipped": 1,
+    "xfailed": 1
+  },
+  "blocks": [
+    {
+      "file": "test_x.py",
+      "line": 0,
+      "col": 0,
+      "severity": "failure",
+      "code": "test_f1",
+      "message": "assert [1] == [2]",
+      "count": 1
+    },
+    {
+      "file": "test_x.py",
+      "line": 0,
+      "col": 0,
+      "severity": "failure",
+      "code": "test_f2",
+      "message": "ValueError: boom",
+      "count": 1
+    },
+    {
+      "file": "test_x.py",
+      "line": 0,
+      "col": 0,
+      "severity": "failure",
+      "code": "test_f3",
+      "message": "AssertionError: assert 'a' in 'b'",
+      "count": 1
+    }
+  ]
+}

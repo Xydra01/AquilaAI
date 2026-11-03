@@ -1,0 +1,16 @@
+{
+  "log": "python_traceback.txt",
+  "errors": 1,
+  "warnings": 0,
+  "blocks": [
+    {
+      "file": "<project>\\tb.py",
+      "line": 2,
+      "col": 0,
+      "severity": "error",
+      "code": "FileNotFoundError",
+      "message": "[Errno 2] No such file or directory: 'does-not-exist.txt'",
+      "count": 1
+    }
+  ]
+}

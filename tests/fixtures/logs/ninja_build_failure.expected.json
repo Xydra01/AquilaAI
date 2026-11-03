@@ -1,0 +1,20 @@
+{
+  "log": "ninja_build_failure.txt",
+  "errors": 2,
+  "warnings": 0,
+  "failed_targets": [
+    "CMakeFiles/app.dir/main.cpp.obj",
+    "CMakeFiles/app.dir/util.cpp.obj"
+  ],
+  "blocks": [
+    {
+      "file": "<project>\\ninja_proj\\shared.hpp",
+      "line": 2,
+      "col": 0,
+      "severity": "error",
+      "code": "C2065",
+      "message": "'missing_symbol': undeclared identifier",
+      "count": 2
+    }
+  ]
+}

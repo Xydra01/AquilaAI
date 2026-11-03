@@ -1,0 +1,65 @@
+template_spam.cpp
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'A'
+template_spam.cpp(1): note: see declaration of 'A'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<A>(const T &)' being compiled
+        with
+        [
+            T=A
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'B'
+template_spam.cpp(1): note: see declaration of 'B'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<B>(const T &)' being compiled
+        with
+        [
+            T=B
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'C'
+template_spam.cpp(1): note: see declaration of 'C'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<C>(const T &)' being compiled
+        with
+        [
+            T=C
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'D'
+template_spam.cpp(1): note: see declaration of 'D'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<D>(const T &)' being compiled
+        with
+        [
+            T=D
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'E'
+template_spam.cpp(1): note: see declaration of 'E'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<E>(const T &)' being compiled
+        with
+        [
+            T=E
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'F'
+template_spam.cpp(1): note: see declaration of 'F'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<F>(const T &)' being compiled
+        with
+        [
+            T=F
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'G'
+template_spam.cpp(1): note: see declaration of 'G'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<G>(const T &)' being compiled
+        with
+        [
+            T=G
+        ]
+template_spam.cpp(2): error C2039: 'missing': is not a member of 'H'
+template_spam.cpp(1): note: see declaration of 'H'
+template_spam.cpp(2): note: the template instantiation context (the oldest one first) is
+template_spam.cpp(4): note: see reference to function template instantiation 'int poke<H>(const T &)' being compiled
+        with
+        [
+            T=H
+        ]

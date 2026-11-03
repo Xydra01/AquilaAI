@@ -16,7 +16,13 @@ add_library(aquila_core STATIC
     modules/schema_check.cpp
     modules/module.cpp
     modules/registry.cpp
-    modules/workspace_module.cpp)
+    modules/workspace_module.cpp
+    exec/process_common.cpp
+    exec/process_win.cpp
+    exec/process_posix.cpp
+    exec/diagnostics.cpp
+    modules/execution_module.cpp
+    modules/builtin.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)

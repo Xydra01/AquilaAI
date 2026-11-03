@@ -1,3 +1,5 @@
+add_executable(aquila_proc_helper helpers/proc_helper.cpp)
+
 add_subdirectory(unit)
 if(AQUILA_SANITIZER_TESTS)
     add_subdirectory(sanitizer)

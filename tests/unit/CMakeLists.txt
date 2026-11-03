@@ -12,11 +12,16 @@ add_executable(aquila_unit_tests
     diff_test.cpp
     canvas_buffer_test.cpp
     workspace_module_test.cpp
-    python_oracle_test.cpp)
+    python_oracle_test.cpp
+    process_test.cpp
+    diagnostics_test.cpp
+    execution_module_test.cpp)
 target_link_libraries(aquila_unit_tests PRIVATE aquila::core httplib::httplib Catch2::Catch2WithMain)
 target_compile_definitions(aquila_unit_tests PRIVATE
     AQUILA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
-    AQUILA_DESIGN_DOC="${PROJECT_SOURCE_DIR}/docs/design/aquila-cpp-design.md")
+    AQUILA_DESIGN_DOC="${PROJECT_SOURCE_DIR}/docs/design/aquila-cpp-design.md"
+    AQUILA_PROC_HELPER="$<TARGET_FILE:aquila_proc_helper>")
+add_dependencies(aquila_unit_tests aquila_proc_helper)
 aquila_set_warnings(aquila_unit_tests)
 
 add_test(NAME unit COMMAND aquila_unit_tests --reporter console)

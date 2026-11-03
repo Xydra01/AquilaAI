@@ -1,0 +1,9 @@
+[1/3] Building CXX object CMakeFiles\app.dir\main.cpp.obj
+FAILED: [code=2] CMakeFiles/app.dir/main.cpp.obj 
+F:\PROGRA~2\MICROS~3\2022\BUILDT~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP   /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -MDd /showIncludes /FoCMakeFiles\app.dir\main.cpp.obj /FdCMakeFiles\app.dir\ /FS -c <project>\ninja_proj\main.cpp
+<project>\ninja_proj\shared.hpp(2): error C2065: 'missing_symbol': undeclared identifier
+[2/3] Building CXX object CMakeFiles\app.dir\util.cpp.obj
+FAILED: [code=2] CMakeFiles/app.dir/util.cpp.obj 
+F:\PROGRA~2\MICROS~3\2022\BUILDT~1\VC\Tools\MSVC\1444~1.352\bin\Hostx64\x64\cl.exe  /nologo /TP   /DWIN32 /D_WINDOWS /EHsc /Zi /Ob0 /Od /RTC1 -MDd /showIncludes /FoCMakeFiles\app.dir\util.cpp.obj /FdCMakeFiles\app.dir\ /FS -c <project>\ninja_proj\util.cpp
+<project>\ninja_proj\shared.hpp(2): error C2065: 'missing_symbol': undeclared identifier
+ninja: build stopped: cannot make progress due to previous errors.
