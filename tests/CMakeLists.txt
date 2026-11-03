@@ -1,0 +1,7 @@
+add_subdirectory(unit)
+if(AQUILA_SANITIZER_TESTS)
+    add_subdirectory(sanitizer)
+endif()
+if(AQUILA_ENABLE_CUDA)
+    add_subdirectory(cuda)
+endif()

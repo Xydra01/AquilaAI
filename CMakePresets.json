@@ -1,0 +1,140 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "msvc-base",
+      "hidden": true,
+      "inherits": "windows-base",
+      "description": "Run from an MSVC developer environment (scripts/msvc-dev.cmd).",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+        "AQUILA_BUILD_GUI": "ON"
+      }
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC Release (Qt)",
+      "inherits": "msvc-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "msvc-asan",
+      "displayName": "MSVC Debug + ASan + CRT leak check (Qt)",
+      "inherits": "msvc-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AQUILA_SANITIZE": "address"
+      }
+    },
+    {
+      "name": "msvc-release-cuda",
+      "displayName": "MSVC Release + CUDA smoke (local, needs a GPU)",
+      "inherits": "msvc-release",
+      "cacheVariables": {
+        "AQUILA_ENABLE_CUDA": "ON",
+        "AQUILA_REQUIRE_WEBENGINE": "ON",
+        "CMAKE_CUDA_ARCHITECTURES": "89"
+      }
+    },
+    {
+      "name": "mingw-san",
+      "displayName": "llvm-mingw clang Debug + ASan + UBSan (no Qt)",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AQUILA_SANITIZE": "address;undefined"
+      }
+    },
+    {
+      "name": "linux-san",
+      "displayName": "Linux clang Debug + ASan + UBSan + LSan (no Qt)",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AQUILA_SANITIZE": "address;undefined;leak"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "msvc-release", "configurePreset": "msvc-release" },
+    { "name": "msvc-asan", "configurePreset": "msvc-asan" },
+    { "name": "msvc-release-cuda", "configurePreset": "msvc-release-cuda" },
+    { "name": "mingw-san", "configurePreset": "mingw-san" },
+    { "name": "linux-san", "configurePreset": "linux-san" }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": { "outputOnFailure": true, "verbosity": "verbose" },
+      "execution": { "noTestsAction": "error" }
+    },
+    { "name": "msvc-release", "inherits": "test-base", "configurePreset": "msvc-release" },
+    { "name": "msvc-asan", "inherits": "test-base", "configurePreset": "msvc-asan" },
+    { "name": "msvc-release-cuda", "inherits": "test-base", "configurePreset": "msvc-release-cuda" },
+    { "name": "mingw-san", "inherits": "test-base", "configurePreset": "mingw-san" },
+    { "name": "linux-san", "inherits": "test-base", "configurePreset": "linux-san" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "msvc-release",
+      "steps": [
+        { "type": "configure", "name": "msvc-release" },
+        { "type": "build", "name": "msvc-release" },
+        { "type": "test", "name": "msvc-release" }
+      ]
+    },
+    {
+      "name": "msvc-asan",
+      "steps": [
+        { "type": "configure", "name": "msvc-asan" },
+        { "type": "build", "name": "msvc-asan" },
+        { "type": "test", "name": "msvc-asan" }
+      ]
+    },
+    {
+      "name": "msvc-release-cuda",
+      "steps": [
+        { "type": "configure", "name": "msvc-release-cuda" },
+        { "type": "build", "name": "msvc-release-cuda" },
+        { "type": "test", "name": "msvc-release-cuda" }
+      ]
+    },
+    {
+      "name": "mingw-san",
+      "steps": [
+        { "type": "configure", "name": "mingw-san" },
+        { "type": "build", "name": "mingw-san" },
+        { "type": "test", "name": "mingw-san" }
+      ]
+    },
+    {
+      "name": "linux-san",
+      "steps": [
+        { "type": "configure", "name": "linux-san" },
+        { "type": "build", "name": "linux-san" },
+        { "type": "test", "name": "linux-san" }
+      ]
+    }
+  ]
+}
