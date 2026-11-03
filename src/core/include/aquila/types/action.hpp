@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace aquila {
 
@@ -26,14 +27,19 @@ struct ActionSchema {
     bool operator==(const ActionSchema&) const = default;
 };
 
-// Outcome of executing an action (R10).
+// Outcome of executing an action (R10). error_code is a machine-readable failure
+// kind (snake_case, e.g. Python's "os_block", "bad_index"); it is empty exactly
+// when success is true, so the loop never has to pattern-match output text.
 struct ActionResult {
     bool success = false;
+    std::string error_code;
     std::string llm_facing_output;
     std::uint64_t token_estimate = 0;
 
     bool operator==(const ActionResult&) const = default;
 };
+
+bool is_valid_error_code(std::string_view code) noexcept;
 
 void to_json(Json& j, const ActionCall& v);
 void from_json(const Json& j, ActionCall& v, const std::string& path);

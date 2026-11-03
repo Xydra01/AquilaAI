@@ -1,5 +1,6 @@
 {
   "success": false,
+  "error_code": "build_failed",
   "llm_facing_output": "error C2065: 'scratchpad_': undeclared identifier (condenser.cpp:88)",
   "token_estimate": 0
 }

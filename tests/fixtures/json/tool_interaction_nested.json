@@ -21,6 +21,7 @@
   },
   "result": {
     "success": true,
+    "error_code": "",
     "llm_facing_output": "12 passed, 0 failed",
     "token_estimate": 9223372036854775808
   }

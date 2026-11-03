@@ -71,6 +71,54 @@ def load_checklist_item_state(py_ref: Path):
     return ref_module.ChecklistItemState
 
 
+def pinned_sources(py_ref: Path) -> dict[str, str]:
+    """Non-test agent/*.py files read from git objects at PINNED_SHA (not the worktree)."""
+    names = subprocess.run(
+        ["git", "-C", str(py_ref), "ls-tree", "-r", "--name-only", PINNED_SHA, "agent"],
+        capture_output=True, text=True, check=True).stdout.split()
+    names = [n for n in names if n.endswith(".py") and not n.startswith("agent/tests/")]
+    batch = subprocess.run(["git", "-C", str(py_ref), "cat-file", "--batch"],
+                           input="".join(f"{PINNED_SHA}:{n}\n" for n in names).encode(),
+                           capture_output=True, check=True).stdout
+    out: dict[str, str] = {}
+    pos = 0
+    for name in names:
+        header_end = batch.index(b"\n", pos)
+        size = int(batch[pos:header_end].split()[2])
+        out[name] = batch[header_end + 1:header_end + 1 + size].decode("utf-8")
+        pos = header_end + 1 + size + 1
+    return out
+
+
+def collect_error_codes(sources: dict[str, str]) -> list[str]:
+    """String literals Python uses as capability error codes:
+    CapabilityResult.failure("x", ...), CapabilityError("x", ...),
+    error_code="x" keywords, and `error_code = "x"` assignments."""
+    codes: set[str] = set()
+
+    def literal(node: ast.AST | None) -> None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value:
+            codes.add(node.value)
+
+    for text in sources.values():
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.Call):
+                f = node.func
+                is_failure = (isinstance(f, ast.Attribute) and f.attr == "failure"
+                              and isinstance(f.value, ast.Name) and f.value.id == "CapabilityResult")
+                is_error = ((isinstance(f, ast.Name) and f.id == "CapabilityError")
+                            or (isinstance(f, ast.Attribute) and f.attr == "CapabilityError"))
+                if (is_failure or is_error) and node.args:
+                    literal(node.args[0])
+                for kw in node.keywords:
+                    if kw.arg == "error_code":
+                        literal(kw.value)
+            elif isinstance(node, ast.Assign):
+                if any(isinstance(t, ast.Name) and t.id == "error_code" for t in node.targets):
+                    literal(node.value)
+    return sorted(codes)
+
+
 def write(name: str, value: Any) -> None:
     path = OUT_DIR / f"{name}.python.json"
     with path.open("w", encoding="utf-8", newline="\n") as f:
@@ -104,6 +152,14 @@ def main() -> None:
     write("checklist_item_pending", item_cls(id="c1", text="Analyze interface").to_dict())
     write("checklist_item_done", item_cls(id="c2", text="Apply edits", status="done").to_dict())
     write("checklist_item_skipped", item_cls(id="c3", text="Benchmark ✓", status="skipped").to_dict())
+
+    sources = pinned_sources(py_ref)
+    codes = collect_error_codes(sources)
+    codes_path = OUT_DIR / "codes" / "error_codes.json"
+    codes_path.parent.mkdir(exist_ok=True)
+    with codes_path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(codes, indent=2) + "\n")
+    print(f"wrote codes/error_codes.json: {len(codes)} codes from {len(sources)} files")
 
 
 if __name__ == "__main__":

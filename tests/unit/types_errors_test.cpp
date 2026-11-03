@@ -40,8 +40,10 @@ TEST_CASE("unknown keys are rejected with their path") {
 }
 
 TEST_CASE("missing required keys are rejected") {
-    expect_error<ActionResult>(R"({"success":true,"llm_facing_output":""})", "/token_estimate",
-                               "missing required key");
+    expect_error<ActionResult>(R"({"success":true,"error_code":"","llm_facing_output":""})",
+                               "/token_estimate", "missing required key");
+    expect_error<ActionResult>(R"({"success":true,"llm_facing_output":"","token_estimate":1})",
+                               "/error_code", "missing required key");
     expect_error<AgentScratchpad>(R"({"active_objective":""})", "/current_hypothesis",
                                   "missing required key");
     expect_error<RecipeCartridge>(R"({"recipe_id":"r","goal_template":"g"})", "/load_modules",
@@ -53,8 +55,12 @@ TEST_CASE("wrong types are rejected") {
     expect_error<Message>(R"({"role":"user","content":"x","images":"a"})", "/images", "expected array");
     expect_error<Message>(R"({"role":"user","content":"x","images":["a",1]})", "/images/1",
                           "expected string");
-    expect_error<ActionResult>(R"({"success":"yes","llm_facing_output":"","token_estimate":1})",
-                               "/success", "expected boolean");
+    expect_error<ActionResult>(
+        R"({"success":"yes","error_code":"","llm_facing_output":"","token_estimate":1})", "/success",
+        "expected boolean");
+    expect_error<ActionResult>(
+        R"({"success":false,"error_code":7,"llm_facing_output":"","token_estimate":1})",
+        "/error_code", "expected string");
     expect_error<Message>("[]", "", "expected object, got array");
 }
 
@@ -66,10 +72,30 @@ TEST_CASE("bad enum values are rejected") {
 }
 
 TEST_CASE("token_estimate must be a non-negative integer") {
-    expect_error<ActionResult>(R"({"success":true,"llm_facing_output":"","token_estimate":-1})",
-                               "/token_estimate", "got negative");
-    expect_error<ActionResult>(R"({"success":true,"llm_facing_output":"","token_estimate":1.5})",
-                               "/token_estimate", "got number");
+    expect_error<ActionResult>(
+        R"({"success":true,"error_code":"","llm_facing_output":"","token_estimate":-1})",
+        "/token_estimate", "got negative");
+    expect_error<ActionResult>(
+        R"({"success":true,"error_code":"","llm_facing_output":"","token_estimate":1.5})",
+        "/token_estimate", "got number");
+}
+
+TEST_CASE("error_code is set exactly when success is false, in snake_case") {
+    expect_error<ActionResult>(
+        R"({"success":true,"error_code":"os_block","llm_facing_output":"","token_estimate":0})",
+        "/error_code", "must be empty when success is true");
+    expect_error<ActionResult>(
+        R"({"success":false,"error_code":"","llm_facing_output":"","token_estimate":0})",
+        "/error_code", "must be set when success is false");
+    for (const auto* bad : {"OS_BLOCK", "os block", "1st", "_x", "os-block", "\u00e9"}) {
+        INFO(bad);
+        CHECK_FALSE(is_valid_error_code(bad));
+    }
+    expect_error<ActionResult>(
+        R"({"success":false,"error_code":"OS BLOCK","llm_facing_output":"","token_estimate":0})",
+        "/error_code", "must be snake_case");
+    CHECK(is_valid_error_code("write_files_failed"));
+    CHECK(is_valid_error_code("e2"));
 }
 
 TEST_CASE("free-form args must be objects") {

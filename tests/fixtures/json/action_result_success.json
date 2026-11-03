@@ -1,5 +1,6 @@
 {
   "success": true,
+  "error_code": "",
   "llm_facing_output": "class ContextCondenser { ... } (42 lines)",
   "token_estimate": 18
 }

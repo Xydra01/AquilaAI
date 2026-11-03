@@ -74,13 +74,14 @@ TEST_CASE("values built in code round-trip") {
         Json::parse(R"({"z":0.1,"a":[1,-2,{"k":null}],"m":{"deep":{"deeper":true}}})")});
 
     check_value_roundtrip(ActionSchema{"noop", "", Json::object()});
-    check_value_roundtrip(ActionResult{false, "", 0});
-    check_value_roundtrip(ActionResult{true, "x", std::uint64_t{1} << 63});
-    check_value_roundtrip(ActionResult{true, "x", std::numeric_limits<std::uint64_t>::max()});
+    check_value_roundtrip(ActionResult{true, "", "", 0});
+    check_value_roundtrip(ActionResult{false, "os_block", "", 0});
+    check_value_roundtrip(ActionResult{true, "", "x", std::uint64_t{1} << 63});
+    check_value_roundtrip(ActionResult{false, "e2", "x", std::numeric_limits<std::uint64_t>::max()});
 
     check_value_roundtrip(ToolInteraction{"id", "ExecutionModule", "run_test_suite",
                                           Json::parse(R"({"filter":"*"})"),
-                                          ActionResult{true, "ok", 3}});
+                                          ActionResult{true, "", "ok", 3}});
 
     check_value_roundtrip(AgentScratchpad{});
     check_value_roundtrip(AgentScratchpad{
@@ -97,6 +98,20 @@ TEST_CASE("values built in code round-trip") {
     full.scratchpad_checklist = {"one", "two"};
     full.post_llm_validation_hook = ValidationHook{"WorkspaceModule", "check", false, "fix it"};
     check_value_roundtrip(full);
+}
+
+TEST_CASE("every error code Python uses at 759212a is accepted and round-trips") {
+    const auto codes = Json::parse(
+        test::read_bytes(test::fixture_dir() / "python" / "codes" / "error_codes.json"));
+    REQUIRE(codes.is_array());
+    for (const auto& c : codes) {
+        const auto code = c.get<std::string>();
+        INFO(code);
+        CHECK(is_valid_error_code(code));
+        check_value_roundtrip(ActionResult{false, code, "failed", 1});
+    }
+    std::printf("error codes: %zu Python codes accepted\n", codes.size());
+    CHECK(codes.size() == 32);
 }
 
 TEST_CASE("omitted optional recipe arrays parse as empty and are emitted") {

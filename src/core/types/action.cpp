@@ -37,17 +37,40 @@ void from_json(const Json& j, ActionSchema& v, const std::string& path) {
                                            child_path(path, "parameters_json_schema"));
 }
 
+bool is_valid_error_code(std::string_view code) noexcept {
+    if (code.empty() || code.front() < 'a' || code.front() > 'z') return false;
+    for (const char c : code) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
 void to_json(Json& j, const ActionResult& v) {
     j = Json::object();
     j["success"] = v.success;
+    j["error_code"] = v.error_code;
     j["llm_facing_output"] = v.llm_facing_output;
     j["token_estimate"] = v.token_estimate;
 }
 
 void from_json(const Json& j, ActionResult& v, const std::string& path) {
     expect_object(j, path);
-    reject_unknown(j, path, {"success", "llm_facing_output", "token_estimate"});
+    reject_unknown(j, path, {"success", "error_code", "llm_facing_output", "token_estimate"});
     v.success = read_bool(require(j, path, "success"), child_path(path, "success"));
+
+    const auto code_path = child_path(path, "error_code");
+    v.error_code = read_string(require(j, path, "error_code"), code_path);
+    if (v.success && !v.error_code.empty()) {
+        throw SchemaError(code_path, "must be empty when success is true");
+    }
+    if (!v.success && v.error_code.empty()) {
+        throw SchemaError(code_path, "must be set when success is false");
+    }
+    if (!v.success && !is_valid_error_code(v.error_code)) {
+        throw SchemaError(code_path, "must be snake_case ([a-z][a-z0-9_]*), got '" + v.error_code + "'");
+    }
+
     v.llm_facing_output =
         read_string(require(j, path, "llm_facing_output"), child_path(path, "llm_facing_output"));
     v.token_estimate = read_u64(require(j, path, "token_estimate"), child_path(path, "token_estimate"));
