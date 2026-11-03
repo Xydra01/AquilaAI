@@ -57,37 +57,61 @@ AQUILA_DATA_ROOT=$(mktemp -d) AQUILA_SKIP_MIGRATE=1 ai-agent-env/Scripts/python.
 
 ---
 
-## 2. Design brief (Aquila_cpp.pdf), distilled into requirements
+## 2. Design brief, distilled into requirements
 
-Line refs are to `pdftotext -layout` output of the attachment.
+Source: `docs/design/aquila-cpp-design.md` (byte-identical copy of the user's `Aquila cpp.md`, sha256 prefix `5df25a1814eba1e7`). `D:Lnn` = line in that file.
 
-| ID | Requirement | PDF ref |
+The doc is a conversation that **evolves**. Earlier sections float ideas that later sections refine or replace. Section 2.1 is what governs; section 2.2 records what was superseded, so nobody builds from the earlier version by mistake.
+
+### 2.1 Governing requirements (the doc's final position)
+
+| ID | Requirement | Source |
 |---|---|---|
-| R1 | Strict C++20: no raw owning pointers; `unique_ptr`/`shared_ptr`/RAII/`std::jthread` | L28-33 |
-| R2 | 1-3 OS threads max (orchestrator, GPU worker, tool worker). **No async runtime, no coroutines**, mutex+condvar queue | L35-63, L119-121 |
-| R2b | Later in the doc: prefer **fully single-threaded deterministic state machine** for the loop | L127-135, L347-353 |
-| R3 | Header-only / FetchContent deps: nlohmann/json, cpp-httplib, spdlog+fmt, inja | L95-111, L536-539 |
-| R4 | ASan+UBSan in debug from day one; TSan for queue tests | L112-117 |
-| R5 | Port module-by-module with Python as the reference spec: data structures, then tool sandbox, then orchestration loop | L123-126 |
-| R6 | Context condenser: pinned system prefix, anchored self-notes block, rolling tail of last K tools; wipe when over threshold | L138-162, L170-315 |
-| R7 | Self-note is a **strict schema** (hypothesis, verified_facts, failed_approaches, next_action), enforced by grammar/structured output | L320-333 |
-| R8 | Pre-truncate big tool outputs (head+tail), spill full output to a side buffer with a reference | L335-344 |
-| R9 | ~10-15 atomic C++ primitives; **JSON recipes** chain them with `{{templating}}`, conditions, `on_failure`, `output_template`; recipe runner is itself a tool (`IToolPrimitive`), recursive | L359-539 |
-| R10 | Escape hatches: plugin scripts in `tools/plugins/` with `manifest.json` (JSON over stdin/stdout); agent-authored recipes via `register_new_recipe` | L482-510 |
-| R11 | Coarse-grained stateful modules (`IAgentModule`: `get_actions`, `execute_action`, `export/restore_state_snapshot`), e.g. Workspace / Execution / Knowledge / Orchestrator | L544-713 |
-| R12 | Recipes load modules, scope exposed actions, `pre_llm_hooks`, `post_llm_validation_hook` exit gate | L715-793 |
-| R13 | Module registry: compile-time first (Option A); DLL plugins (Option B) optional | L795-834 |
-| R14 | `IInferenceBackend`: KV append, checkpoint, rollback, grammar-constrained generate, n-gram speculation, `ComputeProfile` | L1002-1077 |
-| R15 | `RuntimeTierConfig`: one code path, tier-scaled knobs (condense threshold 2048/6144, rolling tools 2/4, tool output chars, thought tokens, gpu layers) | L1159-1210 |
-| R16 | CPU-first discipline: physical-core thread pinning, repacked quants, BLAS for prefill | L895-928 |
-| R17 | Model decision: **Qwen 3.5 family**, 4B CPU base + 9B GPU boost, optional 0.8B draft model | L1279-1324 |
+| R1 | Strict C++20: zero raw owning pointers; `unique_ptr`/`shared_ptr`/RAII | D:L13 |
+| R2 | **Single-threaded, deterministic, value-oriented core loop.** All data owned by `ContextCondenser` or the `AgentLoop` frame; pass by `const T&` / `std::move`. No async, no coroutines | D:L58-61, D:L212-217 (supersedes S1) |
+| R3 | FetchContent / header-only deps: nlohmann/json, cpp-httplib, spdlog+fmt, inja (still needed for `{{...}}` in recipe cartridges, D:L435, D:L443) | D:L42-51, D:L346 |
+| R4 | Sanitizers in debug builds from day one | D:L53 |
+| R5 | Port module-by-module with Python as the reference spec: data structures → execution sandbox → orchestration loop | D:L57 |
+| R6 | **Context condenser with 3 KV segments:** `[0..P]` system prompt **+ active recipe schema** (never evicted); `[P+1..S]` structured scratchpad **+ module state snapshots** (evicted only on wipe); `[S+1..end]` rolling tail of the last 2-3 tool/action results | D:L63-75, refined D:L572-578 |
+| R7 | Self-note is a **strict schema** (e.g. `current_hypothesis`, `verified_facts`, `failed_approaches_do_not_repeat`, `next_immediate_action`), forced by grammar during condensation | D:L201-204 |
+| R8 | Pre-truncate oversized outputs before they enter the rolling tail (head+tail), spill the full output to a side buffer with a reference | D:L206-210 |
+| R9 | **Coarse-grained, stateful modules ("cartridges"), 4-6 of them,** are the LLM-facing unit. Each owns its domain state in C++ memory, exposes a few high-level actions, has built-in guardrails and recovery, and survives context wipes. This replaces the "flat bag of functions" and "tiny Unix-like primitives" designs | D:L350-364 (supersedes S2) |
+| R10 | `IAgentModule` interface: `module_id`, `get_actions → ActionSchema[]`, `execute_action → ActionResult{success, llm_facing_output, token_estimate}`, `export_state_snapshot` / `restore_state_snapshot` | D:L366-411 |
+| R11 | Four core modules (state / actions / behind-the-scenes work): **WorkspaceModule** (file buffers, RAM backups, file tree; `inspect_symbol`, `surgical_edit`, `revert_file`; rejects conflict markers/unbalanced braces), **ExecutionModule** (env, cwd, PIDs, stdout/stderr ring; `run_build_and_diagnose`, `run_test_suite`, `exec_sandboxed_cmd`; dedups logs → top 5 error blocks), **KnowledgeModule** (SQLite/vector, cached pages/docs; `search_local_docs`, `fetch_and_clean_url`, `store_fact`; HTML strip, markdown chunking, caching), **OrchestratorModule** (condenser ref, recipe checklist, step counter; `checkpoint_notes`, `trigger_context_condense`, `complete_recipe`; validates scratchpad fields before a wipe) | D:L414-423 |
+| R12 | **Recipes are user/agent-created "Configuration & Workflow Cartridges"**: `goal_template`, `load_modules[{module, initial_state, expose_actions}]`, `pre_llm_hooks`, `scratchpad_checklist`, `post_llm_validation_hook{must_succeed, on_failure_instruction}`. They do **not** pipe raw strings between primitives. Exposed surface is 3-4 actions per task. The loop refuses to exit while the validation hook fails | D:L221, D:L425-484, D:L539, D:L757 (supersedes S3, S4) |
+| R13 | Module registry: **Option A compile-time** (`registry.register_module<T>(id)`, single binary) as the default. Option B (DLL/.so plugins via C factory) optional | D:L486-522 |
+| R14 | LLM action call = grammar-enforced JSON `{"thought": <1-2 sentences>, "module", "action", "args"}`, ~45 tokens | D:L590-608 |
+| R15 | `IInferenceBackend`, KV-aware, **linked directly against the C/C++ inference API** (not HTTP per turn): `append_to_kv_cache`, `mark_kv_checkpoint`, `rollback_kv_to`, `generate_structured(gbnf, max_tokens, ngram)`, `ComputeProfile {GPU_HIGH_VRAM, CPU_MOE_FAST, CPU_LOW_SPEC_EDGE}` | D:L569-573, D:L617-668 |
+| R16 | **CPU-first ("console-first") design**, with the GPU as boost. One code path; `RuntimeTierConfig` universal flags (KV rollback, GBNF, n-gram) + tier knobs: condense threshold 2048/6144, rolling tools 2/4, tool output chars 1500/4500, thought tokens 45/150, gpu layers 0/999 | D:L669-672, D:L706-734 (supersedes S6) |
+| R17 | CPU engine discipline: repacked quants, BLAS for prefill, physical-core (P-core) pinning (`physical - 1`), n-gram prompt-lookup speculation | D:L543-562, D:L609-615 |
+| R18 | Model: **Qwen 3.5 family**, read as Route 2: 4B for the CPU base (`q4_0_4_8`), 9B Q6_K/Q8_0 for the 4070 boost, 0.8B as the draft model | D:L759-791 [interpretation: D:L791 says only "Qwen 3.5 family idea"; Route 1 also offers Qwen 3.5 4B everywhere] |
 
-**Corrections to the PDF, checked against local source:**
+### 2.2 Superseded or evolved within the doc (do NOT build these as written)
 
-- `llama_kv_cache_seq_rm` (PDF L954) **does not exist** in the local llama.cpp. The current API is `llama_memory_seq_rm` / `llama_memory_seq_pos_max` (`tools/llama-cpp-turboquant/include/llama.h:714,766`). [measured]
-- llama.cpp ships `json_schema_to_grammar(nlohmann::ordered_json)` (`common/json-schema-to-grammar.h:9`), so Aquila's existing strict JSON schemas can become GBNF directly (R7, R14). [measured]
-- R4 on this machine: TSan is not available for Windows targets (MSVC or clang). TSan runs need Linux (Docker or a WSL distro). MSVC has ASan but no UBSan. [proposal: verify when setting up CMake presets]
-- R2 vs R2b tension: the PDF argues for both 3 threads and zero threads. The Python app today runs the agent on a Qt worker thread with a cross-process generation lock (`agent/core/generation_lock.py`). [proposal: single-threaded loop core, plus at most 1 inference thread and 1 UI/IO thread at the edges]
+| ID | Earlier idea | Where | Replaced by |
+|---|---|---|---|
+| S1 | 1-3 OS threads (orchestrator / GPU worker / tool worker) with a mutex+condvar `TaskQueue` | D:L17-32, D:L55 | R2 single-threaded core. Remaining parallelism lives *inside* the inference backend (llama.cpp's own compute threads, R17) [interpretation] |
+| S2 | ~10-15 **atomic primitives** (`fs_read`, `bash_exec`, `regex_extract`, `llm_subprompt`...) as the LLM-facing tool surface | D:L221-232 | R9-R11 modules. Primitive-level work (file I/O, process spawn, regex, HTML strip) becomes **internal implementation inside modules** ("Automatic Behind-the-Scenes C++ Work", D:L418) [interpretation: the doc never says primitives disappear internally] |
+| S3 | Primitive-piping recipe format: `steps[{primitive, args, on_failure, condition}]` + `output_template` (e.g. `bash_exec → regex_extract → llm_micro_pass`) | D:L253-302 | R12 cartridge format. "A Recipe no longer needs to micro-manage low-level string piping" (D:L427) |
+| S4 | `IToolPrimitive` interface; `RecipeRunner` implemented *as* a composite tool, recipes nesting recursively | D:L330-343 | R10 `IAgentModule` + R12 cartridges. Nesting/recursion is not carried forward (open, see D9) |
+| S5 | Condenser example with fixed `max_recent_tools_ = 3`, `token_wipe_threshold_ = 6144` | D:L115-116 | R16 tier-scaled values |
+| S6 | Condenser segments = system prompt / self-notes / tail | D:L63-75 | R6 refined: prefix also pins the **active recipe schema**, the anchored block also carries **module state snapshots** (D:L576-577) |
+| S7 | `llama_kv_cache_seq_rm(ctx, 0, P+1, -1)` | D:L571, D:L583 | **Factual correction:** not in llama.cpp anymore. Current API is `llama_memory_seq_rm` / `llama_memory_seq_pos_max` (`tools/llama-cpp-turboquant/include/llama.h:714,766`) [measured]. Verify again against upstream at M5 (D4 = upstream) |
+
+**Ideas the doc raised and never closed out** (not superseded, not reaffirmed):
+
+- **Escape hatch 1:** plugin scripts in `/tools/plugins/` + `manifest.json`, with JSON over stdin/stdout (D:L308-316). It was written in primitives language. Later the doc offers DLL modules (R13 Option B) for extensibility. See D5.
+- **Escape hatch 2: "skill crystallization"** via `register_new_recipe(recipe_json)`, generalizing a sequence of *primitive* calls into a recipe (D:L318-324). Under R12 an agent-authored recipe would be a cartridge (modules + exposed actions + hooks), not a primitive sequence. See D9.
+- **`llm_micro_pass`** (an isolated LLM call inside a recipe, D:L283-289, D:L302). The cartridge format has no equivalent field. See D9.
+- **Sandboxed scripting (sol2/Lua)** as a "Phase 2 upgrade if recipes hit a ceiling" (D:L238). Deferred.
+- **How users author recipes** (config files vs CLI/GUI builder vs "Architect Agent") is asked at D:L348 and never answered. See D8.
+
+**Other checks against local source:**
+
+- llama.cpp ships `json_schema_to_grammar(nlohmann::ordered_json)` (`common/json-schema-to-grammar.h:9`), so R14 action schemas can be generated as JSON Schema and turned into GBNF. [measured]
+- R4 on this machine: TSan is not available for Windows targets. Under R2 (single-threaded) TSan matters much less; it's only needed if a UI/IO thread is added at the edge. MSVC has ASan but no UBSan. [proposal: verify at M0]
+- R2 vs today's Python: the agent runs on a Qt worker thread with a cross-process generation lock (`agent/core/generation_lock.py`). [proposal: single-threaded core; any GUI/remote surface talks to it from outside the core]
+- R15 vs decision D2 (Ollama first): Ollama exposes no KV control, so an Ollama backend **cannot** satisfy R6/R15 KV pinning. The Ollama phase is a parity scaffold. `IInferenceBackend` must be designed for KV ops from day one, with the Ollama implementation degrading those ops to resending the full prompt.
 
 ---
 
@@ -99,16 +123,16 @@ Line refs are to `pdftotext -layout` output of the attachment.
 |---|---:|---:|---|---|
 | `agent/core` | 36 | 22168 | Brain: Ollama client, Agent, loop engine, planner, prompts, tools firewall, MCP, harness | Split; rewrite loop; see section 4 |
 | `agent/gui` | 29 | 9052 | PySide6 desktop app, 9 workspaces | Decision D3 |
-| `agent/tool_library` | 20 | 4191 | 74 tools merged into `ALL_TOOLS` | Collapse into ~10-15 primitives + modules (R9/R11) |
+| `agent/tool_library` | 20 | 4191 | 74 tools merged into `ALL_TOOLS` | Absorbed into the 4 core modules as internal code + a few exposed actions each (R9-R11); see section 5.1 |
 | `agent/storage` | 15 | 3984 | SQLite facts, Chroma vectors, instances, personas, learn, settings | Port (SQLite C API + vector index) |
-| `agent/policies` | 15 | 3719 | Context budget/tiers, tool catalogs, step policies, think policy | Becomes `RuntimeTierConfig` + `ContextCondenser` + recipe scoping |
-| `agent/capabilities` | 57 | 3266 | 44 versioned capabilities (Pydantic in → `CapabilityResult`) | Becomes `IAgentModule` actions |
+| `agent/policies` | 15 | 3719 | Context budget/tiers, tool catalogs, step policies, think policy | Becomes `RuntimeTierConfig` (R16) + `ContextCondenser` (R6) + recipe `expose_actions` scoping (R12) |
+| `agent/capabilities` | 57 | 3266 | 44 versioned capabilities (Pydantic in → `CapabilityResult`) | Batched behavior becomes module actions (R10/R11). Per-mode step policies become recipe cartridges (R12) |
 | `agent/remote` | 13 | 2963 | FastAPI + WS server (52 routes) for PWA `webapp/` | Defer; keep HTTP/WS contract |
 | `agent/parser` | 8 | 2656 | Strict schema builder, JSON parse/heal, Ollama diagnostics | Replace with nlohmann/json + schema → GBNF |
-| `agent/research` | 10 | 1731 | Web enrichment, URL registry, content quality, light research | Port into KnowledgeModule |
+| `agent/research` | 10 | 1731 | Web enrichment, URL registry, content quality, light research | Port into KnowledgeModule (R11) |
 | `agent/coding` | 7 | 1250 | File parser (PDF/DOCX/images), language registry, light coding | Port; PDF via MuPDF C |
 | `agent/aquila_runtime` | 12 | 1170 | Hardware detection, Ollama/Docker/SearXNG bootstrap, paths | Port `hardware_profile` → `ComputeProfile` |
-| `agent/functions` | 9 | 870 | Recipes (intent → capability list), writing brief/scope | Replace with JSON recipes (R9/R12) |
+| `agent/functions` | 9 | 870 | Recipes (intent → capability list), writing brief/scope | Replace with recipe cartridges (R12) |
 | `agent/vision` | 6 | 779 | torch CNN classifier (experimental) | Out of scope for core |
 | `agent/tasks` | 1 | 243 | Headless data processor | Defer |
 | `agent` (`agent/__init__.py`) | 1 | 120 | Legacy import aliases (`import main`, ...) | Drop |
@@ -119,9 +143,9 @@ Line refs are to `pdftotext -layout` output of the attachment.
 ### 3.1 Tool, capability, and recipe surfaces [measured]
 
 - **Legacy tools:** `SURVIVAL_TOOLS` (10) + `ALL_TOOLS` (74) = 84, no overlap. (`ARCHITECTURE.md` §8 says 33, which is stale.)
-- **Code-mode tool surface** (`agent/policies/code_tool_catalog.py`): `find_files, grep, list_dir, read_file, run_command, search_replace, write_file` (7). This is the PDF's "atomic primitives" in practice and the natural first port target.
-- **Capabilities** (44): dev 12, research 10, writing 6, learn 5, plan 5, persona 4, web 2. Shape: `CapabilitySpec{id, version, input_model, handler, tier, modes}` (`agent/capabilities/registry.py:13-21`). Handler signature: `(CapabilityContext, BaseModel) -> CapabilityResult` (`agent/capabilities/base.py:100`).
-- **Recipes** (15): `agent/functions/recipes.py`, just `recipe_id → tuple[capability_id]`. No data piping, conditions, or hooks. The PDF's recipe engine (R9/R12) is a strict superset.
+- **Code-mode tool surface** (`agent/policies/code_tool_catalog.py`): `find_files, grep, list_dir, read_file, run_command, search_replace, write_file` (7), the stateless flat-tool style the design doc moves away from (S2). In C++ these become *internal* operations of WorkspaceModule / ExecutionModule, and their Python outputs serve as the parity oracle for those modules (section 5.1).
+- **Capabilities** (44): dev 12, research 10, writing 6, learn 5, plan 5, persona 4, web 2. Shape: `CapabilitySpec{id, version, input_model, handler, tier, modes}` (`agent/capabilities/registry.py:13-21`). Handler signature: `(CapabilityContext, BaseModel) -> CapabilityResult` (`agent/capabilities/base.py:100`). These are batched but **stateless**: state lives in JSON files on disk, not in the capability.
+- **Recipes** (15): `agent/functions/recipes.py`, just `recipe_id → tuple[capability_id]`. No modules, exposed-action scoping, hooks, checklist, or validation gate. R12 cartridges replace these entirely.
 
 ### 3.2 Layer model (as documented, and as it really is)
 
@@ -176,26 +200,39 @@ Core files, by role:
 | Logging | `agent/core/run_logger.py` (console + JSONL) |
 | Facade | `agent/core/__init__.py` |
 
-**Current direction in the repo** (`docs/reliability-plan/README.md`) [doc]: "One dumb loop, sharp tools, batched capabilities." Phases 0-3 are marked done, and Phase 4 (unified ~300-line `agent_loop.py`) is not started. Code mode already bypasses `LoopEngine` (`loop_engine.py:187-191` raises for `mode=code`). **This lines up with the PDF**, so the C++ loop should be built from `code_agent.run_tool_session` semantics plus capability batches, *not* from `LoopEngine`.
+**Current direction in the repo** (`docs/reliability-plan/README.md`) [doc]: "One dumb loop, sharp tools, batched capabilities." Phases 0-3 are marked done, and Phase 4 (unified ~300-line `agent_loop.py`) is not started. Code mode already bypasses `LoopEngine` (`loop_engine.py:187-191` raises for `mode=code`). The *loop shape* lines up with the design doc (one simple deterministic loop, R2), so the C++ `AgentLoop` should take its turn mechanics from `code_agent.run_tool_session`, *not* from `LoopEngine`. The *tool shape* does not line up: the Python code loop calls flat stateless tools, while the doc calls for stateful modules (R9). See D10.
 
 ---
 
-## 5. Concept crosswalk: PDF design vs. existing Python
+## 5. Concept crosswalk: design doc vs. existing Python
 
-| PDF concept | Closest Python today | Gap / note |
+| Design concept (governing) | Closest Python today | Gap / note |
 |---|---|---|
-| `ContextCondenser` (R6) | `agent/policies/context_manager.py` (`build_loop_messages`, `on_step_advance`, `compress_step_transcript`), `agent/policies/context_budget.py` | Python wipes `conversation_history` on step advance ([doc] ARCHITECTURE §5.5) and summarizes with an LLM call. No rolling-K tool tail as a first-class structure |
-| `AgentScratchpad` / self-notes (R7) | `agent/core/run_state.py` `TaskRunContext` (goal, goal_summary, run_digest, checklist, milestones, ground_truth); SQLite `scratchpad` table via `save_research_note` | Not schema-enforced. Digest is free text |
-| Pre-truncate tool output (R8) | `agent/policies/code_context.py` `truncate_text`/`tool_output_max_chars`; `format_capability_result_for_llm` 12k cap (`agent/capabilities/base.py:66-97`) | Head-only truncation. No spill buffer + reference |
-| Atomic primitives (R9) | 7 code tools; 84 legacy tools | Consolidate |
-| JSON recipes (R9/R12) | `agent/functions/recipes.py` (ordered cap IDs) | Need engine: templating, conditions, hooks, validation gate |
-| `IAgentModule` (R11) | `CapabilitySpec` + handlers; `run_state_providers.py` ground-truth providers (= `export_state_snapshot`) | Capabilities are stateless functions. State lives in JSON files (`Agent-Code/active_code_state.json`, `Agent-Drafts/active_draft_state.json`) |
-| Post-LLM validation gate (R12) | TDD soft gates in `loop_engine.py` ([doc] ARCH §17); `agent/core/harness_gate.py` | Make first-class |
-| `IInferenceBackend` (R14) | `OllamaClient` (HTTP to Ollama `/api/chat`, `format`=JSON schema) | Ollama gives no KV control. Direct llama.cpp is needed for R6/R14 KV pinning |
-| GBNF / structured output (R7/R14) | `agent/parser/structured_schema.py` (980) builds Ollama JSON schemas; `heal_calls.py` and `_heal_tool_action` patch arg aliases | Grammar at the sampler should remove most healing code |
-| `RuntimeTierConfig` / `ComputeProfile` (R15) | `ContextProfile` tiers compact/standard/extended/max keyed on `num_ctx` (`agent/policies/context_budget.py:9-71`); `HardwareProfile` presets (`agent/aquila_runtime/hardware_profile.py:17-28`); `agent/policies/model_tiers.py`, `agent/policies/thinking_tiers.py` | Python keys on context size, PDF keys on hardware. Merge both |
-| Plugins via stdin/stdout (R10) | MCP bridge (`agent/core/mcp_bridge.py`) is already a stdio JSON-RPC tool plugin mechanism | MCP may *be* R10. Decision D5 |
-| Harness as proof | `agent/core/capability_harness.py` scenarios + `scripts/harness_gate.sh` | Reuse scenarios as cross-language parity tests |
+| Coarse-grained stateful modules (R9, R10) | Nothing is both stateful and LLM-facing. **Batched behavior:** capabilities (`agent/capabilities/`), stateless functions. **State:** JSON buffers on disk (`Agent-Code/active_code_state.json` via `code_canvas_tools.py`, `Agent-Drafts/active_draft_state.json` via `writing_tools.py`). **Snapshots:** `run_state_providers.py` ground-truth providers (≈ `export_state_snapshot`) | Core design shift. Merge "batched behavior + domain state + snapshot" into one C++ object per domain. Section 5.1 maps the 4 modules |
+| Recipe cartridges (R12) | `agent/functions/recipes.py` (intent → ordered capability IDs); per-step allowlists in `agent/policies/tool_catalog.py` / `step_policies.py` / `capabilities/adapters.py` (≈ `expose_actions`); plan checklist `cap.plan.update_checklist@v1` (≈ `scratchpad_checklist`) | Python spreads one cartridge's worth of information across 4+ files and the planner. No `pre_llm_hooks`; no `initial_state` |
+| `post_llm_validation_hook` exit gate (R12) | TDD soft gates in `loop_engine.py` ([doc] ARCH §17); `agent/core/harness_gate.py` (offline gate only) | Make it a loop invariant: the loop cannot exit while `must_succeed` fails |
+| Action call `{thought, module, action, args}` (R14) | Code mode: `{reasoning, tools[{name, arguments}], final_report}`; capability modes: `{reasoning, capabilities[{id, arguments}]}` (`docs/capability-modules-vision.md` "Act-turn JSON") | Two formats today → one. `thought` capped (R16 `max_thought_tokens`). Heal/alias layers (`heal_calls.py`, `code_agent.py:41-113`) should become unnecessary under a grammar |
+| `ContextCondenser`, 3 KV segments (R6) | `agent/policies/context_manager.py` (`build_loop_messages`, `on_step_advance`, `compress_step_transcript`), `agent/policies/context_budget.py` | Python wipes history on step advance ([doc] ARCH §5.5) and LLM-summarizes. No rolling-K tail as a structure; no module-snapshot segment; no pinned recipe schema |
+| Strict self-note schema (R7) | `agent/core/run_state.py` `TaskRunContext` (goal, goal_summary, run_digest, checklist, milestones, ground_truth); scratchpad notes via `save_research_note` | Digest is free text, and notes are not schema-enforced. OrchestratorModule must validate required fields (R11) |
+| Pre-truncate + spill (R8) | `agent/policies/code_context.py` `truncate_text` / `tool_output_max_chars`; `format_capability_result_for_llm` 12k cap (`agent/capabilities/base.py:66-97`) | Head-only truncation; no spill buffer + reference |
+| `IInferenceBackend` direct, KV-aware (R15) | `OllamaClient` (`agent/core/main.py:273-1430`), HTTP `/api/chat` with a JSON-schema `format` | No KV control is possible through Ollama. D2 makes Ollama a parity scaffold only (see section 2.2 checks) |
+| GBNF (R7, R14) | `agent/parser/structured_schema.py` (980) builds Ollama JSON schemas | Generate JSON Schema from `ActionSchema`s of the *exposed* actions → `json_schema_to_grammar` |
+| `RuntimeTierConfig` / `ComputeProfile` (R16) | `ContextProfile` tiers keyed on `num_ctx` (`agent/policies/context_budget.py:9-71`); `HardwareProfile` presets (`agent/aquila_runtime/hardware_profile.py:17-28`); `model_tiers.py`, `thinking_tiers.py` | Python keys on context size, the doc keys on hardware and is CPU-first. Rebuild around `ComputeProfile` |
+| Module registry Option A (R13) | `agent/capabilities/registry.py` (`register_capability`, import-time `_register_all`) | Same idea; becomes `register_module<T>()` |
+| Harness as proof | `agent/core/capability_harness.py` scenarios + `scripts/harness_gate.sh` | Reuse the scenarios as cross-language acceptance tests |
+
+### 5.1 The four core modules (R11) and where their Python behavior lives
+
+These are parity oracles and starting points, not 1:1 ports. [code]
+
+| Module | Doc actions | Python sources of behavior/state | Notable gap vs doc |
+|---|---|---|---|
+| **WorkspaceModule** | `inspect_symbol`, `surgical_edit`, `revert_file` | Code Canvas (in-memory project buffer, `pending_patches` accept/reject): `agent/tool_library/code_canvas_tools.py` (`read_code_outline:447`, `replace_symbol:640`, `apply_unified_patch:570`, `replace_lines:541`, patches `:144-175`). Direct FS tools: `agent/tool_library/code_agent_tools.py` (`read_file:38`, `write_file:87`, `search_replace:137`, `list_dir:189`, `grep:201`, `find_files:209`). Path firewall: `agent/core/tools.py` (`is_safe_path`, `resolve_tool_path`). Symbols: `git_tools.find_references:66` | Doc: back up in RAM, **reject/roll back** bad edits. Python `write_file` writes to disk even on a syntax error and just reports it (`code_agent_tools.py:128-131`). Python had a buffer design (Canvas), but the reliability plan dropped it for code mode in favor of direct FS. **D10** |
+| **ExecutionModule** | `run_build_and_diagnose`, `run_test_suite`, `exec_sandboxed_cmd` | `agent/tool_library/run_tools.py` (`run_command:38`), `shell_tools.run_terminal_command:65`, `agent/coding/language_registry.py` (`run_linter:82`, `run_tests:192`), `code_canvas_tools.run_pytest:879`, `agent/core/code_run_diagnostics.py` | Python returns truncated raw output. The doc dedups logs and returns the top 5 error blocks. No persistent env/PID/ring-buffer state |
+| **KnowledgeModule** | `search_local_docs`, `fetch_and_clean_url`, `store_fact` | `agent/storage/memory.py` (SQLite facts + Chroma), `agent/storage/embeddings.py`, `agent/tool_library/web_tools.py` (`web_search:48`, `read_webpage:129`), `agent/research/*` (enrichment, content quality, URL registry), `agent/storage/learn_index.py`, `agent_tools.store_fact:27` / `query_past_experience:23`, `coding_tools.semantic_code_search:138` | Python has no local page cache layer equivalent to "repeated lookups cost zero network I/O". Chroma needs a C++ replacement (H10) |
+| **OrchestratorModule** | `checkpoint_notes`, `trigger_context_condense`, `complete_recipe` | `agent/core/run_state.py` (`TaskRunContext`, `checkpoint_capability`), `agent/policies/context_manager.py`, `agent/core/implementation_plan.py` + `cap.plan.update_checklist@v1`, `agent_tools.checkpoint_step:177` / `save_research_note:79`, `agent/core/tools.py` (`mark_objective_complete:453`, `finish_task:460`) | Python doesn't validate required scratchpad fields before a wipe. The step-advance wipe is triggered by the planner/loop, not by the module |
+
+Domain areas with no named module in the doc: writing drafts, learn/syllabus, personas, research deliverables. The doc allows "4 to 6" modules (D:L352), so these could become 1-2 more modules (e.g. a Document/Authoring module) or recipe cartridges over Workspace + Knowledge. **D11**
 
 ---
 
@@ -255,25 +292,25 @@ Core files: `base.py`, `registry.py`, `adapters.py` (step_kind → default/allow
 | H10 | Python-only deps with no drop-in C++ equivalent: `cloudscraper` (anti-bot), `chromadb` (on-disk format), `python-docx`, `markdownify`, PySide6 GUI, FastAPI | section 6 |
 | H11 | Existing user data (SQLite `fact_graph.db`, Chroma `vector_db/`, `Agent-*` JSON ledgers) must be readable or migrated | [doc] ARCH §1, §7 |
 | H12 | CUDA on Windows needs the MSVC host compiler. clang/llvm-mingw can't build the CUDA backend | [measured] llama build used cl.exe + nvcc |
-| H13 | TSan is not available on Windows | section 2 corrections |
+| H13 | TSan is not available on Windows (lower impact under R2 single-threaded) | section 2.2 "Other checks" |
 | H14 | The offline Python suite does not finish on this machine, so there's no complete green baseline yet. Run 1 (`-m "not live and not heretic and not qwopus"`, ai-agent-env) was killed after ~28 min at **15 GB working set**, with a QtWebEngine child. Run 2 (verbose) was stopped by choice at 49%: **450 passed, 13 failed**, and it was sitting on `tests/test_loop_web_scrape.py::test_loop_engine_calls_enrich_on_web_search` at 2.1 GB. The 13 failures are in test_agent_tools (2), test_capability_act_hints (2), test_character_build_ingest, test_config_catalog, test_implementation_plan, test_ledger_completion (2), test_light_research (2), test_loop_guards (2). Not diagnosed. They may come from the uncommitted work, the temp `AQUILA_DATA_ROOT`, or real bugs | [measured] 2026-11-02 |
 
 ---
 
 ## 8. Proposed C++ shape and port order [proposal, not started]
 
-Order follows PDF R5 (data, then tools, then loop) and the repo's own reliability plan (code mode first, unified loop).
+Order follows R5 (data structures → execution sandbox → orchestration loop), with modules as the unit (R9). Code/workspace work comes first because it's the best-tested Python path. All single-threaded (R2).
 
 | Milestone | Scope | Proof of done |
 |---|---|---|
-| M0 | Branch/worktree, CMake + presets (MSVC+CUDA release, clang ASan/UBSan debug), FetchContent deps, CI | Clean configure+build on both presets; a deliberate leak test fails under ASan |
-| M1 | Core value types: Message, ToolCall, ToolResult, Plan/Ledger, RunState JSON round-trip | Golden JSON fixtures exported from Python, byte-equal round-trip in C++ tests |
-| M2 | `IInferenceBackend` + `OllamaHttpBackend` (parity with `OllamaClient.chat` non-stream + stream) | Same request payload as Python for fixed inputs (recorded fixtures); live smoke "pong" |
-| M3 | 7 code primitives + path firewall (`is_safe_path`, `resolve_tool_path`) | Fixture repo: C++ output == Python output for a table of calls, incl. blocked paths |
-| M4 | `AgentLoop` + `ContextCondenser` + `RuntimeTierConfig`; code mode end-to-end | Harness scenario `code_smoke_file` passes 3/3 on C++ (Python baseline today: 3/3 [doc]) |
-| M5 | `LlamaCppBackend`: KV checkpoint/rollback (`llama_memory_seq_rm`), GBNF from schema | Post-wipe prefill token count measured < full prompt; grammar makes invalid JSON impossible in N trials |
-| M6 | Modules + JSON recipe engine; port research/writing/learn/persona capabilities | Existing capability parity tests' scenarios, re-expressed as C++ tests |
-| M7 | Memory: SQLite facts/scratchpad + vector index + embeddings | Reads existing `fact_graph.db`; recall@k on fixture matches Python within tolerance |
+| M0 | CMake + presets (MSVC+CUDA release, clang ASan/UBSan debug), FetchContent deps, CI | Clean configure+build on both presets; a deliberate leak test fails under ASan |
+| M1 | Core value types: Message, `ActionSchema`, `ActionResult`, `ToolInteraction`, `AgentScratchpad` (R7 schema), recipe cartridge struct (R12), JSON round-trip | Golden JSON fixtures, byte-equal round-trip; recipe JSON from D:L433-477 parses and re-serializes |
+| M2 | `IInferenceBackend` (KV ops in the interface from day one) + `OllamaHttpBackend` (parity scaffold; KV ops degrade to resending the full prompt) | Same request payload as Python for fixed inputs (recorded fixtures); live smoke "pong" |
+| M3 | `IAgentModule` + compile-time `ModuleRegistry` (R13) + **WorkspaceModule** and **ExecutionModule** (state, actions, RAM backups/rollback, log dedup) with the path firewall | Fixture repo: action results checked against Python tool outputs where behavior overlaps; bad edits are rejected with the file untouched; `export → restore` snapshot round-trip |
+| M4 | `AgentLoop` + `ContextCondenser` (3 segments, R6) + **OrchestratorModule** + `RuntimeTierConfig` (R16) + one code recipe cartridge with a `post_llm_validation_hook` | Harness scenario `code_smoke_file` passes 3/3 on C++ (Python baseline 3/3 [doc]); the loop refuses to exit while the hook fails (forced-failure test) |
+| M5 | `LlamaCppBackend` (upstream): KV checkpoint/rollback (`llama_memory_seq_rm`), GBNF for the R14 action call | Post-wipe prefill token count measured < full prompt; invalid JSON impossible in N trials |
+| M6 | **KnowledgeModule** (SQLite + vector + embeddings + page cache) | Reads existing `fact_graph.db`; recall@k on fixture matches Python within tolerance |
+| M7 | Recipe cartridges for research / writing / learn / persona (+ any extra modules from D11) | Capability parity scenarios re-expressed as cartridge tests |
 | M8 | Surfaces: CLI first, then GUI / Remote / MCP per decisions below | Per surface |
 
 ---
@@ -289,9 +326,13 @@ Decided (2026-11-02, by user):
 Still open:
 
 - **D3 GUI:** Port PySide6 → Qt6 C++ Widgets, keep the Python GUI as a client of the C++ core over a local API, or go CLI/Remote-PWA only at first?
-- **D5 Plugin mechanism:** Is MCP stdio the R10 escape hatch, or should there be a separate `tools/plugins/manifest.json` scheme?
+- **D5 Extensibility:** Which escape hatch carries forward? Plugin scripts with `manifest.json` (D:L308-316, framed for primitives), DLL modules (R13 Option B), MCP stdio (already in Python), or none for v1?
 - **D6 Scope cut:** Which modes ship in the first C++ release (Code only? + Research? Character/Learn later?) Vision/data-processing out?
 - **D7 Push Aquila-cpp:** Push the branch to GitHub now, or keep it local until M0 builds? (Making it the GitHub default branch is a separate choice.)
+- **D8 Recipe authoring:** Config files by hand, a CLI/GUI builder, or an "Architect Agent" generating cartridge JSON? (asked at D:L348, unanswered)
+- **D9 Leftovers from the primitives design:** Keep `register_new_recipe` (agent-authored cartridges), recipe nesting, and `llm_micro_pass`, reframed for cartridges, or drop them?
+- **D10 WorkspaceModule edit model:** The doc wants in-RAM buffers + backups + rollback (closest Python: Code Canvas). The repo's reliability plan moved code mode *away* from Canvas to direct FS writes. Buffer-then-commit, or write-through with RAM backup?
+- **D11 Module set:** Are the 4 core modules enough, or add 1-2 (e.g. Document/Authoring for writing, learn, and personas)? The doc allows 4-6 (D:L352).
 
 ---
 
@@ -302,3 +343,4 @@ Still open:
 | 2026-11-02 | Initial recon from `Aquila-3.5@0e51872` + dirty tree; PDF requirements R1-R17; hazards H1-H13; decisions D1-D6 |
 | 2026-11-02 | Added H14 (partial test baseline; suite deferred per user) |
 | 2026-11-02 | Pinned Python reference at `759212a` (H1 resolved); created orphan `Aquila-cpp` worktree; moved recon to `docs/recon/`; recorded D1/D2/D4; added local llama.cpp patch note and D7 |
+| 2026-11-02 | Re-read design doc (now `docs/design/aquila-cpp-design.md`). Section 2 split into governing R1-R18 vs superseded S1-S7 (primitives → coarse modules, primitive-piping recipes → cartridges, 1-3 threads → single-threaded). Crosswalk, dispositions, and milestones re-aligned to modules. Added 5.1 module source map and D8-D11 |
