@@ -6,7 +6,9 @@ add_library(aquila_core STATIC
     types/action.cpp
     types/tool_interaction.cpp
     types/scratchpad.cpp
-    types/recipe.cpp)
+    types/recipe.cpp
+    inference/ollama_wire.cpp
+    inference/ollama_backend.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)

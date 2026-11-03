@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import types
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,113 @@ def collect_error_codes(sources: dict[str, str]) -> list[str]:
     return sorted(codes)
 
 
+ACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {"type": "string"},
+        "tools": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "enum": ["read_file", "write_file"]},
+                           "arguments": {"type": "object"}},
+            "required": ["name", "arguments"]}},
+        "final_report": {"type": "string"},
+    },
+    "required": ["reasoning", "tools"],
+}
+PLAN_SCHEMA = {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "string"}}},
+               "required": ["steps"]}
+
+# Every env var _build_native_chat_payload (and the helpers it calls) reads.
+PAYLOAD_ENV = ("AQUILA_ACT_NUM_PREDICT", "AQUILA_ACT_NUM_PREDICT_MICRO", "AQUILA_CHAT_NUM_PREDICT",
+               "AQUILA_CHAT_NUM_PREDICT_THINK", "AQUILA_PLAN_NUM_PREDICT", "AQUILA_REPEAT_PENALTY",
+               "AQUILA_TQ_REPEAT_PENALTY", "AQUILA_REPEAT_LAST_N", "OLLAMA_KEEP_ALIVE")
+
+# (case, model, num_ctx, env, call kwargs, explicit C++ GenerationParams equivalent)
+PAYLOAD_CASES = [
+    ("act_code_agent", "aquila:latest", 8192, {"AQUILA_ACT_NUM_PREDICT": "1024"},
+     dict(messages=[{"role": "system", "content": "You are Aquila."},
+                    {"role": "user", "content": "Create hello.py"}],
+          temperature=0.2, stream=False, format_spec=ACT_SCHEMA, plain_chat=False,
+          keep_alive=None, think=False, surface="act"),
+     {"temperature": 0.2, "num_ctx": 8192, "max_tokens": 1024, "repeat_penalty": 1.15,
+      "repeat_last_n": 64, "think": False, "constraint": {"kind": "json_schema", "schema": ACT_SCHEMA}}),
+    ("chat_think_stream", "aquila:latest", None, {},
+     dict(messages=[{"role": "user", "content": "Explain KV caches."}],
+          temperature=0.6, stream=True, format_spec=None, plain_chat=True,
+          keep_alive="5m", think=True, surface="chat"),
+     {"temperature": 0.6, "max_tokens": 4096, "repeat_penalty": 1.15, "repeat_last_n": 64,
+      "think": True, "keep_alive": "5m"}),
+    ("json_object", "aquila:latest", 4096, {},
+     dict(messages=[{"role": "user", "content": "Return {}"}],
+          temperature=0.1, stream=False, format_spec="json_object", plain_chat=False,
+          keep_alive=None, think=None, surface="chat"),
+     {"temperature": 0.1, "num_ctx": 4096, "repeat_penalty": 1.15, "repeat_last_n": 64,
+      "constraint": {"kind": "json"}}),
+    ("turboquant_model", "aquila-tq-32k", None, {},
+     dict(messages=[{"role": "user", "content": "hi"}],
+          temperature=0.3, stream=False, format_spec=None, plain_chat=True,
+          keep_alive=None, think=None, surface="chat"),
+     {"temperature": 0.3, "max_tokens": 2048, "repeat_penalty": 1.3, "repeat_last_n": 64}),
+    ("multimodal_no_penalty", "aquila:latest", None, {"AQUILA_REPEAT_PENALTY": "1.0"},
+     dict(messages=[{"role": "user", "content": [
+              {"type": "text", "text": "What is this? naïve ✓"},
+              {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aGVsbG8="}}]}],
+          temperature=0.4, stream=False, format_spec=None, plain_chat=True,
+          keep_alive=None, think=False, surface="chat"),
+     {"temperature": 0.4, "max_tokens": 2048, "think": False}),
+    ("plan_surface", "aquila:latest", 32768, {"AQUILA_PLAN_NUM_PREDICT": "3000"},
+     dict(messages=[{"role": "user", "content": "Plan the refactor."}],
+          temperature=0.3, stream=False, format_spec=PLAN_SCHEMA, plain_chat=False,
+          keep_alive=None, think=False, surface="plan"),
+     {"temperature": 0.3, "num_ctx": 32768, "max_tokens": 3000, "repeat_penalty": 1.15,
+      "repeat_last_n": 64, "think": False, "constraint": {"kind": "json_schema", "schema": PLAN_SCHEMA}}),
+    ("keep_alive_env", "aquila:latest", None, {"OLLAMA_KEEP_ALIVE": "30m"},
+     dict(messages=[{"role": "user", "content": "hi"}],
+          temperature=0.0, stream=True, format_spec=None, plain_chat=True,
+          keep_alive=None, think=None, surface="chat"),
+     {"temperature": 0.0, "max_tokens": 2048, "repeat_penalty": 1.15, "repeat_last_n": 64,
+      "keep_alive": "30m"}),
+]
+
+
+def gen_payload_fixtures(py_ref: Path) -> None:
+    """Payloads from the real OllamaClient._build_native_chat_payload at PINNED_SHA."""
+    dirty = subprocess.run(["git", "-C", str(py_ref), "diff", "--quiet", PINNED_SHA, "--", "agent"])
+    untracked = subprocess.run(["git", "-C", str(py_ref), "ls-files", "--others", "--exclude-standard",
+                                "agent"], capture_output=True, text=True, check=True).stdout.strip()
+    if dirty.returncode != 0 or untracked:
+        sys.exit(f"agent/ in {py_ref} differs from {PINNED_SHA}; payload fixtures need the pinned tree")
+
+    # Importing agent.core.main probes Ollama (H4); point it at a closed port.
+    os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:9"
+    os.environ["AQUILA_DATA_ROOT"] = tempfile.mkdtemp(prefix="aquila-fixtures-")
+    os.environ["AQUILA_SKIP_MIGRATE"] = "1"
+    sys.path[:0] = [str(py_ref), str(py_ref / "agent")]
+    import agent.core.main as py_main  # noqa: E402
+
+    # Importing also applies the user's runtime settings, which re-point the
+    # client at the real server. Building a payload does no I/O, but pin the
+    # closed port anyway so nothing here can reach a live Ollama.
+    client = py_main.client
+    client.base_url = "http://127.0.0.1:9"
+    out_dir = OUT_DIR / "payloads"
+    out_dir.mkdir(exist_ok=True)
+    for case, model, num_ctx, env, kwargs, params in PAYLOAD_CASES:
+        for name in PAYLOAD_ENV:
+            os.environ.pop(name, None)
+        os.environ.update(env)
+        client.model_name = model
+        client.num_ctx = num_ctx
+        call = dict(kwargs)
+        payload = client._build_native_chat_payload(call.pop("messages"), call.pop("temperature"),
+                                                    call.pop("stream"), call.pop("format_spec"), **call)
+        doc = {"case": case, "model": model, "stream": kwargs["stream"], "params": params,
+               "messages": payload["messages"], "python_payload": payload}
+        with (out_dir / f"{case}.json").open("w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+        print(f"wrote payloads/{case}.json")
+
+
 def write(name: str, value: Any) -> None:
     path = OUT_DIR / f"{name}.python.json"
     with path.open("w", encoding="utf-8", newline="\n") as f:
@@ -160,6 +268,8 @@ def main() -> None:
     with codes_path.open("w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(codes, indent=2) + "\n")
     print(f"wrote codes/error_codes.json: {len(codes)} codes from {len(sources)} files")
+
+    gen_payload_fixtures(py_ref)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ option(AQUILA_BUILD_GUI "Build the Qt 6 Widgets GUI (requires the Qt MSVC SDK)" 
 option(AQUILA_REQUIRE_WEBENGINE "Fail configure if Qt6 WebEngineWidgets is not installed" OFF)
 option(AQUILA_ENABLE_CUDA "Build the CUDA smoke test (requires nvcc + MSVC host compiler)" OFF)
 option(AQUILA_SANITIZER_TESTS "Register the deliberate-defect sanitizer tests" ON)
+option(AQUILA_LIVE_TESTS "Register tests that need a running Ollama server (never in CI)" OFF)
 set(AQUILA_SANITIZE "" CACHE STRING "Semicolon list of sanitizers: address, undefined, leak")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

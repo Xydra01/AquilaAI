@@ -5,6 +5,8 @@ function(aquila_set_warnings target)
         # cannot hide it when it originates in a dependency's templates (inja parser.hpp).
         target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:CXX>:/W4 /WX /permissive- /utf-8 /Zc:__cplusplus /wd4702>)
+        # C4996 flags standard functions such as std::getenv as "unsafe".
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)

@@ -1,0 +1,37 @@
+{
+  "case": "chat_think_stream",
+  "model": "aquila:latest",
+  "stream": true,
+  "params": {
+    "temperature": 0.6,
+    "max_tokens": 4096,
+    "repeat_penalty": 1.15,
+    "repeat_last_n": 64,
+    "think": true,
+    "keep_alive": "5m"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain KV caches."
+    }
+  ],
+  "python_payload": {
+    "model": "aquila:latest",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain KV caches."
+      }
+    ],
+    "temperature": 0.6,
+    "stream": true,
+    "keep_alive": "5m",
+    "options": {
+      "num_predict": 4096,
+      "repeat_penalty": 1.15,
+      "repeat_last_n": 64
+    },
+    "think": true
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "case": "act_code_agent",
+  "model": "aquila:latest",
+  "stream": false,
+  "params": {
+    "temperature": 0.2,
+    "num_ctx": 8192,
+    "max_tokens": 1024,
+    "repeat_penalty": 1.15,
+    "repeat_last_n": 64,
+    "think": false,
+    "constraint": {
+      "kind": "json_schema",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "reasoning": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "enum": [
+                    "read_file",
+                    "write_file"
+                  ]
+                },
+                "arguments": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "name",
+                "arguments"
+              ]
+            }
+          },
+          "final_report": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reasoning",
+          "tools"
+        ]
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are Aquila."
+    },
+    {
+      "role": "user",
+      "content": "Create hello.py"
+    }
+  ],
+  "python_payload": {
+    "model": "aquila:latest",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are Aquila."
+      },
+      {
+        "role": "user",
+        "content": "Create hello.py"
+      }
+    ],
+    "temperature": 0.2,
+    "stream": false,
+    "options": {
+      "num_ctx": 8192,
+      "num_predict": 1024,
+      "repeat_penalty": 1.15,
+      "repeat_last_n": 64
+    },
+    "format": {
+      "type": "object",
+      "properties": {
+        "reasoning": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "enum": [
+                  "read_file",
+                  "write_file"
+                ]
+              },
+              "arguments": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "arguments"
+            ]
+          }
+        },
+        "final_report": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reasoning",
+        "tools"
+      ]
+    },
+    "think": false
+  }
+}

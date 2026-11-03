@@ -1,0 +1,68 @@
+{
+  "case": "plan_surface",
+  "model": "aquila:latest",
+  "stream": false,
+  "params": {
+    "temperature": 0.3,
+    "num_ctx": 32768,
+    "max_tokens": 3000,
+    "repeat_penalty": 1.15,
+    "repeat_last_n": 64,
+    "think": false,
+    "constraint": {
+      "kind": "json_schema",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "steps"
+        ]
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Plan the refactor."
+    }
+  ],
+  "python_payload": {
+    "model": "aquila:latest",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Plan the refactor."
+      }
+    ],
+    "temperature": 0.3,
+    "stream": false,
+    "options": {
+      "num_ctx": 32768,
+      "num_predict": 3000,
+      "repeat_penalty": 1.15,
+      "repeat_last_n": 64
+    },
+    "format": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "steps"
+      ]
+    },
+    "think": false
+  }
+}

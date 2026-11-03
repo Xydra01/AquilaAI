@@ -1,0 +1,37 @@
+{
+  "case": "json_object",
+  "model": "aquila:latest",
+  "stream": false,
+  "params": {
+    "temperature": 0.1,
+    "num_ctx": 4096,
+    "repeat_penalty": 1.15,
+    "repeat_last_n": 64,
+    "constraint": {
+      "kind": "json"
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Return {}"
+    }
+  ],
+  "python_payload": {
+    "model": "aquila:latest",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Return {}"
+      }
+    ],
+    "temperature": 0.1,
+    "stream": false,
+    "options": {
+      "num_ctx": 4096,
+      "repeat_penalty": 1.15,
+      "repeat_last_n": 64
+    },
+    "format": "json"
+  }
+}
