@@ -1,0 +1,37 @@
+[
+  {
+    "case": "change_line",
+    "content": "one\ntwo\nthree\n",
+    "patch": "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+    "ok": true,
+    "result": "one\nTWO\nthree\n"
+  },
+  {
+    "case": "insert_lines",
+    "content": "a\nb\n",
+    "patch": "@@ -1,2 +1,4 @@\n a\n+a1\n+a2\n b\n",
+    "ok": true,
+    "result": "a\na1\na2\nb\n"
+  },
+  {
+    "case": "delete_line",
+    "content": "a\nb\nc\n",
+    "patch": "@@ -1,3 +1,2 @@\n a\n-b\n c\n",
+    "ok": true,
+    "result": "a\nc\n"
+  },
+  {
+    "case": "middle_of_file",
+    "content": "1\n2\n3\n4\n5\n6\n7\n8\n",
+    "patch": "@@ -4,3 +4,3 @@\n 4\n-5\n+five\n 6\n",
+    "ok": true,
+    "result": "1\n2\n3\n4\nfive\n6\n7\n8\n"
+  },
+  {
+    "case": "with_headers",
+    "content": "x\ny\n",
+    "patch": "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-x\n+X\n y\n",
+    "ok": true,
+    "result": "X\ny\n"
+  }
+]

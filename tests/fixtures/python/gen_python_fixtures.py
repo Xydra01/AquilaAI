@@ -227,6 +227,142 @@ def gen_payload_fixtures(py_ref: Path) -> None:
         print(f"wrote payloads/{case}.json")
 
 
+SEARCH_REPLACE_CASES = [
+    ("unique", "a = 1\nb = 2\nc = 3\n", "b = 2", "b = 20"),
+    ("multiline", "x\ny\nz\n", "y\nz", "Y\nZ\nW"),
+    ("delete", "keep\ndrop me\nkeep too\n", "drop me\n", ""),
+    ("unicode", "naïve ✓\nend\n", "naïve ✓", "café ✓"),
+    ("no_match", "a = 1\n", "b = 2", "x"),
+    ("ambiguous", "dup\ndup\n", "dup", "x"),
+    ("empty_search", "a\n", "", "x"),
+]
+
+PATCH_CASES = [
+    ("change_line", "one\ntwo\nthree\n", "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"),
+    ("insert_lines", "a\nb\n", "@@ -1,2 +1,4 @@\n a\n+a1\n+a2\n b\n"),
+    ("delete_line", "a\nb\nc\n", "@@ -1,3 +1,2 @@\n a\n-b\n c\n"),
+    ("middle_of_file", "1\n2\n3\n4\n5\n6\n7\n8\n", "@@ -4,3 +4,3 @@\n 4\n-5\n+five\n 6\n"),
+    ("with_headers", "x\ny\n", "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-x\n+X\n y\n"),
+]
+
+SYMBOL_SOURCES = {
+    "app": (Path(__file__).resolve().parents[1] / "workspace" / "sample_repo" / "py" / "app.py"),
+    "inline": "class A:\n    class B:\n        def m(self):\n            pass\n\ndef top():\n    def inner():\n        return 1\n    return inner\n\nasync def run():\n    pass\n",
+    "decorated": "import dataclasses\n\n@dataclasses.dataclass\nclass P:\n    x: int\n\n@staticmethod\ndef s():\n    return 1\n",
+}
+
+SAFE_PATH_CASES = [
+    # agent/tests/test_security.py
+    "my_script.py", "Agent-Tasks/task_123.json", "Agent-Creations/final_report.md", "src/utils/helpers.py",
+    ".env", "state.json", "chroma.sqlite3", "some/nested/folder/.env", "keys/aws_secret.pem", "database.sqlite3",
+    "server.log", "Agent-Tasks/crash_dump.db", "Agent-Logs/session_1.txt", "vector_db/data.bin", ".git/config",
+    "__pycache__/main.cpython-310.pyc",
+    # extra cases
+    ".gitignore", "src/.env.local", "home/id_rsa", "keys/deploy.key", "build/out.o", "node_modules/x/index.js",
+    ".vscode/settings.json", "README.md", "naïve/ünïcode.txt",
+]
+
+PYTEST_SCENARIOS = {
+    "all_pass": {"test_a.py": "def test_one():\n    assert 1\n\ndef test_two():\n    assert 2\n"},
+    "mixed": {"test_m.py": "def test_ok():\n    assert True\n\ndef test_ok2():\n    assert True\n\n"
+                           "def test_bad():\n    assert 1 == 2, 'one is not two'\n"},
+    "many": {"test_x.py": "import pytest\n\ndef test_p1():\n    pass\n\ndef test_p2():\n    pass\n\n"
+                          "def test_f1():\n    assert [1] == [2]\n\ndef test_f2():\n    raise ValueError('boom')\n\n"
+                          "def test_f3():\n    assert 'a' in 'b'\n\n@pytest.mark.skip\ndef test_s():\n    pass\n\n"
+                          "@pytest.mark.xfail\ndef test_x():\n    assert False\n"},
+    "collection_error": {"test_broken.py": "def test_x(:\n    pass\n"},
+    "no_tests": {"test_empty.py": "x = 1\n"},
+}
+
+
+def gen_workspace_oracle(py_ref: Path) -> None:
+    """Oracle cases from the real Python Code Canvas / firewall / pytest runner."""
+    from agent.core.tools import is_safe_path  # noqa: E402
+    from agent.tool_library import code_agent_tools, code_canvas_tools  # noqa: E402
+    from agent.coding import language_registry  # noqa: E402
+
+    data_root = Path(tempfile.mkdtemp(prefix="aquila-ws-oracle-"))
+    os.environ["AQUILA_DATA_ROOT"] = str(data_root)  # imports may have re-read .env
+    os.environ["AQUILA_DIFF_REVIEW"] = "0"
+    out_dir = OUT_DIR / "workspace"
+    out_dir.mkdir(exist_ok=True)
+
+    code_canvas_tools.init_code_project("oracle")
+    root = code_canvas_tools._project_root(code_canvas_tools._load_state())
+    root.mkdir(parents=True, exist_ok=True)
+
+    def category(msg: str) -> str:
+        if msg.startswith("✅"):
+            return "ok"
+        if "old_string is required" in msg:
+            return "empty_search"
+        if "not found" in msg:
+            return "no_match"
+        if "times in" in msg:
+            return "ambiguous"
+        return "other: " + msg[:80]
+
+    sr = []
+    for name, content, old, new in SEARCH_REPLACE_CASES:
+        f = root / f"{name}.txt"
+        f.write_bytes(content.encode("utf-8"))
+        msg = code_agent_tools.search_replace(f"{name}.txt", old, new)
+        # write_text() turns \n into \r\n on Windows; compare text, not line endings.
+        result = f.read_text(encoding="utf-8")
+        sr.append({"case": name, "content": content, "search": old, "replace": new,
+                   "category": category(msg), "result_text": result})
+    write_json(out_dir / "search_replace.json", sr)
+
+    patches = []
+    for name, content, patch in PATCH_CASES:
+        path = f"{name}.txt"
+        code_canvas_tools.create_buffer_file(path, content)
+        msg = code_canvas_tools.apply_unified_patch(path, patch)
+        entry = next(e for e in code_canvas_tools._load_state()["files"] if e["path"] == path)
+        patches.append({"case": name, "content": content, "patch": patch, "ok": msg.startswith("✅"),
+                        "result": entry["content"]})
+    write_json(out_dir / "unified_patch.json", patches)
+
+    symbols = []
+    for name, src in SYMBOL_SOURCES.items():
+        text = src.read_text(encoding="utf-8") if isinstance(src, Path) else src
+        symbols.append({"case": name, "source": text, "names": code_canvas_tools._python_symbols(text)})
+    write_json(out_dir / "python_symbols.json", symbols)
+
+    write_json(out_dir / "is_safe_path.json",
+               [{"path": p, "python_safe": bool(is_safe_path(Path(p)))} for p in SAFE_PATH_CASES])
+
+    logs_dir = Path(__file__).resolve().parents[1] / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    counts = []
+    for name, files in PYTEST_SCENARIOS.items():
+        scen = Path(tempfile.mkdtemp(prefix=f"aquila-pytest-{name}-"))
+        for fname, text in files.items():
+            (scen / fname).write_text(text, encoding="utf-8")
+        proc = subprocess.run([sys.executable, "-m", "pytest", ".", "-q", "--tb=short", "-p", "no:cacheprovider"],
+                              cwd=scen, capture_output=True, text=True, timeout=120)
+        output = (proc.stdout + proc.stderr).strip()
+        output = output.replace(str(scen), "<tmp>")
+        with (logs_dir / f"pytest_{name}.txt").open("w", encoding="utf-8", newline="\n") as f:
+            f.write(output + "\n")
+        original = language_registry._run_cmd
+        language_registry._run_cmd = lambda cmd, timeout=90, cwd=None, _o=output, _c=proc.returncode: (_c, _o)
+        try:
+            res = language_registry.run_tests(".")
+        finally:
+            language_registry._run_cmd = original
+        counts.append({"case": name, "exit_code": proc.returncode, "log": f"pytest_{name}.txt",
+                       "python_passed": res.passed, "python_failed": res.failed, "python_ok": res.ok})
+    write_json(out_dir / "pytest_counts.json", counts)
+    print(f"wrote workspace/*.json: {len(sr)} search_replace, {len(patches)} patches, {len(symbols)} symbol sets, "
+          f"{len(SAFE_PATH_CASES)} safe-path verdicts, {len(counts)} pytest runs")
+
+
+def write_json(path: Path, value: Any) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
 def write(name: str, value: Any) -> None:
     path = OUT_DIR / f"{name}.python.json"
     with path.open("w", encoding="utf-8", newline="\n") as f:
@@ -270,6 +406,7 @@ def main() -> None:
     print(f"wrote codes/error_codes.json: {len(codes)} codes from {len(sources)} files")
 
     gen_payload_fixtures(py_ref)
+    gen_workspace_oracle(py_ref)
 
 
 if __name__ == "__main__":

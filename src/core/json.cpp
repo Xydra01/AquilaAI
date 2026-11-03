@@ -8,7 +8,8 @@ namespace aquila {
 
 SchemaError::SchemaError(std::string path, const std::string& reason)
     : std::runtime_error((path.empty() ? std::string("(root)") : path) + ": " + reason),
-      path_(std::move(path)) {}
+      path_(std::move(path)),
+      reason_(reason) {}
 
 namespace json_io {
 

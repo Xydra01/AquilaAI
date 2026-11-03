@@ -20,9 +20,11 @@ class SchemaError : public std::runtime_error {
 public:
     SchemaError(std::string path, const std::string& reason);
     [[nodiscard]] const std::string& path() const noexcept { return path_; }
+    [[nodiscard]] const std::string& reason() const noexcept { return reason_; }
 
 private:
     std::string path_;
+    std::string reason_;
 };
 
 namespace json_io {

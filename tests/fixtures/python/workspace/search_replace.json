@@ -1,0 +1,58 @@
+[
+  {
+    "case": "unique",
+    "content": "a = 1\nb = 2\nc = 3\n",
+    "search": "b = 2",
+    "replace": "b = 20",
+    "category": "ok",
+    "result_text": "a = 1\nb = 20\nc = 3\n"
+  },
+  {
+    "case": "multiline",
+    "content": "x\ny\nz\n",
+    "search": "y\nz",
+    "replace": "Y\nZ\nW",
+    "category": "ok",
+    "result_text": "x\nY\nZ\nW\n"
+  },
+  {
+    "case": "delete",
+    "content": "keep\ndrop me\nkeep too\n",
+    "search": "drop me\n",
+    "replace": "",
+    "category": "ok",
+    "result_text": "keep\nkeep too\n"
+  },
+  {
+    "case": "unicode",
+    "content": "naïve ✓\nend\n",
+    "search": "naïve ✓",
+    "replace": "café ✓",
+    "category": "ok",
+    "result_text": "café ✓\nend\n"
+  },
+  {
+    "case": "no_match",
+    "content": "a = 1\n",
+    "search": "b = 2",
+    "replace": "x",
+    "category": "no_match",
+    "result_text": "a = 1\n"
+  },
+  {
+    "case": "ambiguous",
+    "content": "dup\ndup\n",
+    "search": "dup",
+    "replace": "x",
+    "category": "ambiguous",
+    "result_text": "dup\ndup\n"
+  },
+  {
+    "case": "empty_search",
+    "content": "a\n",
+    "search": "",
+    "replace": "x",
+    "category": "empty_search",
+    "result_text": "a\n"
+  }
+]

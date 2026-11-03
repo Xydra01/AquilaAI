@@ -8,7 +8,15 @@ add_library(aquila_core STATIC
     types/scratchpad.cpp
     types/recipe.cpp
     inference/ollama_wire.cpp
-    inference/ollama_backend.cpp)
+    inference/ollama_backend.cpp
+    workspace/syntax.cpp
+    workspace/path_firewall.cpp
+    canvas/diff.cpp
+    canvas/canvas_buffer.cpp
+    modules/schema_check.cpp
+    modules/module.cpp
+    modules/registry.cpp
+    modules/workspace_module.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)
@@ -20,5 +28,9 @@ target_link_libraries(aquila_core
         fmt::fmt
         spdlog::spdlog
         pantor::inja
-        httplib::httplib)
+        httplib::httplib
+        tree_sitter
+        tree_sitter_c
+        tree_sitter_cpp
+        tree_sitter_python)
 aquila_set_warnings(aquila_core)

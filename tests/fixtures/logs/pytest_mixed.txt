@@ -1,0 +1,10 @@
+..F                                                                      [100%]
+================================== FAILURES ===================================
+__________________________________ test_bad ___________________________________
+test_m.py:8: in test_bad
+    assert 1 == 2, 'one is not two'
+E   AssertionError: one is not two
+E   assert 1 == 2
+=========================== short test summary info ===========================
+FAILED test_m.py::test_bad - AssertionError: one is not two
+1 failed, 2 passed in 0.32s

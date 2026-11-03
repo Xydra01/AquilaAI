@@ -1,0 +1,34 @@
+[
+  {
+    "case": "app",
+    "source": "import functools\n\n\n@functools.cache\ndef cached(n):\n    return n * 2\n\n\nclass Store:\n    def __init__(self):\n        self.items = []\n\n    def add(self, item):\n        def check(x):\n            return x is not None\n\n        if check(item):\n            self.items.append(item)\n\n    async def flush(self):\n        return len(self.items)\n",
+    "names": [
+      "cached",
+      "Store",
+      "__init__",
+      "add",
+      "flush",
+      "check"
+    ]
+  },
+  {
+    "case": "inline",
+    "source": "class A:\n    class B:\n        def m(self):\n            pass\n\ndef top():\n    def inner():\n        return 1\n    return inner\n\nasync def run():\n    pass\n",
+    "names": [
+      "A",
+      "top",
+      "run",
+      "B",
+      "inner",
+      "m"
+    ]
+  },
+  {
+    "case": "decorated",
+    "source": "import dataclasses\n\n@dataclasses.dataclass\nclass P:\n    x: int\n\n@staticmethod\ndef s():\n    return 1\n",
+    "names": [
+      "P",
+      "s"
+    ]
+  }
+]

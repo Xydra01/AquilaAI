@@ -23,6 +23,7 @@
       "inherits": "windows-base",
       "description": "Run from an MSVC developer environment (scripts/msvc-dev.cmd).",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl",
         "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
         "AQUILA_BUILD_GUI": "ON"
@@ -58,6 +59,7 @@
       "displayName": "llvm-mingw clang Debug + ASan + UBSan (no Qt)",
       "inherits": "windows-base",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUILA_SANITIZE": "address;undefined"
@@ -69,6 +71,7 @@
       "inherits": "base",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUILA_SANITIZE": "address;undefined;leak"

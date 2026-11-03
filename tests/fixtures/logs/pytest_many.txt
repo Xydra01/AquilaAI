@@ -1,0 +1,22 @@
+..FFFsx                                                                  [100%]
+================================== FAILURES ===================================
+___________________________________ test_f1 ___________________________________
+test_x.py:10: in test_f1
+    assert [1] == [2]
+E   assert [1] == [2]
+E     
+E     At index 0 diff: 1 != 2
+E     Use -v to get more diff
+___________________________________ test_f2 ___________________________________
+test_x.py:13: in test_f2
+    raise ValueError('boom')
+E   ValueError: boom
+___________________________________ test_f3 ___________________________________
+test_x.py:16: in test_f3
+    assert 'a' in 'b'
+E   AssertionError: assert 'a' in 'b'
+=========================== short test summary info ===========================
+FAILED test_x.py::test_f1 - assert [1] == [2]
+FAILED test_x.py::test_f2 - ValueError: boom
+FAILED test_x.py::test_f3 - AssertionError: assert 'a' in 'b'
+3 failed, 2 passed, 1 skipped, 1 xfailed in 0.34s

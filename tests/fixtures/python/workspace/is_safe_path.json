@@ -1,0 +1,102 @@
+[
+  {
+    "path": "my_script.py",
+    "python_safe": true
+  },
+  {
+    "path": "Agent-Tasks/task_123.json",
+    "python_safe": true
+  },
+  {
+    "path": "Agent-Creations/final_report.md",
+    "python_safe": true
+  },
+  {
+    "path": "src/utils/helpers.py",
+    "python_safe": true
+  },
+  {
+    "path": ".env",
+    "python_safe": false
+  },
+  {
+    "path": "state.json",
+    "python_safe": false
+  },
+  {
+    "path": "chroma.sqlite3",
+    "python_safe": false
+  },
+  {
+    "path": "some/nested/folder/.env",
+    "python_safe": false
+  },
+  {
+    "path": "keys/aws_secret.pem",
+    "python_safe": false
+  },
+  {
+    "path": "database.sqlite3",
+    "python_safe": false
+  },
+  {
+    "path": "server.log",
+    "python_safe": false
+  },
+  {
+    "path": "Agent-Tasks/crash_dump.db",
+    "python_safe": false
+  },
+  {
+    "path": "Agent-Logs/session_1.txt",
+    "python_safe": false
+  },
+  {
+    "path": "vector_db/data.bin",
+    "python_safe": false
+  },
+  {
+    "path": ".git/config",
+    "python_safe": false
+  },
+  {
+    "path": "__pycache__/main.cpython-310.pyc",
+    "python_safe": false
+  },
+  {
+    "path": ".gitignore",
+    "python_safe": false
+  },
+  {
+    "path": "src/.env.local",
+    "python_safe": true
+  },
+  {
+    "path": "home/id_rsa",
+    "python_safe": true
+  },
+  {
+    "path": "keys/deploy.key",
+    "python_safe": false
+  },
+  {
+    "path": "build/out.o",
+    "python_safe": false
+  },
+  {
+    "path": "node_modules/x/index.js",
+    "python_safe": false
+  },
+  {
+    "path": ".vscode/settings.json",
+    "python_safe": false
+  },
+  {
+    "path": "README.md",
+    "python_safe": true
+  },
+  {
+    "path": "naïve/ünïcode.txt",
+    "python_safe": true
+  }
+]

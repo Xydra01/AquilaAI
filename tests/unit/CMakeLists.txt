@@ -5,7 +5,14 @@ add_executable(aquila_unit_tests
     recipe_doc_test.cpp
     mutation_robustness_test.cpp
     ollama_wire_test.cpp
-    ollama_backend_test.cpp)
+    ollama_backend_test.cpp
+    syntax_test.cpp
+    registry_test.cpp
+    path_firewall_test.cpp
+    diff_test.cpp
+    canvas_buffer_test.cpp
+    workspace_module_test.cpp
+    python_oracle_test.cpp)
 target_link_libraries(aquila_unit_tests PRIVATE aquila::core httplib::httplib Catch2::Catch2WithMain)
 target_compile_definitions(aquila_unit_tests PRIVATE
     AQUILA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"

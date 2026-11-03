@@ -1,0 +1,42 @@
+[
+  {
+    "case": "all_pass",
+    "exit_code": 0,
+    "log": "pytest_all_pass.txt",
+    "python_passed": 2,
+    "python_failed": 0,
+    "python_ok": true
+  },
+  {
+    "case": "mixed",
+    "exit_code": 1,
+    "log": "pytest_mixed.txt",
+    "python_passed": 2,
+    "python_failed": 1,
+    "python_ok": false
+  },
+  {
+    "case": "many",
+    "exit_code": 1,
+    "log": "pytest_many.txt",
+    "python_passed": 2,
+    "python_failed": 3,
+    "python_ok": false
+  },
+  {
+    "case": "collection_error",
+    "exit_code": 2,
+    "log": "pytest_collection_error.txt",
+    "python_passed": 0,
+    "python_failed": 0,
+    "python_ok": false
+  },
+  {
+    "case": "no_tests",
+    "exit_code": 5,
+    "log": "pytest_no_tests.txt",
+    "python_passed": 0,
+    "python_failed": 0,
+    "python_ok": false
+  }
+]
