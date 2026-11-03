@@ -123,7 +123,7 @@ The doc is a conversation that **evolves**. Earlier sections float ideas that la
 | Package | Files | LOC | Role | C++ disposition [proposal] |
 |---|---:|---:|---|---|
 | `agent/core` | 36 | 22168 | Brain: Ollama client, Agent, loop engine, planner, prompts, tools firewall, MCP, harness | Split; rewrite loop; see section 4 |
-| `agent/gui` | 29 | 9052 | PySide6 desktop app, 9 workspaces | Qt 6 Widgets in C++ (D3 recommendation, `GUI_EVALUATION.md`); canvas expanded (D10); recipe builder (D8) |
+| `agent/gui` | 29 | 9052 | PySide6 desktop app, 9 workspaces | Qt 6 Widgets in C++ (D3 decided, `GUI_EVALUATION.md`); canvas expanded (D10); recipe builder (D8) |
 | `agent/tool_library` | 20 | 4191 | 74 tools merged into `ALL_TOOLS` | Absorbed into the 4 core modules as internal code + a few exposed actions each (R9-R11); see section 5.1 |
 | `agent/storage` | 15 | 3984 | SQLite facts, Chroma vectors, instances, personas, learn, settings | Port (SQLite C API + vector index) |
 | `agent/policies` | 15 | 3719 | Context budget/tiers, tool catalogs, step policies, think policy | Becomes `RuntimeTierConfig` (R16) + `ContextCondenser` (R6) + recipe `expose_actions` scoping (R12) |
@@ -235,7 +235,7 @@ These are parity oracles and starting points, not 1:1 ports. [code]
 | **KnowledgeModule** | `search_local_docs`, `fetch_and_clean_url`, `store_fact` | `agent/storage/memory.py` (SQLite facts + Chroma), `agent/storage/embeddings.py`, `agent/tool_library/web_tools.py` (`web_search:48`, `read_webpage:129`), `agent/research/*` (enrichment, content quality, URL registry), `agent/storage/learn_index.py`, `agent_tools.store_fact:27` / `query_past_experience:23`, `coding_tools.semantic_code_search:138` | Python has no local page cache layer equivalent to "repeated lookups cost zero network I/O". Chroma needs a C++ replacement (H10) |
 | **OrchestratorModule** | `checkpoint_notes`, `trigger_context_condense`, `complete_recipe` | `agent/core/run_state.py` (`TaskRunContext`, `checkpoint_capability`), `agent/policies/context_manager.py`, `agent/core/implementation_plan.py` + `cap.plan.update_checklist@v1`, `agent_tools.checkpoint_step:177` / `save_research_note:79`, `agent/core/tools.py` (`mark_objective_complete:453`, `finish_task:460`) | Python doesn't validate required scratchpad fields before a wipe. The step-advance wipe is triggered by the planner/loop, not by the module |
 
-### 5.2 Proposed additions (D11: user invited improvements) [proposal]
+### 5.2 Additional modules (D11: approved 2026-11-02; action lists are still sketches)
 
 The doc's four modules cover code, execution, knowledge, and meta. Aquila also has writing, Character AI, and Learn, each of which owns **persistent domain state**, which is exactly what R9 says belongs in a module rather than in the LLM's context.
 
@@ -248,7 +248,7 @@ The doc's four modules cover code, execution, knowledge, and meta. Aquila also h
 
 Research stays a **recipe cartridge** over Knowledge + Document (+ Orchestrator); it has no state of its own beyond sources and notes, which KnowledgeModule already owns.
 
-Count: 4 core + 3 domain = **7 modules, one over the doc's "4 to 6"** (D:L352). Alternative if you'd rather stay within 6: fold Persona into Document (both are "authored artifacts"). I'd keep them separate because their state and lifecycles differ.
+Count: 4 core + 3 domain = **7 modules**, one over the doc's "4 to 6" (D:L352); approved as-is by the user.
 
 ---
 
@@ -326,7 +326,7 @@ Order follows R5 (data structures → execution sandbox → orchestration loop),
 | M4 | `AgentLoop` + `ContextCondenser` (3 segments, R6) + **OrchestratorModule** + `RuntimeTierConfig` (R16) + one code recipe cartridge with a `post_llm_validation_hook` | Harness scenario `code_smoke_file` passes 3/3 on C++ (Python baseline 3/3 [doc]); the loop refuses to exit while the hook fails (forced-failure test) |
 | M5 | `LlamaCppBackend` (upstream): KV checkpoint/rollback (`llama_memory_seq_rm`), GBNF for the R14 action call | Post-wipe prefill token count measured < full prompt; invalid JSON impossible in N trials |
 | M6 | **KnowledgeModule** (SQLite + vector + embeddings + page cache) | Reads existing `fact_graph.db`; recall@k on fixture matches Python within tolerance |
-| M7 | DocumentModule, PersonaModule, LearnModule (5.2, if approved) + recipe cartridges for research / writing / learn / persona; `ScriptModule` over `manifest.json` plugins (D5); `register_new_recipe`, nesting, `llm_micro_pass` (D9) | Capability parity scenarios re-expressed as cartridge tests; a sample plugin manifest loads and runs via stdin/stdout |
+| M7 | DocumentModule, PersonaModule, LearnModule (5.2) + recipe cartridges for research / writing / learn / persona; `ScriptModule` over `manifest.json` plugins (D5); `register_new_recipe`, nesting, `llm_micro_pass` (D9) | Capability parity scenarios re-expressed as cartridge tests; a sample plugin manifest loads and runs via stdin/stdout |
 | M8 | CLI surface + **Qt 6 Widgets GUI shell** (D3): all current pages ported (G1-G12 in `GUI_EVALUATION.md`) | Each row G1-G12 has a passing check (manual QA list from Python `docs/workspace-qa-*.md` re-run on C++) |
 | M9 | **Live canvas** for code + writing (D10, F1) + **GUI recipe builder** on QtNodes (D8, F2) | Highlight → agent edit → inline pending patch → accept/undo, scripted UI test; builder round-trips cartridge JSON losslessly |
 | M10 | Remote server (52-route HTTP/WS contract, `webapp/` unchanged), MCP client + host, setup wizard, packaging (D6) | Existing `webapp/` works against the C++ server; MCP host tools listed by a client |
@@ -348,10 +348,10 @@ Decided (2026-11-02, by user):
 - **D9 Primitives-era leftovers: DECIDED.** Keep `register_new_recipe`, recipe nesting, `llm_micro_pass`, all reframed for cartridges (section 2.2).
 - **D10 Edit model: DECIDED.** Canvas buffer model. Aquila keeps and expands the canvas into a Gemini-style live canvas for code *and* writing. The move away from Canvas was for Lacerta (section 4 note).
 
-Proposed, awaiting your OK:
+- **D3 GUI: DECIDED.** **Qt 6 Widgets in C++** (evaluation: `GUI_EVALUATION.md`). It covers all 12 current capability rows plus canvas/builder/low-RAM, ports class-for-class, and drops `qfluentwidgets` for the built-in `windows11` style.
+- **D11 Modules: DECIDED.** `CanvasBuffer` core + 7 modules: Workspace, Execution, Knowledge, Orchestrator, Document, Persona, Learn (section 5.2).
 
-- **D3 GUI:** user preference was to keep PySide6 unless something better keeps all functionality. Evaluation (`GUI_EVALUATION.md`) recommends **Qt 6 Widgets in C++**: it covers all 12 current capability rows plus canvas/builder/low-RAM, ports class-for-class, and drops the GPL/paid `qfluentwidgets`. PySide6 (option A) covers today's rows but keeps Python and the license issue.
-- **D11 Modules:** add `CanvasBuffer` core + DocumentModule + PersonaModule + LearnModule (section 5.2), 7 modules total.
+No decisions are open right now.
 
 ---
 
@@ -363,4 +363,5 @@ Proposed, awaiting your OK:
 | 2026-11-02 | Added H14 (partial test baseline; suite deferred per user) |
 | 2026-11-02 | Pinned Python reference at `759212a` (H1 resolved); created orphan `Aquila-cpp` worktree; moved recon to `docs/recon/`; recorded D1/D2/D4; added local llama.cpp patch note and D7 |
 | 2026-11-02 | Re-read design doc (now `docs/design/aquila-cpp-design.md`). Section 2 split into governing R1-R18 vs superseded S1-S7 (primitives → coarse modules, primitive-piping recipes → cartridges, 1-3 threads → single-threaded). Crosswalk, dispositions, and milestones re-aligned to modules. Added 5.1 module source map and D8-D11 |
+| 2026-11-02 | D3 decided (Qt 6 Widgets C++), D11 decided (7 modules + CanvasBuffer core); no open decisions |
 | 2026-11-02 | User answers: D5/D6/D8/D9/D10 decided, D7 pushed. Added `GUI_EVALUATION.md` (D3 recommendation: Qt 6 Widgets C++), section 5.2 module proposals (D11), Lacerta scope note, M8-M10 for GUI/canvas/builder/remote/MCP; vision + data processing out |

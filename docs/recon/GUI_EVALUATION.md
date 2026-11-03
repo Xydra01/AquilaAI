@@ -64,7 +64,7 @@ Requested additions:
 
 Only **A** and **B** cover every current row (G1-G12). **B** also covers F1-F3 without a gap and removes Python (D6: remake everything).
 
-## 3. Recommendation [proposal]
+## 3. Decision: Qt 6 Widgets in C++ (D3, chosen by the user 2026-11-02)
 
 **B: Qt 6 Widgets in C++**, in-process with the C++ core.
 
