@@ -22,21 +22,24 @@ def test_base_context_injection():
     assert MODES_ROSTER in prompt
 
 def test_research_mode_constraints():
-    """TDD Goal: Ensure Research Mode strictly forbids writing tools and contains anti-spiral rules."""
+    """TDD Goal: Ensure Research Mode uses capability act contract."""
     prompt = get_research_prompt("tools")
     
     assert "DATA SPIRAL PREVENTION" in prompt
-    assert "strictly forbidden from using Writing Mode tools" in prompt
+    assert "capabilities" in prompt.lower()
     assert "final_report" in prompt
+    assert "tools" in prompt.lower()
+
 
 def test_writing_mode_constraints():
-    """TDD Goal: Ensure Writing Mode enforces the specialized drafting toolkit."""
+    """TDD Goal: Ensure Writing Mode uses capability-act contract, not raw tools."""
     prompt = get_writing_prompt("tools")
     
-    assert "strictly forbidden from using standard coding tools like `write_file`" in prompt
-    assert "init_document" in prompt
-    assert "write_section" in prompt
+    assert "cap.writing.draft_sections@v1" in prompt
+    assert "cap.writing.finalize_deliverable@v1" in prompt
+    assert "capabilities[]" in prompt
     assert "DATA SPIRAL PREVENTION" in prompt
+    assert "write_section" not in prompt.split("Never invent")[0]
 
 def test_chat_mode_constraints():
     """TDD Goal: Ensure Chat Mode receives memory injections but strictly avoids JSON formatting."""

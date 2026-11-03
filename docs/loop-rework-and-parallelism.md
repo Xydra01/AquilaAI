@@ -86,7 +86,8 @@ User guide: [mcp-integration.md](mcp-integration.md)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `AQUILA_FAST_PATH` | `1` | Enable micro-plan classifier |
+| `AQUILA_ALWAYS_FULL_PLAN` | `0` | Force full planner (no micro-plans) even on short tasks |
+| `AQUILA_FAST_PATH` | `1` | Enable micro-plan classifier (ignored if Always full plan is on) |
 | `AQUILA_MICRO_PLAN_MAX_WORDS` | `80` | Max words for micro-plan |
 | `AQUILA_EXPLORE_BRIEF` | `0` | Explore brief off unless `1` + complex request |
 
@@ -107,6 +108,38 @@ User guide: [mcp-integration.md](mcp-integration.md)
 **Touch these files:** `loop_engine.py`, `capability_scorecard.py`, `run_logger.py` events
 
 Regression: `scripts/aquila-capability-run.sh` (pytest, matrix, replay). Harness playbook: [aquila-recursive-harness.md](aquila-recursive-harness.md).
+
+---
+
+### Unified RunState (context management)
+
+Per-task **RunState** (`TaskRunContext`) is the single source of truth for act-loop context across all modes. See [run-state.md](run-state.md).
+
+```mermaid
+sequenceDiagram
+    participant LE as loop_engine
+    participant RS as TaskRunContext
+    participant GT as GroundTruthProvider
+    participant LLM as think_act
+
+    LE->>RS: checkpoint_capability after each cap
+    RS->>GT: snapshot filesystem/artifacts
+    GT-->>RS: ground_truth
+    RS->>RS: auto-tick checklist + update digest
+    RS->>RS: persist run_state.json
+    LE->>RS: build_turn_messages
+    RS-->>LLM: RUN STATE block + trimmed history
+```
+
+| Item | Detail |
+|------|--------|
+| Module | [`agent/core/run_state.py`](../agent/core/run_state.py) |
+| Providers | [`agent/core/run_state_providers.py`](../agent/core/run_state_providers.py) |
+| Artifact | `Agent-Tasks/{task}/run_state.json` (persisted every capability) |
+| Prompt | RUN STATE block replaces workspace summary + LAST CAPABILITY banner |
+| Rollup | Step advance merges digest → instance `workspace_summary.md` |
+
+**Touch these files:** `run_state.py`, `loop_engine.py`, `context_manager.py`, `implementation_plan.py`, `loop_objectives.py`
 
 ---
 

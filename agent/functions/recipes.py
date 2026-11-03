@@ -96,6 +96,78 @@ RECIPE_REGISTRY: dict[str, Recipe] = {
             "cap.learn.finalize_course@v1",
         ),
     ),
+    "fn.writing.full_pipeline": Recipe(
+        recipe_id="fn.writing.full_pipeline",
+        title="Full writing pipeline",
+        description="Init document → draft sections → compile/finalize.",
+        capability_ids=(
+            "cap.writing.init_document@v1",
+            "cap.writing.draft_sections@v1",
+            "cap.writing.compile_document@v1",
+            "cap.writing.finalize_deliverable@v1",
+        ),
+    ),
+    "fn.writing.dynamic_work": Recipe(
+        recipe_id="fn.writing.dynamic_work",
+        title="Dynamic writing work",
+        description="Draft sections then finalize deliverable.",
+        capability_ids=(
+            "cap.writing.draft_sections@v1",
+            "cap.writing.finalize_deliverable@v1",
+        ),
+    ),
+    "fn.writing.dynamic_work_with_sources": Recipe(
+        recipe_id="fn.writing.dynamic_work_with_sources",
+        title="Writing with source attachments",
+        description="Ingest attachments → draft from sources → finalize.",
+        capability_ids=(
+            "cap.writing.ingest_sources@v1",
+            "cap.writing.draft_sections@v1",
+            "cap.writing.finalize_deliverable@v1",
+        ),
+    ),
+    "fn.dev.implement": Recipe(
+        recipe_id="fn.dev.implement",
+        title="Code implement",
+        description="Recon → edit → sync project.",
+        capability_ids=(
+            "cap.dev.recon@v1",
+            "cap.dev.edit_apply@v1",
+            "cap.dev.sync_project@v1",
+        ),
+    ),
+    "fn.dev.documentation": Recipe(
+        recipe_id="fn.dev.documentation",
+        title="Code documentation",
+        description="Recon → read → write docs → sync.",
+        capability_ids=(
+            "cap.dev.recon@v1",
+            "cap.dev.read_region@v1",
+            "cap.dev.write_docs@v1",
+            "cap.dev.sync_project@v1",
+        ),
+    ),
+    "fn.dev.tdd": Recipe(
+        recipe_id="fn.dev.tdd",
+        title="Code TDD",
+        description="Recon → create failing test → implement → verify → sync.",
+        capability_ids=(
+            "cap.dev.recon@v1",
+            "cap.dev.create_file@v1",
+            "cap.dev.edit_apply@v1",
+            "cap.dev.run_tests@v1",
+            "cap.dev.sync_project@v1",
+        ),
+    ),
+    "fn.dev.dynamic_work": Recipe(
+        recipe_id="fn.dev.dynamic_work",
+        title="Dynamic code work",
+        description="Edit/work then sync on finalize.",
+        capability_ids=(
+            "cap.dev.edit_apply@v1",
+            "cap.dev.sync_project@v1",
+        ),
+    ),
 }
 
 

@@ -29,6 +29,21 @@ Aquila generates **strict JSON Schema** from tool signatures via Pydantic and se
 | `AQUILA_STRUCTURED_STRICT` | `1` | Use strict schema dict as first `format` attempt |
 | `AQUILA_STRUCTURED_NO_PLAIN` | `0` | If `1`, skip plain-text fallback after schema/json_object failures |
 | `AQUILA_SCHEMA_MAX_TOOLS` | profile default | Max tools in one routed schema `anyOf` |
+| `AQUILA_CAPABILITY_SCHEMA_ENRICH` | `1` | Tier A: embed per-cap Pydantic argument schemas when the step has ≤ `AQUILA_CAPABILITY_SCHEMA_ENRICH_MAX` action caps (plan checklist caps excluded from the count) |
+| `AQUILA_CAPABILITY_SCHEMA_ENRICH_MAX` | `5` | Max action capabilities for Tier A enriched schema |
+
+## Capability act turns
+
+Capability modes (code, research, writing, learn, persona) use `build_capability_action_json_schema()` instead of the legacy tool-path schema.
+
+| Tier | When | Schema shape |
+|------|------|--------------|
+| **A** | ≤ `AQUILA_CAPABILITY_SCHEMA_ENRICH_MAX` action caps (default 5); `cap.plan.*` checklist caps excluded from the count but included in branches | `capabilities[].items` uses `anyOf` with `{ id: const, arguments: <Pydantic schema> }` per allowed cap |
+| **B** | Larger allowlists (e.g. code `work` ~10 caps) | Flat `id` enum + freeform `arguments`; **Capability argument shapes** hints in step entry and think anchor on `invalid_input` / OS block |
+
+Set `AQUILA_CAPABILITY_SCHEMA_ENRICH=0` to force flat schemas everywhere. On HTTP 400 from an enriched branch, add the cap id to `AQUILA_CAPABILITY_SCHEMA_ENRICH_BLOCKLIST` (comma-separated).
+
+Argument validation always runs in `run_capability()` regardless of tier.
 
 ## JSON healing
 

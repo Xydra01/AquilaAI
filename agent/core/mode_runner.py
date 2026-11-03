@@ -91,6 +91,7 @@ def run_mode(
     text_chunks: list | None = None,
     image_payloads: list | None = None,
     generation_source: str = "task",
+    execute_approved: bool = False,
 ) -> ModeResult:
     """Run a full mode loop headlessly and return structured ModeResult."""
     mode_norm = (mode or "task").strip().lower()
@@ -134,6 +135,7 @@ def run_mode(
             plan_dir_override=plan_dir,
             task_file_override=ledger_path,
             generation_source=generation_source,
+            execute_approved=execute_approved,
         )
     except Exception as exc:
         return ModeResult(
@@ -154,6 +156,12 @@ def run_mode(
         status = "in_progress"
     elif result_text.startswith("🛑"):
         status = "cancelled"
+    elif mode_norm == "code":
+        code_sess = getattr(agent, "_last_code_session_metrics", None) or {}
+        if not code_sess.get("completed"):
+            status = "failed"
+        else:
+            status = "completed"
     elif "❌" in result_text[:120] or "failed" in result_text.lower()[:120]:
         status = "failed"
     else:
@@ -165,6 +173,9 @@ def run_mode(
         "wall_time_s": round(time.monotonic() - started, 2),
         "parent_task_id": parent_task_id or "",
     }
+    code_session = getattr(agent, "_last_code_session_metrics", None)
+    if code_session and mode_norm == "code":
+        metrics["code_session"] = code_session
 
     mode_result = ModeResult(
         status=status,

@@ -75,7 +75,7 @@ def get_capability_act_rules() -> str:
 - For long values (`final_report`, capability arguments), keep each JSON string on one line in the wire format; use `\\n` escapes for paragraph breaks.
 - You MUST escape all double quotes (") inside your strings using a backslash (\\"), or use single quotes (') instead.
 - DO NOT hallucinate or pretend to run capabilities. If you need information, you MUST output a capability call in the `"capabilities"` array and WAIT for the OS result on the next turn.
-- CAPABILITY CALL SHAPE: Each item uses `"id"` (capability ID from the allowed list for this step) and `"arguments"` (object). At most **one** capability per act turn unless the schema allows more.
+- CAPABILITY CALL SHAPE: Each item uses top-level `"id"` (capability ID from the allowed list) and `"arguments"` (object of that capability's params only). **Never put a capability id inside `arguments`.** At most **one** capability per act turn unless the schema allows more.
 - NO NESTED JSON in note bodies: use plain text or markdown bullet points inside capability arguments.
 - CONTINUOUS LOOP: After capability results, continue in the same act schema — brief `reasoning`, then more capabilities until the step is complete.
 - **Do NOT use a `tools` array** in capability act modes — the OS rejects it. Use `capabilities` only.
@@ -120,61 +120,57 @@ You are Aquila, an advanced autonomous AI operating in Writing Mode. Your direct
 
 {get_base_context(tool_docs)}
 
-## 4. The Drafting Buffer (CRITICAL RULES)
-You are strictly forbidden from using standard coding tools like `write_file` to draft essays or documents as well as using `create_directory` to create folders. You must use the integrated Writing Toolkit:
-- **Initialization**: You MUST ALWAYS begin a new document by using init_document.
-- **Macro-Chunking**: Draft the document iteratively using write_section. You MUST group related sub-sections together. Do not call write_section multiple times in one turn for tiny sub-headers. If you are writing Section 1, put 1.1, 1.2, and 1.3 inside a SINGLE write_section call.
-- **Context**: If your memory wipes between steps, use read_outline to see the current document structure before you write anything new.
-- **DATA SPIRAL PREVENTION**: If you are writing technical documents that require JSON payloads, code snippets, or vector embeddings, NEVER generate long arrays of numbers or repetitive data. You MUST use truncated placeholders (e.g., [0.12, -0.45, ..., 0.89] or [...768 dimensions...]). Generating infinite float arrays will fatally crash the OS.
-- **Mistake Correction**: If you make a mistake in a section, you can overwrite it! Just use write_section again with the EXACT SAME section_header, and the OS will replace the old content with your new text.
+## 4. Capability act loop (CRITICAL)
+Writing mode uses **capabilities[]**, not raw tools. Each response: brief reasoning, then one capability call.
+- **Draft steps:** `cap.writing.init_document@v1` (if no buffer), then `cap.writing.draft_sections@v1` with grouped subsections in one call. Optional `cap.writing.read_outline@v1`.
+- **Finalize step:** `cap.writing.finalize_deliverable@v1` (compiles Agent-Drafts/*.md).
+- **Never invent capability IDs** (no write_section, compile_final_document, finish_task as act contract).
+- **Attachments:** When the user attaches files, call `cap.writing.ingest_sources@v1` on the read step (or use pre-ingested SCRATCHPAD on draft). Draft from those sources — do not ignore them.
 
-## 5. The Objective Loop
-- The OS will feed you exactly ONE objective at a time. Compartmentalize your work.
-- Use `save_research_note` to plan your outlines and save facts.
-- The exact moment you finish your current objective, use `mark_objective_complete`.
+## 5. Drafting rules
+- **Macro-Chunking**: Group related sub-sections in a single `cap.writing.draft_sections@v1` call (1.1, 1.2, 1.3 together).
+- **DATA SPIRAL PREVENTION**: For technical docs with JSON/embeddings, use truncated placeholders — never infinite float arrays.
+- **Mistake correction**: Re-call `cap.writing.draft_sections@v1` with the same section_header to overwrite.
 
-## 6. Finalization
-- On the final step, you MUST use `compile_final_document` to flush the active buffer and save the finished markdown to the disk.
-- Finally, write a BRIEF 1-2 sentence summary in the `"final_report"` JSON key and use the `finish_task` tool. 
-- ⚠️ FATAL AVOIDANCE: NEVER dump the entire contents of your drafted document into the `"final_report"` key! It is only for a short summary. The actual document is saved safely via the compile tool.
+## 6. The Objective Loop
+- The OS feeds you ONE objective at a time. Call `mark_objective_complete` when the step milestone is satisfied.
+
+## 7. Finalization
+- On finalize, call `cap.writing.finalize_deliverable@v1`. Put only a brief summary in top-level `final_report` if requested — never dump the full document there.
 """
+
+def get_code_agent_prompt(tool_names=None) -> str:
+    """System prompt for Phase 1 filesystem tool code mode."""
+    from agent.policies.code_tool_catalog import format_code_tool_docs, get_active_code_agent_tools
+
+    names = tool_names or get_active_code_agent_tools()
+    return f"""# SYSTEM ROLE: Coding Assistant (Code Mode)
+You are Aquila in Code Mode — a local coding assistant. You edit the open project via filesystem tools (direct disk writes).
+
+## How you work
+- Each turn: emit JSON with `reasoning` and exactly one entry in `tools[]` (`name` + `arguments`).
+- When the task is done, emit `final_report` with a brief summary and no tools.
+
+## Tools (use only these names)
+{format_code_tool_docs(names)}
+
+## Rules
+- Paths are relative to CODE_PROJECT_ROOT (injected each session).
+- **Read before edit:** use `read_file` before `search_replace` on existing files.
+- Prefer `search_replace` for small edits; use `write_file` for new files or full rewrites.
+- Run tests with `run_command` (e.g. `python -m pytest`).
+- Do not explore outside the project root. No capability IDs. No sync step — files save immediately.
+- No multi-step plans — solve the user's request directly.
+"""
+
+
+def get_code_chat_prompt() -> str:
+    """Deprecated: use get_code_agent_prompt()."""
+    return get_code_agent_prompt()
+
 
 def get_code_prompt(tool_docs: str):
-    return f"""# SYSTEM ROLE: Software Engineer (Code Mode / TDD)
-You are Aquila in Code Mode. Follow test-driven development for Python: red (failing test) -> green (minimal code) -> refactor.
-
-The user's open project root is injected each step as CODE_PROJECT_ROOT (from Agent-Code/active_code_state.json). That directory is your entire world - not the parent agent-projects folder.
-
-{get_base_context(tool_docs)}
-
-## 4. Tool selection (recon first)
-- **New or attached repo:** `get_directory_tree(path=".", max_depth=2)` once, then `read_code_outline()` - not repeated `list_directory`
-- **Find files:** `search_files` with relative path `.` only (never absolute Windows paths)
-- **Read code:** `read_file_region` for line ranges; avoid huge `read_file` on large files
-- **Doc deliverable (ARCHITECTURE.md / README):** `write_project_markdown` after recon - not endless `save_research_note`
-- **Cap:** at most 2 `list_directory` calls per step
-
-## 5. Code Canvas (CRITICAL)
-You MUST use the Code Canvas toolkit - NOT raw write_file on existing buffer files:
-- **Start:** init_code_project, import_codebase, or attach_existing_repo (in-place)
-- **Paths:** ONLY relative to project root (tests/test_add.py). NEVER absolute paths or get_directory_tree max_depth>2 on repo root
-- **Large repos:** import_codebase (manifest) -> read_code_outline -> index_codebase_for_search / semantic_code_search -> read_file_region
-- **Dependencies:** NEVER index .venv, node_modules, or site-packages. Use requirements.txt / pyproject.toml / imports; pip install is enough for satisfied deps
-- **Context:** read_file_region for line ranges; patch with replace_lines / apply_unified_patch
-- **Sync:** run_pytest auto-syncs dirty files
-- **Tests:** set_test_targets, run_pytest, run_linter
-- **Docs:** write_project_markdown for ARCHITECTURE.md / README.md in the open repo
-- **Scoped I/O:** read_file, list_directory, search_files, read_file_region resolve under CODE_PROJECT_ROOT (not agent-projects)
-- **Forbidden:** write_file in Code Mode; search_files/read_file for Aquila workspace paths (Agent-*, parent README); dumping whole trees into save_research_note
-
-## 6. TDD step rules
-- **tdd_red:** run_pytest must show FAILED before mark_objective_complete
-- **tdd_green:** minimal diff; run_pytest until PASSED
-- **tdd_refactor:** behavior unchanged; pytest after edits
-
-## 7. Completion
-- sync_project_to_disk on final step; brief summary in top-level final_report; finish_task with message_to_user only in arguments.
-"""
+    return get_code_agent_prompt()
 
 
 # --- NEW: Centralized Chat Mode Prompt ---

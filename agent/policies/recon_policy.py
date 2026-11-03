@@ -25,12 +25,12 @@ DOC_TASK_KEYWORDS = (
 )
 
 RECON_PLAYBOOK_MARKDOWN = """## OS recon playbook (Code Mode)
-1. Map layout → `get_directory_tree(path=".", max_depth=2)` ONCE on CODE_PROJECT_ROOT
-2. File manifest → `read_code_outline()` once before deep reads
-3. Find a filename → `search_files` with relative path only (never absolute Windows paths)
-4. Read code → `read_file_region` for line ranges; avoid huge `read_file` on large files
-5. NEVER: more than 2 `list_directory` calls per step — use the tree instead
-6. Doc deliverable (ARCHITECTURE.md / README) → `write_project_markdown` after recon, not endless notes
+1. Map layout + outline → `cap.dev.recon@v1` ONCE on CODE_PROJECT_ROOT
+2. Optional setup → `cap.dev.project_setup@v1` if no project buffer
+3. Read code → `cap.dev.read_region@v1` for line ranges
+4. Edit → `cap.dev.edit_apply@v1` / `cap.dev.create_file@v1` (relative paths only)
+5. Doc deliverable (ARCHITECTURE.md / README) → `cap.dev.write_docs@v1` after recon
+6. Finalize → `cap.dev.sync_project@v1`. Do not invent capability IDs.
 """
 
 # Rich routing blurbs merged into Chroma index (see memory.index_tools)
@@ -100,39 +100,40 @@ def expand_code_documentation_plan(
         1 for s in steps if isinstance(s, dict) and s.get("step_kind") == "explore"
     )
     if len(steps) <= 5 and explore_count <= 1:
+        from agent.capabilities.adapters import (
+            CODE_DOC_TEMPLATE_STEPS,
+            attach_capability_ids_to_plan,
+        )
+
+        by_kind = {k: c for k, c in CODE_DOC_TEMPLATE_STEPS}
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            kind = (step.get("step_kind") or "").strip().lower()
+            if kind in by_kind and not step.get("capability_id"):
+                step["capability_id"] = by_kind[kind]
+        attach_capability_ids_to_plan(plan, mode="code")
         return plan, ""
 
-    req = (user_request or "documentation").strip()[:400]
-    template = [
-        (
-            "explore",
-            f"get_directory_tree + read_code_outline for: {req}",
-        ),
-        (
-            "read",
-            "Read key entrypoints (main, config, package manifests) via read_file_region.",
-        ),
-        (
-            "code",
-            f"write_project_markdown for deliverable: {req}",
-        ),
-        (
-            "finalize",
-            "sync_project_to_disk if needed; finish_task with brief summary.",
-        ),
-    ]
+    from agent.capabilities.adapters import (
+        CODE_DOC_TEMPLATE_STEPS,
+        attach_capability_ids_to_plan,
+    )
+    from agent.core.plan_descriptions import capability_step_description
     from agent.core import BUDGET_RUBRIC
 
     new_steps = []
-    for kind, desc in template:
+    for kind, cap_id in CODE_DOC_TEMPLATE_STEPS:
         _, default, _ = BUDGET_RUBRIC.get(kind, (3, 4, 6))
         new_steps.append({
             "status": "pending",
-            "description": desc,
+            "description": capability_step_description("code", kind, user_request),
             "step_kind": kind,
+            "capability_id": cap_id,
             "max_iterations": default,
         })
     plan["steps"] = new_steps
+    attach_capability_ids_to_plan(plan, mode="code")
     return plan, (
         f"Replaced {len(steps)}-step plan with {len(new_steps)}-step documentation template "
         f"(was {explore_count} explore steps)."

@@ -72,8 +72,10 @@ from .plan_validator import (
     build_fallback_research_plan,
     build_fallback_persona_plan,
     build_fallback_learn_plan,
+    build_fallback_writing_plan,
 )
 from .fast_path import (
+    always_full_plan_enabled,
     fast_path_enabled,
     micro_plan_max_words,
     explore_brief_enabled,

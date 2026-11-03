@@ -7,7 +7,7 @@ import requests
 import inspect
 import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Literal
 from rich.console import Console
 from rich.text import Text
 from agent.storage import aquila_memory, get_memory
@@ -686,6 +686,8 @@ class OllamaClient:
             )
             if response.status_code == 200:
                 self._cold_start_requests = max(0, self._cold_start_requests - 1)
+                self._warmed = True
+                self._warmed_model = self.model_name
                 return True, f"Model {self.model_name} ready."
         except requests.exceptions.ReadTimeout:
             return False, (
@@ -713,6 +715,8 @@ class OllamaClient:
             )
             if response.status_code == 200:
                 self._cold_start_requests = max(0, self._cold_start_requests - 1)
+                self._warmed = True
+                self._warmed_model = self.model_name
                 return True, f"Model {self.model_name} ready."
             return False, f"HTTP {response.status_code}: {(response.text or '')[:160]}"
         except requests.exceptions.ReadTimeout:
@@ -819,6 +823,15 @@ class OllamaClient:
                     opts["num_predict"] = max(512, int(act_predict))
                 except ValueError:
                     pass
+            elif surface == "act":
+                try:
+                    from agent.core.loop_settings import act_num_predict_micro_plan
+                    from agent.policies.thinking_tiers import micro_plan_act_num_predict_enabled
+
+                    if micro_plan_act_num_predict_enabled():
+                        opts["num_predict"] = act_num_predict_micro_plan()
+                except ImportError:
+                    pass
             elif surface == "plan":
                 try:
                     from agent.core.loop_settings import plan_num_predict
@@ -915,6 +928,7 @@ class OllamaClient:
             model_name=self.model_name,
             has_format_schema=isinstance(format, dict),
             force_disabled=force_think_disabled,
+            estimated_prompt_tokens=est or 0,
         )
 
         if stream:
@@ -970,7 +984,7 @@ class OllamaClient:
                     stream_start = None
                     last_progress_at = None
                     kill_mode = os.getenv("AQUILA_KILL_SWITCH_MODE", "stall").strip().lower()
-                    use_degen_guard = format is None
+                    use_degen_guard = True  # also guard structured/act JSON loops
                     think_enabled = think_policy.think is True
 
                     def _stop_degenerate_stream():
@@ -1269,7 +1283,9 @@ class OllamaClient:
                         from .run_logger import get_active_run_logger
 
                         logger = get_active_run_logger()
-                        if logger:
+                        if logger and hasattr(logger, "log_thinking"):
+                            logger.log_thinking(thinking, surface=surface or "")
+                        elif logger:
                             logger.event(
                                 "thinking_trace",
                                 surface=surface,
@@ -1279,6 +1295,7 @@ class OllamaClient:
                     except Exception:
                         pass
                 from agent.parser import throughput_from_llm_turn
+                from .run_logger import thinking_log_fields
 
                 _tp = throughput_from_llm_turn(
                     content,
@@ -1293,7 +1310,7 @@ class OllamaClient:
                     read_timeout_s=read_timeout,
                     body=content,
                     format_mode=mode_label,
-                    thinking_preview=(thinking or "")[:500] or None,
+                    **thinking_log_fields(thinking or ""),
                     **_tp,
                 )
                 if self._cold_start_requests > 0:
@@ -1415,17 +1432,34 @@ class OllamaClient:
 client = OllamaClient()
 
 
-def apply_runtime_settings(ollama_client: OllamaClient | None = None) -> None:
-    """Load app_settings.json and apply to the shared Ollama client."""
-    from agent.storage import load_runtime_settings
+def apply_runtime_settings(
+    ollama_client: OllamaClient | None = None,
+    *,
+    instance_id: str | None = None,
+) -> None:
+    """Load app_settings.json and apply to the shared Ollama client.
+
+    When ``instance_id`` is set, instance profile URL/model override settings in
+    a single ``configure`` call so we do not bounce models (VRAM reload).
+    """
+    from agent.storage import get_instance, load_runtime_settings
     from agent.storage.preferences import apply_preferences_to_environ
 
     apply_preferences_to_environ()
     settings = load_runtime_settings()
     target = ollama_client or client
+    base_url = settings.ollama_base_url
+    model_name = settings.ollama_model
+    if instance_id:
+        profile = get_instance(instance_id)
+        if profile:
+            if profile.ollama_base_url:
+                base_url = str(profile.ollama_base_url).strip()
+            if profile.ollama_model:
+                model_name = str(profile.ollama_model).strip()
     target.configure(
-        base_url=settings.ollama_base_url,
-        model_name=settings.ollama_model,
+        base_url=base_url,
+        model_name=model_name,
         num_ctx=settings.ollama_num_ctx,
     )
 
@@ -1578,6 +1612,10 @@ def parse_agent_response(
         clean = extract_json_text(response_text)
         data = try_parse_json(clean) or try_parse_json(heal_json_text(clean))
         if isinstance(data, dict) and isinstance(data.get("capabilities"), list):
+            from agent.capabilities.heal_calls import heal_capability_calls
+
+            data = dict(data)
+            data["capabilities"] = heal_capability_calls(data.get("capabilities") or [])
             return data
         # Bare syllabus JSON (common learn synthesize mistake) → wrap as write_syllabus
         if (
@@ -1601,6 +1639,43 @@ def parse_agent_response(
             }
         if not quiet and err:
             console.print(f"[bold red]⚠️ Capability parse error: {err}[/bold red]")
+        return {}
+
+    if schema_kind == "capability_slot_fill":
+        from agent.parser.structured_schema import (
+            CapabilitySlotFillModel,
+            capability_slot_fill_to_dict,
+            get_capability_slot_fill_model,
+        )
+
+        bound_cap_id = ""
+        if isinstance(tool_names, (frozenset, set)) and len(tool_names) == 1:
+            bound_cap_id = str(next(iter(tool_names)))
+        model = get_capability_slot_fill_model()
+        instance, err, _meta = parse_structured_turn(
+            response_text,
+            model,
+            format_mode=format_mode,
+        )
+        if instance is not None and bound_cap_id:
+            return capability_slot_fill_to_dict(instance, bound_cap_id)
+        clean = extract_json_text(response_text)
+        data = try_parse_json(clean) or try_parse_json(heal_json_text(clean))
+        if isinstance(data, dict) and bound_cap_id and "arguments" in data:
+            from agent.capabilities.heal_calls import heal_capability_call
+
+            args = dict(data.get("arguments") or {})
+            call = heal_capability_call({"id": bound_cap_id, "arguments": args}) or {
+                "id": bound_cap_id,
+                "arguments": args,
+            }
+            return {
+                "reasoning": data.get("reasoning", ""),
+                "capabilities": [call],
+                "final_report": data.get("final_report"),
+            }
+        if not quiet and err:
+            console.print(f"[bold red]⚠️ Slot-fill parse error: {err}[/bold red]")
         return {}
 
     if schema_kind == "agent_action":
@@ -1940,11 +2015,44 @@ def save_task_deliverable(
     memory=None,
     instance_id: str | None = None,
     research_body_fallback: str | None = None,
+    writing_draft_path: str | None = None,
 ) -> str | None:
     """Write final_report markdown to Agent-Research or Agent-Creations. Returns path or None."""
     from agent.research import append_bibliography_to_report
 
     body = normalize_report_markdown((report_text or "").strip())
+    if mode == "writing":
+        draft_path = writing_draft_path
+        if not draft_path:
+            from agent.tool_library.writing_tools import DRAFT_DIR
+
+            candidate = DRAFT_DIR / f"{task_name}.md"
+            if candidate.is_file():
+                draft_path = str(candidate)
+            else:
+                matches = sorted(
+                    DRAFT_DIR.glob(f"*{task_name}*.md"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if matches:
+                    draft_path = str(matches[0])
+        if draft_path and Path(draft_path).is_file():
+            draft_text = Path(draft_path).read_text(encoding="utf-8")
+            excerpt = draft_text.strip()[:500]
+            if len(draft_text.strip()) > 500:
+                excerpt += "…"
+            title_line = next(
+                (ln.lstrip("#").strip() for ln in draft_text.splitlines() if ln.startswith("#")),
+                task_name.replace("_", " ").title(),
+            )
+            body = normalize_report_markdown(
+                f"# {title_line}\n\n"
+                f"Compiled writing deliverable: `{draft_path}`\n\n"
+                f"{excerpt}"
+            )
+        elif not body:
+            return None
     if not body and mode == "research":
         if research_body_fallback and research_body_fallback.strip():
             body = normalize_report_markdown(research_body_fallback.strip())
@@ -1984,11 +2092,7 @@ class Agent:
         ensure_agent_data_dirs()
         self.executor = ToolExecutor()
         self.client = client
-        apply_runtime_settings(self.client)
-        if profile and profile.ollama_base_url:
-            self.client.configure(base_url=profile.ollama_base_url.strip())
-        if profile and profile.ollama_model:
-            self.client.configure(model_name=profile.ollama_model.strip())
+        apply_runtime_settings(self.client, instance_id=self.instance_id)
         self.memory = get_memory(self.instance_id)
 
         # Chat/character/learn only need client + memory. MCP connect and Chroma
@@ -2481,8 +2585,6 @@ class Agent:
         stop_check=None,
     ):
         """Chat with a budgeted repo snapshot injected before the user message."""
-        from agent.coding import build_light_coding_context
-
         facts = self.memory.get_all_facts()
         episodic_memories = self.memory.recall_experiences(
             user_input, n_results=_chat_recall_n_results(user_input)
@@ -2490,7 +2592,28 @@ class Agent:
 
         block = (code_block or "").strip()
         if not block and repo_root:
-            block, _stats = build_light_coding_context(repo_root, user_input)
+            try:
+                from agent.capabilities import run_capability
+                from agent.capabilities.base import CapabilityContext
+
+                cap_ctx = CapabilityContext(
+                    client=self.client,
+                    memory=self.memory,
+                    instance_id=self.instance_id,
+                    mode="chat",
+                    user_request=user_input,
+                )
+                cap_result = run_capability(
+                    "cap.dev.light_coding_context@v1",
+                    cap_ctx,
+                    {"repo_root": repo_root, "user_input": user_input},
+                )
+                if cap_result.ok:
+                    block = cap_result.data.get("context") or ""
+            except ImportError:
+                from agent.coding import build_light_coding_context
+
+                block, _stats = build_light_coding_context(repo_root, user_input)
 
         if not block and not repo_root:
             return self.run_chat(
@@ -2560,7 +2683,6 @@ class Agent:
         stop_check=None,
     ):
         """Chat with both light web research and light coding context."""
-        from agent.coding import build_light_coding_context
         from agent.research import build_light_research_context
 
         facts = self.memory.get_all_facts()
@@ -2573,7 +2695,28 @@ class Agent:
         web_block = build_light_research_context(user_input, status_cb=status_cb)
         block = (code_block or "").strip()
         if not block and repo_root:
-            block, _stats = build_light_coding_context(repo_root, user_input)
+            try:
+                from agent.capabilities import run_capability
+                from agent.capabilities.base import CapabilityContext
+
+                cap_ctx = CapabilityContext(
+                    client=self.client,
+                    memory=self.memory,
+                    instance_id=self.instance_id,
+                    mode="chat",
+                    user_request=user_input,
+                )
+                cap_result = run_capability(
+                    "cap.dev.light_coding_context@v1",
+                    cap_ctx,
+                    {"repo_root": repo_root, "user_input": user_input},
+                )
+                if cap_result.ok:
+                    block = cap_result.data.get("context") or ""
+            except ImportError:
+                from agent.coding import build_light_coding_context
+
+                block, _stats = build_light_coding_context(repo_root, user_input)
 
         if web_block:
             system_prompt = f"{system_prompt}\n\n{get_light_research_chat_addon()}"
@@ -2714,6 +2857,7 @@ class Agent:
         persona_research_lore: bool = False,
         learn_syllabus_web: bool = False,
         offline_research: bool = False,
+        writing_brief: dict | None = None,
     ) -> str:
         from .plan_validator import (
             BUDGET_RUBRIC,
@@ -2722,6 +2866,15 @@ class Agent:
             salvage_oversized_plan,
             validate_and_tune_plan,
         )
+        has_attachments = any(c and str(c).strip() for c in (text_chunks or []))
+        resolved_writing_brief: dict | None = None
+        if mode == "writing":
+            from agent.functions.writing import resolve_writing_brief_for_task
+
+            resolved_writing_brief = resolve_writing_brief_for_task(
+                writing_brief,
+                has_attachments=has_attachments,
+            ).to_plan_dict()
 
         workspace_root = os.getcwd()
         code_scope_note = ""
@@ -2733,19 +2886,28 @@ class Agent:
                 workspace_root = scope["root"]
                 code_scope_note = (
                     f"\nActive code project '{scope['project_name']}' at {scope['root']}. "
-                    "ALL steps must use Code Canvas tools and paths under this root only. "
-                    "Do NOT explore the parent workspace with list_directory/get_directory_tree."
+                    "ALL steps use cap.dev.* on paths under this root only. "
+                    "Do NOT explore the parent workspace."
                 )
             else:
                 code_scope_note = (
-                    "\nNo code project buffer yet — first step should init_code_project "
-                    "or attach_existing_repo before editing files."
+                    "\nNo code project buffer yet — first step should call "
+                    "cap.dev.project_setup@v1 before editing files."
                 )
         rubric_lines = "\n".join(
             f"  - {kind}: min={lo}, default={default}, max={hi}"
             for kind, (lo, default, hi) in BUDGET_RUBRIC.items()
         )
         kinds_list = ", ".join(STEP_KINDS)
+        living_impl_note = (
+            "\nLiving implementation plan (REQUIRED unless this is a tiny micro task): "
+            "include an `implementation` object with summary, acceptance[], checklist[] "
+            "(5–10 concrete items with id/text/status=pending), and out_of_scope[]. "
+            "Mode extras: code→files_create/files_modify/testing_strategy; "
+            "writing→sections/deliverable_path; research→research_questions/source_strategy; "
+            "learn→modules_outline; character→persona_axes. "
+            "The `steps` array remains the OS ledger; implementation is the design checklist."
+        )
         capability_plan_note = ""
 
         if mode == "research":
@@ -2830,11 +2992,53 @@ class Agent:
                 )
         elif mode == "writing":
             role_desc = "You are Aquila's Writing Mode planner."
-            objectives = "Outline, draft sections, then compile. One major writing action per step."
-            example_step = (
-                '{"status": "pending", "description": "Draft section 1", '
-                '"step_kind": "write", "max_iterations": 5}'
+            capability_plan_note = (
+                "\nCapability writing mode: steps receive capability_id at runtime; "
+                "plan step_kind and outcome descriptions only. "
+                "Do NOT name internal tools (write_section, compile_final_document, finish_task)."
             )
+            from .loop_settings import dynamic_loop_enabled
+            from agent.functions.writing_brief import WritingBrief
+
+            brief = WritingBrief.from_plan_dict(resolved_writing_brief)
+            brief_line = brief.planner_block() if brief else ""
+            if dynamic_loop_enabled():
+                if brief and brief.scope == "from_sources" and brief.has_attachments:
+                    objectives = (
+                        "User attached source files. Produce exactly 3 steps: read "
+                        "(ingest attachments) → write (draft from sources) → finalize. "
+                        f"Writing brief:\n{brief_line}\n"
+                        "Include approach_summary listing intended sections and milestones."
+                    )
+                elif brief and brief.advance_when == "single_draft":
+                    objectives = (
+                        "Produce exactly 2 steps: write/work (single targeted draft) → finalize. "
+                        f"Writing brief:\n{brief_line}\n"
+                        "Work step completes after one focused draft_sections pass."
+                    )
+                else:
+                    objectives = (
+                        "Produce exactly 2 steps: write/work (draft all planned sections) → finalize. "
+                        f"Writing brief:\n{brief_line}\n"
+                        "approach_summary MUST list intended section headers. "
+                        "Stay on work step until scope targets are met."
+                    )
+                example_step = (
+                    '{"status": "pending", "description": "Draft grouped sections", '
+                    '"step_kind": "write", "max_iterations": 6}, '
+                    '{"status": "pending", "description": "Finalize deliverable report", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
+            else:
+                objectives = (
+                    f"Outline, draft sections, then compile. Writing brief:\n{brief_line}"
+                )
+                example_step = (
+                    '{"status": "pending", "description": "Draft grouped sections", '
+                    '"step_kind": "write", "max_iterations": 5}, '
+                    '{"status": "pending", "description": "Finalize deliverable report", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
         elif mode == "learn_syllabus_build":
             role_desc = "You are Aquila's Learn Mode syllabus planner."
             capability_plan_note = (
@@ -2913,35 +3117,53 @@ class Agent:
                 )
         elif mode == "code":
             from agent.policies import is_documentation_task
+            from .loop_settings import dynamic_loop_enabled
 
+            role_desc = "You are Aquila's Code Mode planner."
+            capability_plan_note = (
+                "\nCapability code mode: steps receive capability_id at runtime; "
+                "plan step_kind and outcome descriptions only. "
+                "Do NOT name internal tools (replace_lines, run_pytest, finish_task, "
+                "get_directory_tree, write_project_markdown)."
+            )
             if is_documentation_task(user_request):
-                role_desc = "You are Aquila's Code Mode planner (documentation)."
                 objectives = (
-                    "For ARCHITECTURE.md / README / documentation: use exactly ONE explore step "
-                    "(get_directory_tree + read_code_outline), then read key entrypoints, then "
-                    "code step with write_project_markdown, then finalize. "
-                    "Do NOT add multiple explore steps or repeat directory listing in the plan."
+                    "Documentation plan: explore (recon) → read → code (write docs) → finalize (sync). "
+                    "Exactly one explore step. Include approach_summary."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "get_directory_tree + read_code_outline", '
+                    '{"status": "pending", "description": "Recon project layout", '
                     '"step_kind": "explore", "max_iterations": 6}, '
-                    '{"status": "pending", "description": "Read main entrypoints via read_file_region", '
+                    '{"status": "pending", "description": "Read key entrypoints", '
                     '"step_kind": "read", "max_iterations": 5}, '
-                    '{"status": "pending", "description": "write_project_markdown ARCHITECTURE.md", '
+                    '{"status": "pending", "description": "Write project markdown docs", '
                     '"step_kind": "code", "max_iterations": 6}, '
-                    '{"status": "pending", "description": "finish_task", '
+                    '{"status": "pending", "description": "Sync project to disk", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
+                )
+            elif dynamic_loop_enabled():
+                objectives = (
+                    "Milestone-driven plan: exactly 2 steps — work then finalize (sync). "
+                    "Include approach_summary and milestones. Wide work allowlist for edit/test."
+                )
+                example_step = (
+                    '{"status": "pending", "description": "Implement and verify changes", '
+                    '"step_kind": "work", "max_iterations": 10}, '
+                    '{"status": "pending", "description": "Sync project to disk", '
                     '"step_kind": "finalize", "max_iterations": 4}'
                 )
             else:
-                role_desc = "You are Aquila's Code Mode planner (TDD)."
                 objectives = (
-                    "Start with ONE explore step: get_directory_tree (max_depth=2) then read_code_outline. "
-                    "Then TDD: tdd_red → tdd_green → optional tdd_refactor → verify → finalize. "
-                    "Use step_kind explore, tdd_red, tdd_green, tdd_refactor, code, verify, finalize."
+                    "Start with ONE explore step (recon), then implement (code/work), "
+                    "optional TDD phases (tdd_red → tdd_green → verify), then finalize (sync)."
                 )
                 example_step = (
-                    '{"status": "pending", "description": "Write failing test for feature X", '
-                    '"step_kind": "tdd_red", "max_iterations": 5}'
+                    '{"status": "pending", "description": "Recon project", '
+                    '"step_kind": "explore", "max_iterations": 6}, '
+                    '{"status": "pending", "description": "Implement feature", '
+                    '"step_kind": "code", "max_iterations": 8}, '
+                    '{"status": "pending", "description": "Sync project to disk", '
+                    '"step_kind": "finalize", "max_iterations": 4}'
                 )
         else:
             role_desc = "You are Aquila's Project Manager & Orchestrator."
@@ -3003,6 +3225,7 @@ class Agent:
         Create a strict JSON state object to manage this workflow.
         {objectives}
         {capability_plan_note}
+        {living_impl_note}
 
         Each step MUST include:
         - "description" (string)
@@ -3022,14 +3245,30 @@ class Agent:
             "milestones": [{{"id": "ingest", "label": "...", "success_criteria": "...", "status": "pending"}}],
             "assumptions": ["..."],
             "risks": ["..."],
+            "implementation": {{
+                "summary": "<2-6 sentence design intent>",
+                "acceptance": ["<product done-ness>", "..."],
+                "checklist": [
+                    {{"id": "c1", "text": "<concrete subtask>", "status": "pending"}}
+                ],
+                "out_of_scope": ["..."],
+                "files_create": ["<paths if code>"],
+                "files_modify": [],
+                "testing_strategy": "<if code>",
+                "sections": ["<if writing>"],
+                "research_questions": ["<if research>"],
+                "modules_outline": ["<if learn>"],
+                "persona_axes": ["<if character>"]
+            }},
             "steps": [ {example_step} ]
         }}
 
         {step_count_rule}
 
-        HARD LIMITS: entire JSON must fit in ~2500 characters. Each step description is ONE short
-        sentence (max 120 characters). milestones/assumptions/risks are optional — max 3 items,
-        short labels only. Do NOT embed the full user request or rubric text inside fields.
+        HARD LIMITS: entire JSON must fit in ~4500 characters. Each step description is ONE short
+        sentence (max 120 characters). Include 5–10 checklist items with short text.
+        milestones/assumptions/risks optional — max 3 items. Do NOT embed the full user request
+        or rubric text inside fields. Prefer a strong implementation.checklist over long prose.
         """
         
         corrective_suffix = ""
@@ -3130,6 +3369,7 @@ class Agent:
 
                 clean_json = extract_json_text(response)
                 clean_json = extract_first_complete_json(clean_json)
+                bt = chr(96) * 3
                 clean_json = clean_json.replace(f"{bt}json", "").replace(bt, "").strip()
                 plan_dict = try_parse_json(clean_json) or try_parse_json(heal_json_text(clean_json))
                 if not plan_dict:
@@ -3195,6 +3435,8 @@ class Agent:
                     persona_research_lore=persona_research_lore,
                     learn_syllabus_web=learn_syllabus_web,
                     offline_research=offline_research,
+                    has_attachments=has_attachments,
+                    writing_brief=resolved_writing_brief,
                 )
             except Exception as exc:
                 last_fail_reason = f"validate:{exc}"
@@ -3296,6 +3538,70 @@ class Agent:
                     console.print(f"  • {note}")
             return json.dumps(tuned, indent=2)
 
+        if mode == "writing":
+            from .plan_validator import build_fallback_writing_plan
+            from .loop_settings import dynamic_loop_enabled
+
+            console.print(
+                "[yellow]⚠️ LLM planner failed after 3 attempts — using template writing plan.[/yellow]"
+            )
+            console.event(
+                "plan_template_fallback",
+                reason=last_fail_reason or "unknown",
+                preview=last_fail_preview[:300] if last_fail_preview else None,
+            )
+            fallback, fb_note = build_fallback_writing_plan(
+                user_request,
+                dynamic_loop=dynamic_loop_enabled(),
+                has_attachments=has_attachments,
+                writing_brief=resolved_writing_brief,
+            )
+            tuned, tune_notes = validate_and_tune_plan(
+                fallback,
+                mode,
+                user_request,
+                has_attachments=has_attachments,
+                writing_brief=resolved_writing_brief,
+            )
+            console.print(f"[cyan]📋 {fb_note}[/cyan]")
+            if tune_notes:
+                for note in tune_notes:
+                    console.print(f"  • {note}")
+            return json.dumps(tuned, indent=2)
+
+        if mode == "code":
+            from .plan_validator import build_fallback_code_plan
+            from .loop_settings import dynamic_loop_enabled
+            from agent.policies.recon_policy import is_documentation_task
+
+            console.print(
+                "[yellow]⚠️ LLM planner failed after 3 attempts — using template code plan.[/yellow]"
+            )
+            console.event(
+                "plan_template_fallback",
+                reason=last_fail_reason or "unknown",
+                preview=last_fail_preview[:300] if last_fail_preview else None,
+            )
+            fallback, fb_note = build_fallback_code_plan(
+                user_request,
+                dynamic_loop=dynamic_loop_enabled(),
+                documentation=is_documentation_task(user_request),
+                tdd=any(
+                    kw in (user_request or "").lower()
+                    for kw in ("tdd", "test driven", "red-green")
+                ),
+            )
+            tuned, tune_notes = validate_and_tune_plan(
+                fallback,
+                mode,
+                user_request,
+            )
+            console.print(f"[cyan]📋 {fb_note}[/cyan]")
+            if tune_notes:
+                for note in tune_notes:
+                    console.print(f"  • {note}")
+            return json.dumps(tuned, indent=2)
+
         detail = last_fail_preview or last_fail_reason or "unknown"
         raise Exception(
             "Fatal: LLM failed to generate a valid JSON plan after 3 attempts. "
@@ -3381,9 +3687,11 @@ Set approval_status to "draft".
         text_chunks: list = None,
         image_payloads: list = None,
         *,
+        attachment_paths: list | None = None,
         persona_research_lore: bool = False,
         learn_syllabus_web: bool = False,
         offline_research: bool = False,
+        writing_brief: dict | None = None,
         parent_task_id: str | None = None,
         plan_dir_override: str | None = None,
         task_file_override: str | None = None,
@@ -3403,14 +3711,17 @@ Set approval_status to "draft".
                     cancel_check=cancel_check,
                     text_chunks=text_chunks,
                     image_payloads=image_payloads,
+                    attachment_paths=attachment_paths,
                     persona_research_lore=persona_research_lore,
                     learn_syllabus_web=learn_syllabus_web,
                     offline_research=offline_research,
+                    writing_brief=writing_brief,
                     parent_task_id=parent_task_id,
                     plan_dir_override=plan_dir_override,
                     task_file_override=task_file_override,
                     thinking_callback=thinking_callback,
                     execute_approved=execute_approved,
+                    generation_source=generation_source,
                 )
         except GenerationBusyError as exc:
             return f"🛑 {exc}"
@@ -3425,14 +3736,17 @@ Set approval_status to "draft".
         text_chunks: list = None,
         image_payloads: list = None,
         *,
+        attachment_paths: list | None = None,
         persona_research_lore: bool = False,
         learn_syllabus_web: bool = False,
         offline_research: bool = False,
+        writing_brief: dict | None = None,
         parent_task_id: str | None = None,
         plan_dir_override: str | None = None,
         task_file_override: str | None = None,
         thinking_callback=None,
         execute_approved: bool = False,
+        generation_source: str = "task",
     ) -> str:
         self.ensure_tools_ready()
         system_prompt = self._system_prompt_for_mode(mode)
@@ -3440,14 +3754,14 @@ Set approval_status to "draft".
         learn_course_id = None
         if mode == "learn_syllabus_build":
             from agent.storage import course_dir
-            from tool_library.learn_tools import set_active_syllabus_build
+            from agent.tool_library.learn_tools import set_active_syllabus_build
 
             learn_course_id = task_name.replace("syllabus_build_", "", 1)
             set_active_syllabus_build(self.instance_id, learn_course_id)
             working_dir = course_dir(self.instance_id, learn_course_id)
         elif mode == "character_build":
             from agent.storage import persona_dir
-            from tool_library.persona_tools import set_active_persona_build
+            from agent.tool_library.persona_tools import set_active_persona_build
 
             persona_build_id = task_name.replace("persona_build_", "", 1)
             set_active_persona_build(self.instance_id, persona_build_id)
@@ -3462,17 +3776,66 @@ Set approval_status to "draft".
             working_dir = agent_data_path("Agent-Tasks")
 
         working_dir.mkdir(parents=True, exist_ok=True)
+        has_attachments = bool(attachment_paths) or any(
+            c and str(c).strip() for c in (text_chunks or [])
+        )
+        resolved_writing_brief: dict | None = None
+        if mode == "writing":
+            from agent.functions.writing import resolve_writing_brief_for_task
+
+            resolved_writing_brief = resolve_writing_brief_for_task(
+                writing_brief,
+                has_attachments=has_attachments,
+            ).to_plan_dict()
         console.set_task(
             task_name,
             instance_id=getattr(self, "instance_id", "default"),
             mode=mode,
         )
+
+        if mode == "code":
+            from .code_agent import run_tool_session
+
+            if ui_callback:
+                code_surface: Literal["gui", "cli", "harness"] = "gui"
+            elif (generation_source or "").strip().lower() == "harness":
+                code_surface = "harness"
+            else:
+                code_surface = "cli"
+            strict_model = (
+                code_surface == "harness"
+                and os.getenv("AQUILA_CODE_ALLOW_DEGRADED_MODEL", "").strip().lower()
+                not in ("1", "true", "yes", "on")
+            )
+
+            ledger_text = f"Code Mode: {task_name}\n"
+            if ui_callback:
+                ui_callback(ledger_text)
+            os.chdir(working_dir)
+            try:
+                return run_tool_session(
+                    self,
+                    user_request=user_request,
+                    task_name=task_name,
+                    ui_callback=ui_callback,
+                    cancel_check=cancel_check,
+                    text_chunks=text_chunks,
+                    image_payloads=image_payloads,
+                    thinking_callback=thinking_callback,
+                    surface=code_surface,
+                    strict_model=strict_model,
+                )
+            finally:
+                from agent.storage import ensure_repo_cwd
+
+                ensure_repo_cwd()
+
         if mode == "research":
             mode_label = "Deep-Dive Research"
         elif mode == "writing":
             mode_label = "Writing Task"
         elif mode == "code":
-            mode_label = "Code Mode (TDD)"
+            mode_label = "Code Mode"
         elif mode == "character_build":
             mode_label = "Character AI — Persona Build"
         elif mode == "learn_syllabus_build":
@@ -3497,12 +3860,19 @@ Set approval_status to "draft".
         micro_plan_used = False
         explore_brief_skipped = False
 
+        if os.path.exists(task_file):
+            try:
+                micro_plan_used = bool(read_json_state(task_file).get("micro_plan"))
+            except Exception:
+                pass
+
         if os.path.exists(task_file) and not execute_approved:
             try:
                 existing = read_json_state(task_file)
                 if plan_needs_review(
                     existing,
                     micro_plan=bool(existing.get("micro_plan")),
+                    user_request=user_request,
                 ):
                     _, md_path = write_plan_artifact(
                         task_name, mode, existing, user_request=user_request
@@ -3605,7 +3975,7 @@ Set approval_status to "draft".
                     ui_callback(
                         f"{ledger_text}\n⏳ Planning phase initiated. Building JSON execution steps... (This takes a moment)"
                     )
-                warm_ok, warm_msg = self.client.warmup()
+                warm_ok, warm_msg = self.client.ensure_warmup()
                 if ui_callback:
                     ui_callback(
                         f"{ledger_text}\n{'OK' if warm_ok else 'WARN'} Model warmup: {warm_msg}\n"
@@ -3622,6 +3992,7 @@ Set approval_status to "draft".
                     persona_research_lore=persona_research_lore,
                     learn_syllabus_web=learn_syllabus_web,
                     offline_research=offline_research,
+                    writing_brief=resolved_writing_brief,
                 )
             plan_data = enrich_plan_from_ledger(
                 plan_json,
@@ -3629,10 +4000,22 @@ Set approval_status to "draft".
                 mode=mode,
                 offline_research=offline_research,
                 capability_research=(
-                    mode in ("research", "character_build", "learn_syllabus_build")
+                    mode in (
+                        "research",
+                        "character_build",
+                        "learn_syllabus_build",
+                        "writing",
+                        "code",
+                    )
                 ),
             )
-            if mode in ("research", "character_build", "learn_syllabus_build"):
+            if mode in (
+                "research",
+                "character_build",
+                "learn_syllabus_build",
+                "writing",
+                "code",
+            ):
                 try:
                     from agent.capabilities.adapters import attach_capability_ids_to_plan
 
@@ -3679,9 +4062,39 @@ Set approval_status to "draft".
                         plan_data["capability_recipe"] = resolve_learn(
                             learn_syllabus_web=learn_syllabus_web
                         ).recipe_id
+                    elif mode == "writing":
+                        from agent.functions.writing import resolve_recipe as resolve_writing
+                        from .loop_settings import dynamic_loop_enabled
+
+                        if resolved_writing_brief:
+                            plan_data["writing_brief"] = resolved_writing_brief
+                        attach_capability_ids_to_plan(plan_data, mode=mode)
+                        plan_data["capability_recipe"] = resolve_writing(
+                            dynamic_loop=dynamic_loop_enabled(),
+                            has_attachments=has_attachments,
+                            writing_brief=resolved_writing_brief,
+                        ).recipe_id
+                        if has_attachments or (
+                            resolved_writing_brief and resolved_writing_brief.get("has_attachments")
+                        ):
+                            plan_data["writing_has_attachments"] = True
+                    elif mode == "code":
+                        from agent.functions.code import resolve_recipe as resolve_code
+                        from .loop_settings import dynamic_loop_enabled
+                        from agent.policies.recon_policy import is_documentation_task
+
+                        attach_capability_ids_to_plan(plan_data, mode=mode)
+                        plan_data["capability_recipe"] = resolve_code(
+                            dynamic_loop=dynamic_loop_enabled(),
+                            documentation=is_documentation_task(user_request),
+                            tdd=any(
+                                kw in (user_request or "").lower()
+                                for kw in ("tdd", "test driven", "red-green")
+                            ),
+                        ).recipe_id
                 except ImportError:
                     pass
-                if mode in ("learn_syllabus_build", "character_build"):
+                if mode in ("learn_syllabus_build", "character_build", "writing", "code"):
                     from agent.core.loop_objectives import build_milestones_from_plan_steps
 
                     if mode == "learn_syllabus_build":
@@ -3693,13 +4106,22 @@ Set approval_status to "draft".
                         mode,
                         prefix="Capabilities",
                     )
+                    if derived and mode == "writing":
+                        from agent.core.loop_objectives import enrich_writing_milestones
+
+                        derived = enrich_writing_milestones(
+                            derived,
+                            plan_data.get("writing_brief") or resolved_writing_brief,
+                        )
                     if derived:
                         plan_data["milestones"] = derived
             plan_data["micro_plan"] = micro_plan_used
             write_plan_artifact(task_name, mode, plan_data, user_request=user_request)
             with open(task_file, "w", encoding="utf-8") as f:
                 json.dump(plan_data, f, indent=2)
-            if plan_needs_review(plan_data, micro_plan=micro_plan_used):
+            if not execute_approved and plan_needs_review(
+                plan_data, micro_plan=micro_plan_used, user_request=user_request
+            ):
                 _, md_path = write_plan_artifact(
                     task_name, mode, plan_data, user_request=user_request
                 )
@@ -3750,6 +4172,7 @@ Set approval_status to "draft".
             persona_research_lore=persona_research_lore,
             learn_syllabus_web=learn_syllabus_web,
             offline_research=offline_research,
+            writing_brief=resolved_writing_brief,
             agent=self,
             parent_task_id=parent_task_id or (
                 task_name if mode in ("task", "autonomous") else None
@@ -3766,14 +4189,15 @@ Set approval_status to "draft".
             text_chunks=text_chunks,
             image_payloads=image_payloads,
             thinking_callback=thinking_callback,
+            attachment_paths=attachment_paths,
         )
         _sync_ledger_after_run(task_file, result)
         if mode == "character_build":
-            from tool_library.persona_tools import clear_active_persona_build
+            from agent.tool_library.persona_tools import clear_active_persona_build
 
             clear_active_persona_build()
         if mode == "learn_syllabus_build":
-            from tool_library.learn_tools import clear_active_syllabus_build
+            from agent.tool_library.learn_tools import clear_active_syllabus_build
 
             clear_active_syllabus_build()
         return result

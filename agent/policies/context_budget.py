@@ -39,6 +39,8 @@ class ContextProfile:
     in_step_token_cap: int = 4_000
     keep_turns_on_advance: int = 0
     workspace_summary_max_chars: int = 0
+    run_digest_max_chars: int = 0
+    ground_truth_max_chars: int = 0
     routed_tool_cap: int = 12
     max_scrape_chars_per_turn: int = 0
 
@@ -85,15 +87,17 @@ def _limits_for_tier(tier: ContextTier) -> tuple[int, int, int, int, int, int]:
     return 3, 40_000, 48 * 1024, 10_000, 12_000, 60_000
 
 
-def _conversation_policy_for_tier(tier: ContextTier) -> tuple[bool, int, int, int, int]:
-    """clear_on_advance, in_step_token_cap, keep_turns, summary_max_chars, routed_tool_cap."""
+def _conversation_policy_for_tier(
+    tier: ContextTier,
+) -> tuple[bool, int, int, int, int, int, int]:
+    """clear_on_advance, in_step_token_cap, keep_turns, summary_max_chars, routed_tool_cap, run_digest_max, ground_truth_max."""
     if tier == "compact":
-        return True, 4_000, 0, 0, 12
+        return True, 4_000, 0, 0, 12, 1_200, 800
     if tier == "standard":
-        return False, 8_000, 2, 2_000, 18
+        return False, 8_000, 2, 2_000, 18, 2_500, 1_200
     if tier == "extended":
-        return False, 20_000, 6, 6_000, 24
-    return False, 48_000, 12, 12_000, 32
+        return False, 20_000, 6, 6_000, 24, 5_000, 2_500
+    return False, 48_000, 12, 12_000, 32, 10_000, 4_000
 
 
 def resolve_context_profile(
@@ -117,7 +121,15 @@ def resolve_context_profile(
     scrape_urls, scrape_cap, scratchpad, read_preview, tree_cap, scrape_turn_cap = _limits_for_tier(
         tier
     )
-    clear_adv, in_step_cap, keep_turns, summary_cap, route_cap = _conversation_policy_for_tier(tier)
+    (
+        clear_adv,
+        in_step_cap,
+        keep_turns,
+        summary_cap,
+        route_cap,
+        digest_cap,
+        ground_cap,
+    ) = _conversation_policy_for_tier(tier)
     if tier == "compact" and os.getenv("AQUILA_AUTO_SCRAPE", "1").strip().lower() in ("0", "false", "no", "off"):
         scrape_urls = 0
 
@@ -133,6 +145,8 @@ def resolve_context_profile(
         in_step_token_cap=in_step_cap,
         keep_turns_on_advance=keep_turns,
         workspace_summary_max_chars=summary_cap,
+        run_digest_max_chars=digest_cap,
+        ground_truth_max_chars=ground_cap,
         routed_tool_cap=route_cap,
         max_scrape_chars_per_turn=scrape_turn_cap,
     )

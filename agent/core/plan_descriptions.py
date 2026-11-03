@@ -58,6 +58,55 @@ _LEARN_WEB_COPY: dict[str, str] = {
     "finalize": _LEARN_COPY["finalize"],
 }
 
+_WRITING_COPY: dict[str, str] = {
+    "read": (
+        "Ingest attached sources into scratchpad via cap.writing.ingest_sources@v1 "
+        "(once), then advance."
+    ),
+    "write": (
+        "Draft grouped sections via cap.writing.draft_sections@v1 "
+        "(init via cap.writing.init_document@v1 if needed)."
+    ),
+    "work": (
+        "Draft grouped sections via cap.writing.draft_sections@v1 "
+        "(init via cap.writing.init_document@v1 if needed)."
+    ),
+    "finalize": (
+        "Finalize deliverable via cap.writing.finalize_deliverable@v1 "
+        "(compiles draft to Agent-Drafts/)."
+    ),
+}
+
+_CODE_COPY: dict[str, str] = {
+    "explore": (
+        "Recon the project via cap.dev.recon@v1 "
+        "(tree + outline; optional setup via cap.dev.project_setup@v1)."
+    ),
+    "read": (
+        "Read file regions via cap.dev.read_region@v1 "
+        "(or recon via cap.dev.recon@v1)."
+    ),
+    "code": (
+        "Implement via cap.dev.edit_apply@v1 / cap.dev.create_file@v1 "
+        "(docs via cap.dev.write_docs@v1 when documenting)."
+    ),
+    "work": (
+        "Code work: edit via cap.dev.edit_apply@v1, create files, "
+        "recon/tests as needed (wide allowlist)."
+    ),
+    "tdd_red": "Create failing tests via cap.dev.create_file@v1 / edit_apply.",
+    "tdd_green": "Implement until tests pass via cap.dev.edit_apply@v1 + run_tests.",
+    "tdd_refactor": "Refactor via edit_apply; lint and re-run tests.",
+    "verify": (
+        "Verify via cap.dev.run_tests@v1 / cap.dev.run_linter@v1 "
+        "(sync via cap.dev.sync_project@v1 if needed)."
+    ),
+    "finalize": (
+        "Sync buffer to disk via cap.dev.sync_project@v1. "
+        "Do not invent capability IDs."
+    ),
+}
+
 _RESEARCH_COPY: dict[str, str] = {
     "explore": "Reconnaissance: survey sources before deeper research work.",
     "search": "Gather web sources on the research topic.",
@@ -82,6 +131,10 @@ TOOL_LEAK_TOKENS: frozenset[str] = frozenset({
     "finalize_course",
     "finish_task",
     "generate_assessment",
+    "write_section",
+    "compile_final_document",
+    "init_document",
+    "read_outline",
 })
 
 _RESEARCH_TOOL_LEAK = frozenset({
@@ -113,6 +166,28 @@ _LEARN_TOOL_LEAK = frozenset({
     "finish_task",
 })
 
+_WRITING_TOOL_LEAK = frozenset({
+    "write_section",
+    "compile_final_document",
+    "init_document",
+    "read_outline",
+    "finish_task",
+    "save_research_note",
+})
+
+_CODE_TOOL_LEAK = frozenset({
+    "write_file",
+    "replace_lines",
+    "apply_unified_patch",
+    "create_buffer_file",
+    "run_pytest",
+    "sync_project_to_disk",
+    "write_project_markdown",
+    "get_directory_tree",
+    "read_code_outline",
+    "finish_task",
+})
+
 
 def _copy_table(
     mode: str,
@@ -124,6 +199,10 @@ def _copy_table(
         return _PERSONA_LORE_COPY if persona_research_lore else _PERSONA_COPY
     if mode == "learn_syllabus_build":
         return _LEARN_WEB_COPY if learn_syllabus_web else _LEARN_COPY
+    if mode == "writing":
+        return _WRITING_COPY
+    if mode == "code":
+        return _CODE_COPY
     if mode == "research":
         return _RESEARCH_COPY
     return {}
@@ -135,6 +214,7 @@ def capability_step_body(
     *,
     persona_research_lore: bool = False,
     learn_syllabus_web: bool = False,
+    writing_brief: dict | None = None,
 ) -> str:
     """Outcome-focused description body without Topic suffix."""
     table = _copy_table(
@@ -144,8 +224,24 @@ def capability_step_body(
     )
     kind = (step_kind or "").strip().lower()
     if kind in table:
-        return table[kind]
-    return f"Complete {kind or 'step'}."
+        body = table[kind]
+    else:
+        body = f"Complete {kind or 'step'}."
+    if mode == "writing" and writing_brief:
+        from agent.functions.writing_brief import WritingBrief
+
+        brief = WritingBrief.from_plan_dict(writing_brief)
+        if brief and kind in ("write", "work"):
+            if brief.scope == "quick_edit":
+                body += f" Single targeted revision; tone: {brief.tone_label()}."
+            else:
+                body += (
+                    f" Tone: {brief.tone_label()}; target {brief.length_summary()}"
+                    f" ({brief.advance_when.replace('_', ' ')})."
+                )
+        elif brief and kind == "finalize":
+            body += f" Match tone: {brief.tone_label()}."
+    return body
 
 
 def short_topic_for_plan(user_request: str, *, max_chars: int = 160) -> str:
@@ -195,6 +291,7 @@ def capability_step_description(
     *,
     persona_research_lore: bool = False,
     learn_syllabus_web: bool = False,
+    writing_brief: dict | None = None,
 ) -> str:
     """Canonical capability-first step description with a single Topic suffix."""
     topic = short_topic_for_plan(user_request)
@@ -203,6 +300,7 @@ def capability_step_description(
         step_kind,
         persona_research_lore=persona_research_lore,
         learn_syllabus_web=learn_syllabus_web,
+        writing_brief=writing_brief,
     )
     return f"{body} Topic: {topic}."
 
@@ -219,6 +317,10 @@ def tool_leak_tokens_for_mode(mode: str) -> frozenset[str]:
         return _CHARACTER_TOOL_LEAK
     if mode == "learn_syllabus_build":
         return _LEARN_TOOL_LEAK
+    if mode == "writing":
+        return _WRITING_TOOL_LEAK
+    if mode == "code":
+        return _CODE_TOOL_LEAK
     if mode == "research":
         return _RESEARCH_TOOL_LEAK
     return TOOL_LEAK_TOKENS

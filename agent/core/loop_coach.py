@@ -138,6 +138,26 @@ class LoopCoach:
                         "capability, synthesize notes, or mark_objective_complete / "
                         "cap.research.finalize_deliverable@v1 when milestones are met."
                     )
+                if self.mode == "writing":
+                    if self.step_kind in ("write", "work"):
+                        return (
+                            f"{prefix}: Call cap.writing.draft_sections@v1 with a "
+                            "different section or grouped content, or mark_objective_complete."
+                        )
+                    return (
+                        f"{prefix}: Call cap.writing.finalize_deliverable@v1 to "
+                        "compile and finish."
+                    )
+                if self.mode == "code":
+                    if self.step_kind == "finalize":
+                        return (
+                            f"{prefix}: Call cap.dev.sync_project@v1 to sync and finish."
+                        )
+                    return (
+                        f"{prefix}: Try a different cap.dev.* capability "
+                        "(edit_apply / create_file / recon / run_tests), "
+                        "or mark_objective_complete when milestones are met."
+                    )
                 return (
                     f"{prefix}: You already have enough evidence — try a different tool, "
                     "synthesize notes, run tests, or mark_objective_complete / finish_task "
@@ -178,6 +198,17 @@ class LoopCoach:
                     f"{prefix}: Call cap.learn.write_syllabus@v1 with "
                     'arguments.content = syllabus JSON string.'
                 )
+        if self.mode == "writing":
+            if self.step_kind in ("write", "work"):
+                return (
+                    f"{prefix}: Call cap.writing.draft_sections@v1 with grouped "
+                    "subsections in arguments.content."
+                )
+            if self.step_kind == "finalize":
+                return (
+                    f"{prefix}: Call cap.writing.finalize_deliverable@v1 "
+                    "(optional file_name in arguments)."
+                )
         if self.mode == "research":
             return (
                 f"{prefix}: Use a different source or capability, "
@@ -185,8 +216,16 @@ class LoopCoach:
                 "cap.research.finalize_deliverable@v1 on finalize."
             )
         if self.mode == "code":
+            if self.step_kind in ("explore", "read"):
+                return (
+                    f"{prefix}: Call cap.dev.recon@v1 or cap.dev.read_region@v1 "
+                    "on a different path, or mark_objective_complete when recon is done."
+                )
+            if self.step_kind == "finalize":
+                return f"{prefix}: Call cap.dev.sync_project@v1 to finish."
             return (
-                f"{prefix}: Switch tools (grep vs read_file), read a different path, "
+                f"{prefix}: Switch capabilities (edit_apply / create_file / run_tests / "
+                "write_docs), tick checklist via cap.plan.update_checklist@v1, "
                 "or mark_objective_complete when the step objective is satisfied."
             )
         return (
@@ -198,15 +237,41 @@ class LoopCoach:
         self,
         pending_milestones: list[str],
         valid_tools: frozenset[str],
+        *,
+        repeat_cap_id: str = "",
+        repeat_file_path: str = "",
     ) -> str:
         """Coaching hint injected when 3+ identical model outputs are detected."""
         from agent.core.loop_objectives import milestone_hints_for_mode
+
+        cap = (repeat_cap_id or "").strip()
+        fp = (repeat_file_path or "").strip().replace("\\", "/")
+        if cap == "cap.dev.create_file@v1" and fp:
+            parts = [
+                "❌ OS BLOCK (repetition detected): You keep calling "
+                f"`cap.dev.create_file@v1` on `{fp}`, but that file already exists.",
+                "",
+                f"💡 COACH: Call `cap.dev.edit_apply@v1` with `file_path` = `{fp}` "
+                "and a full corrected file body (or `replace_lines`). "
+                "Optionally `cap.dev.read_region@v1` first to inspect the buffer. "
+                "Do NOT call `create_file` on this path again.",
+            ]
+            if "cap.dev.run_tests@v1" in valid_tools:
+                parts.append(
+                    "If the file is already correct, call `cap.dev.run_tests@v1` instead."
+                )
+            label = "Valid capabilities" if self.capability_research else "Valid tools"
+            parts.append(f"\n{label}: {', '.join(sorted(valid_tools))}")
+            return "\n".join(parts)
 
         parts = [
             "❌ OS BLOCK (repetition detected): You have repeated the same "
             "output 3 times. You MUST use a different approach.",
             "",
-            f"💡 COACH: Pending milestones: {', '.join(pending_milestones)}.",
+            "💡 COACH: Advance the next open checklist item from the living "
+            "implementation plan (call cap.plan.update_checklist@v1 after progress). "
+            "Do not repeat the same recon/search if the plan already lists the next action.",
+            f"Pending milestones: {', '.join(pending_milestones)}.",
         ]
         tool_hints = milestone_hints_for_mode(
             self.mode,
@@ -225,6 +290,85 @@ class LoopCoach:
         label = "Valid capabilities" if self.capability_research else "Valid tools"
         parts.append(f"\n{label}: {', '.join(sorted(valid_tools))}")
         return "\n".join(parts)
+
+    @staticmethod
+    def create_file_retry_hint(
+        file_path: str,
+        attempt: int,
+        *,
+        goal: str = "",
+    ) -> str:
+        """Escalating coach when create_file is blocked for missing/empty content."""
+        fp = (file_path or "").strip()
+        goal_l = (goal or "").lower()
+        test_target = "tests/test_habit.py"
+        if "test_habit" in goal_l:
+            test_target = "tests/test_habit.py"
+        elif "tests/" in goal_l:
+            import re
+
+            m = re.search(r"tests/[\w./_-]+\.py", goal_l)
+            if m:
+                test_target = m.group(0)
+
+        if attempt <= 1:
+            return ""
+        if attempt == 2:
+            return (
+                "\n\n💡 COACH: `arguments.content` must contain the **full file body** "
+                "(real Python/pytest code), not an empty string."
+            )
+        init_hint = ""
+        if fp.endswith("__init__.py") or fp.replace("\\", "/").endswith("/__init__.py"):
+            init_hint = (
+                f"\n\n💡 COACH: You do not need `{fp}` for pytest. "
+                f"Create `{test_target}` with full pytest content in `arguments.content`."
+            )
+        return (
+            f"\n\n💡 COACH (attempt {attempt}): Stop retrying the same path. "
+            f"Call `cap.dev.create_file@v1` with `file_path` = `{test_target}` and "
+            "`arguments.content` = complete test source code."
+            f"{init_hint}"
+        )
+
+    @staticmethod
+    def create_file_exists_hint(
+        file_path: str,
+        attempt: int,
+        *,
+        goal: str = "",
+    ) -> str:
+        """Coach when create_file targets a path that already exists in the buffer."""
+        fp = (file_path or "").strip().replace("\\", "/")
+        if attempt <= 1:
+            return (
+                "\n\n💡 COACH: The file is already in the buffer. Use "
+                "`cap.dev.read_region@v1` to inspect it, then `cap.dev.edit_apply@v1` "
+                f"with `file_path` = `{fp}` and corrected `arguments.content` — "
+                "not `create_file` again."
+            )
+        if attempt == 2:
+            return (
+                "\n\n💡 COACH: `create_file` only creates **new** paths. "
+                f"`{fp}` already exists — call `cap.dev.edit_apply@v1` or "
+                "`cap.dev.run_tests@v1` if tests are ready."
+            )
+        return (
+            f"\n\n💡 COACH (attempt {attempt}): Stop calling `create_file` on `{fp}`. "
+            "Use `read_region` → `edit_apply`, or `run_tests` to verify."
+        )
+
+    @staticmethod
+    def create_file_path_repeat_block(file_path: str, attempt: int) -> str:
+        """Hard block message after repeated create_file attempts on the same path."""
+        fp = (file_path or "").strip().replace("\\", "/")
+        return (
+            f"❌ OS BLOCK: `cap.dev.create_file@v1` on `{fp}` repeated {attempt} times. "
+            f"The file already exists. Call `cap.dev.edit_apply@v1` with `file_path` = `{fp}` "
+            "and the full corrected source in `arguments.content` (or use `replace_lines`). "
+            "Use `cap.dev.read_region@v1` to inspect the buffer first if needed — "
+            "not create_file."
+        )
 
     @staticmethod
     def github_blob_404_hint() -> str:

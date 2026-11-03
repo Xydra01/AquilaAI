@@ -199,6 +199,60 @@ def test_write_syllabus_capability(tmp_agent_dirs, capability_env, monkeypatch):
         learn_tools.clear_active_syllabus_build()
 
 
+def test_write_syllabus_ensure_session_from_task_id(
+    tmp_agent_dirs, capability_env, monkeypatch
+):
+    """Regression: write_syllabus must work when only task_id carries course_id."""
+    monkeypatch.setattr(
+        "agent.storage.learn_registry.agent_data_path",
+        lambda *parts: tmp_agent_dirs.joinpath(*parts),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "agent.storage.workspace_paths.agent_data_path",
+        lambda *parts: tmp_agent_dirs.joinpath(*parts),
+        raising=False,
+    )
+    learn_tools.clear_active_syllabus_build()
+    assert learn_tools.get_active_syllabus_build() is None
+
+    iid, cid = "default", "4th-dimensional-properties"
+    from agent.storage import create_course
+
+    create_course(iid, "4th Dimensional Properties", "Fiction", "files")
+
+    mem = DualMemorySystem(
+        storage_dir=str(tmp_agent_dirs / "mem"), instance_id=iid
+    )
+    ctx = CapabilityContext(
+        memory=mem,
+        task_id=f"syllabus_build_{cid}",
+        instance_id=iid,
+        mode="learn_syllabus_build",
+        user_request="Build syllabus",
+    )
+    with patch(
+        "agent.tool_library.learn_tools.save_syllabus",
+        return_value=None,
+    ), patch(
+        "agent.tool_library.learn_tools.validate_syllabus_structure",
+        return_value=(True, ""),
+    ), patch(
+        "agent.tool_library.learn_tools.syllabus_ready",
+        return_value=False,
+    ):
+        result = run_capability(
+            "cap.learn.write_syllabus@v1",
+            ctx,
+            {"content": MIN_SYLLABUS},
+        )
+    assert result.ok, result.error_message
+    active = learn_tools.get_active_syllabus_build()
+    assert active is not None
+    assert active["course_id"] == cid
+    learn_tools.clear_active_syllabus_build()
+
+
 def test_ingest_course_materials(tmp_agent_dirs, capability_env, monkeypatch):
     monkeypatch.setattr(
         "agent.tool_library.agent_tools.agent_data_path",

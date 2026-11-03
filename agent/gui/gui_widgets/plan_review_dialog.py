@@ -13,8 +13,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from agent.core.task_artifacts import plan_md_path, read_plan_dict, render_plan_markdown
+from agent.core.task_artifacts import (
+    implementation_plan_md_path,
+    plan_md_path,
+    read_plan_dict,
+    render_plan_markdown,
+)
 from agent.gui.gui_dialogs import apply_dialog_theme
+from agent.gui.markdown_utils import escape_markdown_for_qt
 
 
 class PlanReviewDialog(QDialog):
@@ -39,23 +45,40 @@ class PlanReviewDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(
-            QLabel("Review the plan below. Approve to start execution, or send feedback to revise.")
+            QLabel(
+                "Review the living implementation plan (design) and OS ledger steps. "
+                "Approve to start execution, or send feedback to revise."
+            )
         )
 
         tabs = QTabWidget()
         plan = read_plan_dict(task_name, mode)
+
+        impl_path = implementation_plan_md_path(task_name, mode)
+        if impl_path.exists():
+            impl_view = QTextEdit()
+            impl_view.setReadOnly(True)
+            impl_view.setMarkdown(
+                escape_markdown_for_qt(impl_path.read_text(encoding="utf-8"))
+            )
+            tabs.addTab(impl_view, "Implementation")
+
         plan_view = QTextEdit()
         plan_view.setReadOnly(True)
         md_file = plan_md_path(task_name, mode)
         if md_file.exists():
-            plan_view.setMarkdown(md_file.read_text(encoding="utf-8"))
+            plan_view.setMarkdown(
+                escape_markdown_for_qt(md_file.read_text(encoding="utf-8"))
+            )
         else:
-            plan_view.setMarkdown(render_plan_markdown(plan))
-        tabs.addTab(plan_view, "Plan")
+            plan_view.setMarkdown(
+                escape_markdown_for_qt(render_plan_markdown(plan))
+            )
+        tabs.addTab(plan_view, "OS Plan" if impl_path.exists() else "Plan")
 
         self.feedback_edit = QPlainTextEdit()
         self.feedback_edit.setPlaceholderText(
-            "Optional: describe changes (scope, steps, risks) before revising..."
+            "Optional: describe changes (scope, checklist, risks) before revising..."
         )
         tabs.addTab(self.feedback_edit, "Feedback")
         layout.addWidget(tabs)

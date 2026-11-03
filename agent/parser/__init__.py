@@ -37,6 +37,8 @@ from .structured_schema import (
     schema_byte_size,
     ReflectTurnModel,
     TaskPlanModel,
+    ChecklistItemModel,
+    ImplementationPlanModel,
     get_agent_action_model,
     validate_tool_arguments_pydantic,
     get_reflect_schema,

@@ -108,10 +108,13 @@ class TaskPage(BaseModePage):
             return
         try:
             from agent.core.task_artifacts import walkthrough_md_path
+            from agent.gui.markdown_utils import escape_markdown_for_qt
 
             path = walkthrough_md_path(self._worker.task_name, self._worker.mode.lower())
             if path.exists():
-                self.walkthrough_view.setMarkdown(path.read_text(encoding="utf-8"))
+                self.walkthrough_view.setMarkdown(
+                    escape_markdown_for_qt(path.read_text(encoding="utf-8"))
+                )
                 self.canvas_tabs.setCurrentWidget(self.walkthrough_view)
         except Exception:
             pass

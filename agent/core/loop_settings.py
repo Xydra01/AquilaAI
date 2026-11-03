@@ -11,6 +11,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def run_state_enabled() -> bool:
+    """When True: per-task RunState drives prompt context (digest, ground truth, checkpoints)."""
+    return _env_bool("AQUILA_RUN_STATE_ENABLED", True)
+
+
+def run_digest_compress_enabled() -> bool:
+    return _env_bool("AQUILA_RUN_DIGEST_COMPRESS", True)
+
+
+def capability_repeat_guard_enabled() -> bool:
+    return _env_bool("AQUILA_CAPABILITY_REPEAT_GUARD", True)
+
+
 def dynamic_loop_enabled() -> bool:
     """When True: mode-wide tool palette, milestone advance, task episode budget."""
     return _env_bool("AQUILA_DYNAMIC_LOOP", False)
@@ -51,6 +64,43 @@ def act_two_phase_enabled() -> bool:
     return _env_bool("AQUILA_ACT_TWO_PHASE", True)
 
 
+def act_two_phase_for_micro_plan() -> bool:
+    """When False (default): micro-plan code tasks skip the reflect pass."""
+    return _env_bool("AQUILA_ACT_TWO_PHASE_MICRO", False)
+
+
+def reflect_on_failure_enabled(*, micro_plan: bool = False) -> bool:
+    """When True: skip reflect unless last act failed, was blocked, or parse retried."""
+    if micro_plan:
+        return False
+    raw = os.getenv("AQUILA_REFLECT_ON_FAILURE", "").strip()
+    if raw:
+        return raw.lower() not in ("0", "false", "no", "off")
+    return True
+
+
+def think_min_prompt_tokens() -> int:
+    """Min estimated prompt tokens before native think on chat/learn surfaces."""
+    from agent.policies.think_policy import think_min_prompt_tokens as _min
+
+    return _min()
+
+
+def run_digest_compress_for_micro_plan() -> bool:
+    """When False (default): micro-plan tasks skip run-state digest compression chat."""
+    return _env_bool("AQUILA_RUN_DIGEST_COMPRESS_MICRO", False)
+
+
+def slot_fill_enabled() -> bool:
+    """When True: act schema omits capability id; OS binds cap per step."""
+    return _env_bool("AQUILA_SLOT_FILL", False)
+
+
+def scaffold_dispatch_enabled() -> bool:
+    """When True: known greenfield goals may pre-write scaffold files without LLM."""
+    return _env_bool("AQUILA_SCAFFOLD_DISPATCH", False)
+
+
 def act_structured_no_plain_enabled() -> bool:
     """When True: act surfaces skip plain-text structured-output fallback."""
     return _env_bool("AQUILA_ACT_STRUCTURED_NO_PLAIN", True)
@@ -68,6 +118,15 @@ def plan_num_predict() -> int:
         return max(512, min(4096, int(raw)))
     except ValueError:
         return 2048
+
+
+def act_num_predict_micro_plan() -> int:
+    """Token cap for micro-plan slot-fill act turns (keeps file bodies small)."""
+    raw = os.getenv("AQUILA_ACT_NUM_PREDICT_MICRO", "1024").strip()
+    try:
+        return max(256, min(2048, int(raw)))
+    except ValueError:
+        return 1024
 
 
 def plan_review_enabled() -> bool:

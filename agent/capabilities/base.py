@@ -27,6 +27,7 @@ class CapabilityContext:
     url_registry: Any = None
     step_index: int | None = None
     step_kind: str = ""
+    writing_brief: dict | None = None
 
 
 class CapabilityError(Exception):
@@ -60,6 +61,40 @@ class CapabilityResult:
             error_message=message,
             summary=message,
         )
+
+
+def format_capability_result_for_llm(
+    result: CapabilityResult,
+    *,
+    payload_cap: int = 12_000,
+) -> str:
+    """Build the text the act loop shows the model after a capability run.
+
+    Summaries alone are not enough (e.g. recon stores the tree in
+    ``data['tool_result']``). Include that payload so the model can act on it.
+    """
+    text = result.summary or (result.error_message or "No output.")
+    data = dict(result.data or {})
+    payload = data.pop("tool_result", None)
+    if payload is not None:
+        body = str(payload)
+        summary_s = (result.summary or "").strip()
+        if body.strip() and body.strip() != summary_s:
+            if len(body) > payload_cap:
+                omitted = len(body) - payload_cap
+                body = body[:payload_cap] + f"\n...[truncated {omitted} bytes]"
+            text = f"{text}\n\n{body}"
+    extras: list[str] = []
+    for key, value in sorted(data.items()):
+        if isinstance(value, (bool, int, float)):
+            extras.append(f"{key}={value}")
+        elif isinstance(value, str) and len(value) <= 200:
+            extras.append(f"{key}={value!r}")
+        else:
+            extras.append(key)
+    if extras:
+        text += f"\n(data: {', '.join(extras)})"
+    return text
 
 
 CapabilityHandler = Callable[[CapabilityContext, BaseModel], CapabilityResult]

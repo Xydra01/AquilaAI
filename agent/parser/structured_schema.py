@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from functools import lru_cache
 from typing import Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 SchemaKind = Literal["agent_action", "task_plan", "reflect", "explore_action"]
 
@@ -433,6 +434,40 @@ class MilestoneModel(BaseModel):
     status: str = "pending"
 
 
+class ChecklistItemModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = ""
+    text: str = ""
+    status: str = "pending"  # pending | done | skipped
+
+
+class ImplementationPlanModel(BaseModel):
+    """Design-plane living plan (Antigravity-style), separate from OS ledger steps."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    summary: str = ""
+    acceptance: list[str] = Field(default_factory=list)
+    checklist: list[ChecklistItemModel] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    # code
+    files_create: list[str] = Field(default_factory=list)
+    files_modify: list[str] = Field(default_factory=list)
+    testing_strategy: str = ""
+    # writing
+    sections: list[str] = Field(default_factory=list)
+    deliverable_path: str = ""
+    # research
+    research_questions: list[str] = Field(default_factory=list)
+    source_strategy: str = ""
+    # learn
+    modules_outline: list[str] = Field(default_factory=list)
+    # character
+    persona_axes: list[str] = Field(default_factory=list)
+
+
 class PlanStepModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -442,6 +477,9 @@ class PlanStepModel(BaseModel):
     max_iterations: int = 4
     target_mode: str | None = None
     delegate_objective: str | None = None
+    capability_id: str | None = None
+    slot_fill: bool = False
+    slot_fill_path: str | None = None
 
 
 class TaskPlanModel(BaseModel):
@@ -458,6 +496,7 @@ class TaskPlanModel(BaseModel):
     plan_version: int = 1
     approval_status: str = "draft"
     micro_plan: bool = False
+    implementation: ImplementationPlanModel | None = None
 
 
 class WalkthroughModel(BaseModel):
@@ -484,6 +523,17 @@ class CapabilityCallModel(BaseModel):
     id: str = Field(..., description="Capability ID, e.g. cap.research.gather_web_sources@v1")
     arguments: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_args_key(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if data.get("arguments") is None and data.get("args") is not None:
+            out = dict(data)
+            out["arguments"] = out.pop("args")
+            return out
+        return data
+
 
 class CapabilityActionModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -496,8 +546,101 @@ class CapabilityActionModel(BaseModel):
     final_report: str | None = None
 
 
-_capability_action_schema_cache: dict[tuple[frozenset[str], bool, int, bool], dict[str, Any]] = {}
+class CapabilitySlotFillModel(BaseModel):
+    """Act turn when OS binds the capability; model fills arguments only."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    reasoning: str = Field(
+        ...,
+        description="Brief operational summary (1-3 sentences); no markdown.",
+    )
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    final_report: str | None = None
+
+
+_capability_action_schema_cache: dict[
+    tuple[frozenset[str], bool, int, bool, bool, frozenset[str]], dict[str, Any]
+] = {}
 _capability_action_model_cache: dict[frozenset[str], type[BaseModel]] = {}
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name, "1" if default else "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def capability_schema_enrich_enabled() -> bool:
+    return _env_bool("AQUILA_CAPABILITY_SCHEMA_ENRICH", default=True)
+
+
+def capability_schema_enrich_max() -> int:
+    raw = os.getenv("AQUILA_CAPABILITY_SCHEMA_ENRICH_MAX", "5").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 5
+
+
+def _capability_enrich_blocklist() -> frozenset[str]:
+    raw = os.getenv("AQUILA_CAPABILITY_SCHEMA_ENRICH_BLOCKLIST", "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def should_enrich_capability_schema(
+    action_cap_ids: frozenset[str],
+    *,
+    enrich_arguments: bool | None = None,
+) -> bool:
+    use = enrich_arguments if enrich_arguments is not None else capability_schema_enrich_enabled()
+    if not use or not action_cap_ids:
+        return False
+    eligible = action_cap_ids - _capability_enrich_blocklist()
+    return 0 < len(eligible) <= capability_schema_enrich_max()
+
+
+def _truncate_schema_descriptions(node: Any, *, max_len: int = 200) -> Any:
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str) and len(value) > max_len:
+                out[key] = value[: max_len - 3] + "..."
+            else:
+                out[key] = _truncate_schema_descriptions(value, max_len=max_len)
+        return out
+    if isinstance(node, list):
+        return [_truncate_schema_descriptions(item, max_len=max_len) for item in node]
+    return node
+
+
+def prepare_capability_input_schema(cap_id: str) -> dict[str, Any] | None:
+    """Prepare a single capability's Pydantic input schema for Ollama embedding."""
+    from agent.capabilities.registry import capability_input_schema
+
+    raw = capability_input_schema(cap_id)
+    if not raw:
+        return None
+    prepared = _prepare_ollama_schema(dict(raw), simplify=False)
+    for key in ("$schema", "title"):
+        prepared.pop(key, None)
+    return _truncate_schema_descriptions(prepared)
+
+
+def _capability_branch_json_schema(cap_id: str) -> dict[str, Any]:
+    arg_schema = prepare_capability_input_schema(cap_id)
+    if arg_schema is None:
+        arg_schema = {"type": "object", "additionalProperties": True}
+    return {
+        "type": "object",
+        "properties": {
+            "id": {"const": cap_id},
+            "arguments": arg_schema,
+        },
+        "required": ["id", "arguments"],
+        "additionalProperties": False,
+    }
 
 
 def build_capability_action_json_schema(
@@ -506,15 +649,30 @@ def build_capability_action_json_schema(
     simplify: bool = False,
     max_capabilities_per_turn: int = 1,
     require_final_report: bool = False,
+    enrich_arguments: bool | None = None,
+    action_cap_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Ollama-compatible JSON Schema for capability act turns (3.5 contract).
+    """Ollama-compatible JSON Schema for capability act turns.
 
-    Flat ``id`` enum + freeform ``arguments`` — per-capability Pydantic models
-    validate args inside ``run_capability``. Do not embed per-cap input trees
-    (anyOf/const) in the Ollama format schema.
+  Tier A (small allowlists): per-capability ``anyOf`` branches with typed
+  ``arguments`` from each cap's Pydantic model. Tier B (large allowlists):
+  flat ``id`` enum + freeform ``arguments``; argument hints are injected in
+  prompts. Args are always validated in ``run_capability``.
     """
+    from agent.capabilities.adapters import PLAN_CHECKLIST_CAP_IDS
+
     ids = frozenset(str(x).strip() for x in capability_ids if str(x).strip())
-    cache_key = (ids, require_final_report, max(1, max_capabilities_per_turn), simplify)
+    action_ids = action_cap_ids if action_cap_ids is not None else (ids - PLAN_CHECKLIST_CAP_IDS)
+    use_enrich = should_enrich_capability_schema(action_ids, enrich_arguments=enrich_arguments)
+    enrich_action_ids = frozenset(action_ids - _capability_enrich_blocklist())
+    cache_key = (
+        ids,
+        require_final_report,
+        max(1, max_capabilities_per_turn),
+        simplify,
+        use_enrich,
+        enrich_action_ids,
+    )
     if cache_key in _capability_action_schema_cache:
         return _capability_action_schema_cache[cache_key]
 
@@ -529,17 +687,24 @@ def build_capability_action_json_schema(
     if not simplify:
         reasoning_prop["description"] = "Brief operational summary; no markdown."
 
-    args_prop: dict[str, Any] = {
-        "type": "object",
-        "additionalProperties": True,
-    }
-    if not simplify:
-        args_prop["description"] = "Capability arguments (validated in Python)."
-
-    caps_prop: dict[str, Any] = {
-        "type": "array",
-        "maxItems": max(1, max_capabilities_per_turn),
-        "items": {
+    if use_enrich:
+        branch_ids = sorted(enrich_action_ids | (ids & PLAN_CHECKLIST_CAP_IDS))
+        caps_items: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "id": id_prop,
+            },
+            "anyOf": [_capability_branch_json_schema(cap_id) for cap_id in branch_ids],
+            "additionalProperties": False,
+        }
+    else:
+        args_prop: dict[str, Any] = {
+            "type": "object",
+            "additionalProperties": True,
+        }
+        if not simplify:
+            args_prop["description"] = "Capability arguments (validated in Python)."
+        caps_items = {
             "type": "object",
             "properties": {
                 "id": id_prop,
@@ -547,7 +712,12 @@ def build_capability_action_json_schema(
             },
             "required": ["id", "arguments"],
             "additionalProperties": False,
-        },
+        }
+
+    caps_prop: dict[str, Any] = {
+        "type": "array",
+        "maxItems": max(1, max_capabilities_per_turn),
+        "items": caps_items,
     }
 
     required = ["reasoning", "capabilities"]
@@ -577,17 +747,87 @@ def get_capability_action_model(
 
 
 def capability_action_to_dict(instance: BaseModel) -> dict[str, Any]:
+    from agent.capabilities.heal_calls import heal_capability_calls
+
     data = instance.model_dump(mode="python", exclude_none=True)
-    caps = data.get("capabilities") or []
-    normalized: list[dict] = []
-    for item in caps:
-        if isinstance(item, dict):
-            cap_id = item.get("id") or item.get("capability_id")
-            args = item.get("arguments") or {}
-            if cap_id:
-                normalized.append({"id": cap_id, "arguments": args})
-    data["capabilities"] = normalized
+    data["capabilities"] = heal_capability_calls(data.get("capabilities") or [])
     return data
+
+
+_slot_fill_schema_cache: dict[tuple[str, bool], dict[str, Any]] = {}
+
+
+def build_capability_slot_fill_schema(
+    bound_cap_id: str,
+    *,
+    require_final_report: bool = False,
+    omit_arg_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """JSON schema for slot-fill act turns (no capability id in output)."""
+    cap_id = (bound_cap_id or "").strip()
+    cache_key = (cap_id, require_final_report, omit_arg_keys)
+    if cache_key in _slot_fill_schema_cache:
+        return _slot_fill_schema_cache[cache_key]
+    arg_schema = prepare_capability_input_schema(cap_id)
+    if arg_schema is None:
+        arg_schema = {"type": "object", "additionalProperties": True}
+    else:
+        arg_schema = dict(arg_schema)
+        props = dict(arg_schema.get("properties") or {})
+        for key in omit_arg_keys:
+            props.pop(key, None)
+        if props:
+            arg_schema["properties"] = props
+        req = [k for k in (arg_schema.get("required") or []) if k not in omit_arg_keys]
+        if req:
+            arg_schema["required"] = req
+        elif "required" in arg_schema:
+            arg_schema.pop("required", None)
+        if "file_path" in omit_arg_keys and "content" in props:
+            content_prop = dict(props.get("content") or {})
+            content_prop["description"] = (
+                "Full file body (max ~50 lines). Minimal pytest or CLI source only."
+            )
+            props["content"] = content_prop
+            arg_schema["properties"] = props
+    required = ["reasoning", "arguments"]
+    if require_final_report:
+        required.append("final_report")
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "reasoning": {
+                "type": "string",
+                "description": "Brief operational summary; no markdown.",
+            },
+            "arguments": arg_schema,
+            "final_report": {"type": "string"},
+        },
+        "required": required,
+        "additionalProperties": False,
+    }
+    _slot_fill_schema_cache[cache_key] = schema
+    return schema
+
+
+def capability_slot_fill_to_dict(instance: BaseModel, bound_cap_id: str) -> dict[str, Any]:
+    from agent.capabilities.heal_calls import heal_capability_call
+
+    data = instance.model_dump(mode="python", exclude_none=True)
+    args = dict(data.get("arguments") or {})
+    call = heal_capability_call({"id": bound_cap_id, "arguments": args}) or {
+        "id": bound_cap_id,
+        "arguments": args,
+    }
+    return {
+        "reasoning": data.get("reasoning", ""),
+        "capabilities": [call],
+        "final_report": data.get("final_report"),
+    }
+
+
+def get_capability_slot_fill_model() -> type[BaseModel]:
+    return CapabilitySlotFillModel
 
 
 def get_task_plan_schema(*, simplify: bool = False) -> dict[str, Any]:

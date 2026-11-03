@@ -15,7 +15,9 @@ def test_think_disabled_master_switch(monkeypatch):
 def test_think_enabled_qwen_chat(monkeypatch):
     monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
     monkeypatch.setenv("AQUILA_THINK_SURFACES", "chat,act")
-    p = resolve_thinking_policy(surface="chat", model_name="aquila_heretic")
+    p = resolve_thinking_policy(
+        surface="chat", model_name="aquila_heretic", estimated_prompt_tokens=1000
+    )
     assert p.think is True
     assert p.enabled is True
 
@@ -56,14 +58,38 @@ def test_reflect_surface_enabled(monkeypatch):
 def test_stock_aquila_enables_think(monkeypatch):
     monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
     monkeypatch.setenv("AQUILA_THINK_SURFACES", "chat")
-    p = resolve_thinking_policy(surface="chat", model_name="aquila")
+    p = resolve_thinking_policy(
+        surface="chat", model_name="aquila", estimated_prompt_tokens=1000
+    )
     assert p.think is True
 
 
 def test_aquila_qwopus_enables_think(monkeypatch):
     monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
     monkeypatch.setenv("AQUILA_THINK_SURFACES", "chat")
-    p = resolve_thinking_policy(surface="chat", model_name="aquila_qwopus")
+    p = resolve_thinking_policy(
+        surface="chat", model_name="aquila_qwopus", estimated_prompt_tokens=1000
+    )
+    assert p.think is True
+
+
+def test_think_complexity_gate_short_prompt(monkeypatch):
+    monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
+    monkeypatch.setenv("AQUILA_THINK_SURFACES", "chat")
+    monkeypatch.setenv("AQUILA_THINK_MIN_TOKENS", "800")
+    p = resolve_thinking_policy(
+        surface="chat", model_name="aquila_qwopus", estimated_prompt_tokens=100
+    )
+    assert p.think is False
+
+
+def test_think_complexity_gate_long_prompt(monkeypatch):
+    monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
+    monkeypatch.setenv("AQUILA_THINK_SURFACES", "chat")
+    monkeypatch.setenv("AQUILA_THINK_MIN_TOKENS", "800")
+    p = resolve_thinking_policy(
+        surface="chat", model_name="aquila_qwopus", estimated_prompt_tokens=1200
+    )
     assert p.think is True
 
 

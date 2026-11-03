@@ -17,6 +17,9 @@ FINALIZE_CAPABILITY_IDS = frozenset({
     "cap.research.finalize_deliverable@v1",
     "cap.persona.finalize@v1",
     "cap.learn.finalize_course@v1",
+    "cap.writing.finalize_deliverable@v1",
+    "cap.writing.compile_document@v1",
+    "cap.dev.sync_project@v1",
 })
 
 WEB_GATHER_CAPABILITY_IDS = frozenset({
@@ -501,6 +504,25 @@ CAPABILITY_SCENARIOS: dict[str, dict[str, Any]] = {
         "min_deliverable_chars": 0,
         "require_finish": True,
         "max_forced_advance_count": 0,
+    },
+    "code_habit_tracker": {
+        "description": "Harness: TDD habit tracker CLI",
+        "mode": "code",
+        "max_episodes_per_step": 24,
+        "max_duplicate_blocks": 4,
+        "max_read_timeouts": 3,
+        "min_deliverable_chars": 0,
+        "require_finish": False,
+        "max_forced_advance_count": 1,
+    },
+    "code_short": {
+        "description": "Harness: short code edit + sync",
+        "mode": "code",
+        "max_episodes_per_step": 10,
+        "max_duplicate_blocks": 2,
+        "max_read_timeouts": 2,
+        "min_deliverable_chars": 0,
+        "require_finish": True,
     },
     "code_local_read": {
         "description": "Harness: local code read/summarize",

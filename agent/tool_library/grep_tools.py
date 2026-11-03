@@ -10,6 +10,30 @@ from agent.core import is_safe_path, resolve_tool_path, should_skip_dir
 from agent.core import format_tool_result
 
 
+def _extra_gitignore_dirs(root: Path) -> set[str]:
+    """Minimal .gitignore: top-level directory names only."""
+    ignore_path = root / ".gitignore"
+    if not root.is_dir() or not ignore_path.is_file():
+        return set()
+    dirs: set[str] = set()
+    try:
+        for line in ignore_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.endswith("/"):
+                dirs.add(line.rstrip("/").split("/")[-1])
+            elif "/" not in line and not line.startswith("*"):
+                dirs.add(line)
+    except OSError:
+        pass
+    return dirs
+
+
+def _skip_dir(name: str, extra: set[str]) -> bool:
+    return should_skip_dir(name) or name in extra
+
+
 def grep_repo(
     pattern: str,
     path: str = ".",
@@ -45,9 +69,10 @@ def grep_repo(
     if root.is_file():
         files = [root]
     else:
+        extra_ignore = _extra_gitignore_dirs(root) if root.is_dir() else set()
         files = []
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not should_skip_dir(d)]
+            dirnames[:] = [d for d in dirnames if not _skip_dir(d, extra_ignore)]
             for fname in filenames:
                 if fnmatch.fnmatch(fname, glob_pat):
                     files.append(Path(dirpath) / fname)

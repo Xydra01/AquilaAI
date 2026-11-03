@@ -38,10 +38,18 @@ def test_phrase_repetition_detects_early():
     assert should_stop_stream(text)
 
 
-def test_should_stop_stream_after_enough_chars():
-    short = "Title now captures essence\n" * 2
-    assert not should_stop_stream(short)
-    assert should_stop_stream(_pi_revision_loop())
+def test_should_stop_stream_on_repeated_capability_json():
+    """Act/schema runaway: same capability JSON block stamped many times."""
+    block = (
+        '{\n  "capabilities": [\n    {\n'
+        '      "arguments": {"path": ".", "max_depth": 2},\n'
+        '      "id": "cap.dev.recon@v1"\n'
+        "    }\n  ],\n"
+        '  "reasoning": "Let me recon the current project layout."\n'
+        "}\n"
+    )
+    text = block * 6
+    assert should_stop_stream(text)
 
 
 def test_trim_degenerate_tail_keeps_intro():

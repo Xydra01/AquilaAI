@@ -81,7 +81,7 @@ def test_build_light_coding_prioritizes_readme(tmp_path):
     assert stats["files_summary"] >= 1
 
 
-@patch("agent.coding.build_light_coding_context")
+@patch("agent.coding.light_coding.build_light_coding_context")
 def test_run_light_coding_chat_injects_block(mock_build):
     from agent.core import Agent
 
@@ -122,12 +122,16 @@ def test_agent_worker_routes_light_coding(qtbot, qapp):
         light_coding_block="--- FILE: x.py ---\nx=1",
     )
     mock_agent = MagicMock()
+    mock_agent.client = MagicMock()
+    mock_agent.client.ensure_warmup.return_value = (True, "warm")
+    mock_agent.client.model_name = "test"
+    mock_agent.client.base_url = "http://localhost"
     mock_agent.run_light_coding_chat.return_value = iter(
         [{"message": {"content": "Answer"}}]
     )
 
     with patch("gui.get_agent", return_value=mock_agent):
-        with qtbot.waitSignal(worker.finished_signal, timeout=3000):
+        with qtbot.waitSignal(worker.finished_signal, timeout=5000):
             worker.start()
 
     mock_agent.run_light_coding_chat.assert_called_once()

@@ -510,6 +510,15 @@ def read_file_region(file_path: str, start_line: int, end_line: int) -> str:
     return read_file_lines(norm, start_line, end_line)
 
 
+def buffer_has_file(file_path: str) -> bool:
+    """True when ``file_path`` is already present in the active code canvas buffer."""
+    state = _load_state()
+    if not state:
+        return False
+    norm = _relative_to_root(state, file_path)
+    return _find_file(state, norm) is not None
+
+
 def create_buffer_file(file_path: str, content: str) -> str:
     """Create a new file in the buffer. Recommend keeping files small."""
     state = _load_state()

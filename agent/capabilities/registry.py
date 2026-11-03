@@ -65,6 +65,13 @@ def capability_input_schema(capability_id: str) -> dict[str, Any] | None:
     return spec.input_model.model_json_schema()
 
 
+def prepare_capability_input_schema(cap_id: str) -> dict[str, Any] | None:
+    """Re-export for callers that prepare per-cap Ollama argument schemas."""
+    from agent.parser.structured_schema import prepare_capability_input_schema as _prepare
+
+    return _prepare(cap_id)
+
+
 def _register_all() -> None:
     """Import capability modules to populate registry."""
     from . import dev  # noqa: F401
@@ -73,6 +80,7 @@ def _register_all() -> None:
     from . import planning  # noqa: F401
     from . import research  # noqa: F401
     from . import web  # noqa: F401
+    from . import writing  # noqa: F401
 
 
 _register_all()

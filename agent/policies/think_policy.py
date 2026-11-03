@@ -12,10 +12,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def think_min_prompt_tokens() -> int:
+    """Min estimated prompt tokens before native think is enabled on chat surfaces."""
+    raw = os.getenv("AQUILA_THINK_MIN_TOKENS", "800").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 800
+
+
 def _env_surfaces() -> frozenset[str]:
     raw = os.getenv(
         "AQUILA_THINK_SURFACES",
-        "chat,character,learn,act,explore,plan,reflect",
+        "chat,character,learn,reflect",
     ).strip()
     if not raw:
         return frozenset()
@@ -36,6 +45,7 @@ def resolve_thinking_policy(
     model_name: str | None = None,
     has_format_schema: bool = False,
     force_disabled: bool = False,
+    estimated_prompt_tokens: int = 0,
 ) -> ThinkingPolicy:
     """
     Decide whether to send `think: true/false` on native /api/chat.
@@ -101,6 +111,16 @@ def resolve_thinking_policy(
             legacy_xml_strip=legacy_strip,
             surface=surface_key,
         )
+
+    if surface_key in ("chat", "learn", "character"):
+        min_tokens = think_min_prompt_tokens()
+        if min_tokens > 0 and estimated_prompt_tokens < min_tokens:
+            return ThinkingPolicy(
+                enabled=False,
+                think=False,
+                legacy_xml_strip=legacy_strip,
+                surface=surface_key,
+            )
 
     return ThinkingPolicy(
         enabled=True,

@@ -74,8 +74,19 @@ def test_harness_scenario_registry_covers_modes():
     assert "task" in modes
 
 
-def test_force_micro_plan_scenarios():
-    assert HARNESS_SCENARIOS["code_smoke_file"].get("force_micro_plan") is True
+def test_code_scenarios_use_code_chat_path():
+    """Code gate scenarios should not require micro-plan / slot-fill."""
+    for sid in ("code_habit_tracker", "code_smoke_file", "code_short", "code_local_read"):
+        spec = HARNESS_SCENARIOS[sid]
+        assert spec.get("force_micro_plan") is not True, sid
+        assert spec.get("slot_fill") is not True, sid
+
+
+def test_gate_scenario_ids_registered():
+    from agent.core.capability_harness import GATE_SCENARIO_IDS
+
+    for sid in GATE_SCENARIO_IDS:
+        assert sid in HARNESS_SCENARIOS
 
 
 def test_check_acceptance_file_glob(tmp_path, monkeypatch):

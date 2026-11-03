@@ -408,7 +408,10 @@ def get_mode_playbook(mode: str) -> str:
     elif mode == "research":
         lines.append("web_search then save_research_note; synthesize on finalize with final_report.")
     elif mode == "writing":
-        lines.append("init_document, write_section, compile_final_document.")
+        lines.append(
+            "cap.writing.init_document@v1, cap.writing.draft_sections@v1, "
+            "cap.writing.finalize_deliverable@v1."
+        )
     elif mode == "character_build":
         lines.append(
             "Ingest attachments via save_research_note; optional web_search. "

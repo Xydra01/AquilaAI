@@ -42,10 +42,20 @@ Definitions live in [`agent/core/capability_harness.py`](../agent/core/capabilit
 ## CLI (no Cursor)
 
 ```bash
+./scripts/harness_gate.sh
+./scripts/harness_gate.sh --engine stock --runs 3
+./scripts/harness_gate.sh --baseline
 ./scripts/aquila-capability-run.sh clear-lock
 ./scripts/aquila-capability-run.sh matrix --engine both
 ./scripts/aquila-capability-run.sh matrix --engine stock --scenario code_smoke_file
+python -m agent.core.capability_harness run code_habit_tracker --engine stock
 ```
+
+### Harness gate
+
+`scripts/harness_gate.sh` runs required code scenarios (`code_smoke_file`, `code_habit_tracker`) and exits non-zero on failure. By default it also rejects **degraded** models (e.g. `aquila-qwopus-standard`). Use `--allow-degraded` to override.
+
+Implementation: [`agent/core/harness_gate.py`](../agent/core/harness_gate.py)
 
 Env:
 
@@ -62,6 +72,7 @@ Written to `Agent-Logs/capability-runs/{scenario}_{engine}_{timestamp}.json` and
 - `wall_time_s`, `llm_turns`, `tool_calls`, `tool_starts`
 - `median_output_tokens_per_s`, `total_output_tokens_est`
 - `throughput_health`, `scorecard_failures`, `passed`
+- `model_id`, `model_tier`, `code_session_metrics`
 - `jsonl_path`, `deliverable_path`
 
 ## Safety

@@ -65,12 +65,28 @@ def plan_md_path(task_name: str, mode: str) -> Path:
     return task_bundle_dir(task_name, mode) / "plan.md"
 
 
+def implementation_plan_md_path(task_name: str, mode: str) -> Path:
+    return task_bundle_dir(task_name, mode) / "implementation_plan.md"
+
+
 def walkthrough_md_path(task_name: str, mode: str) -> Path:
     return task_bundle_dir(task_name, mode) / "walkthrough.md"
 
 
 def reflection_json_path(task_name: str, mode: str) -> Path:
     return task_bundle_dir(task_name, mode) / "reflection.json"
+
+
+def run_state_path(task_name: str, mode: str) -> Path:
+    return task_bundle_dir(task_name, mode) / "run_state.json"
+
+
+def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON atomically via temp file + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def read_plan_dict(task_name: str, mode: str) -> dict[str, Any]:
@@ -94,17 +110,19 @@ def write_plan_artifact(
     bundle = task_bundle_dir(task_name, mode)
     plan = dict(plan)
     if user_request and not plan.get("user_goal"):
-        if mode in ("learn_syllabus_build", "character_build"):
+        if mode in ("learn_syllabus_build", "character_build", "writing"):
             from agent.core.plan_descriptions import short_topic_for_plan
 
             title = short_topic_for_plan(user_request)
             if mode == "learn_syllabus_build":
                 plan["user_goal"] = f"Build a learning syllabus for course '{title}'."
-            else:
+            elif mode == "character_build":
                 plan["user_goal"] = f"Build a roleplay persona: {title}."
+            else:
+                plan["user_goal"] = f"Write: {title}."
         else:
             plan["user_goal"] = user_request.strip()[:2000]
-    elif plan.get("user_goal") and mode in ("learn_syllabus_build", "character_build"):
+    elif plan.get("user_goal") and mode in ("learn_syllabus_build", "character_build", "writing"):
         goal = str(plan["user_goal"])
         if any(
             tok in goal.lower()
@@ -121,18 +139,34 @@ def write_plan_artifact(
             title = short_topic_for_plan(goal or user_request)
             if mode == "learn_syllabus_build":
                 plan["user_goal"] = f"Build a learning syllabus for course '{title}'."
-            else:
+            elif mode == "character_build":
                 plan["user_goal"] = f"Build a roleplay persona: {title}."
+            else:
+                plan["user_goal"] = f"Write: {title}."
     if "approval_status" not in plan:
         plan["approval_status"] = "draft"
     if "plan_version" not in plan:
         plan["plan_version"] = 1
+
+    from agent.core.implementation_plan import (
+        ensure_implementation_block,
+        render_implementation_plan_markdown,
+        should_write_living_plan,
+    )
+
+    if should_write_living_plan(plan, mode):
+        ensure_implementation_block(plan, mode, user_request=user_request)
 
     json_path = bundle / "plan.json"
     json_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
 
     md_path = bundle / "plan.md"
     md_path.write_text(render_plan_markdown(plan), encoding="utf-8")
+
+    if should_write_living_plan(plan, mode):
+        impl_md = render_implementation_plan_markdown(plan, mode=mode)
+        if impl_md.strip():
+            (bundle / "implementation_plan.md").write_text(impl_md, encoding="utf-8")
 
     ledger_path = bundle / "ledger.json"
     ledger_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
@@ -252,13 +286,27 @@ def plan_needs_review(
     plan: dict[str, Any],
     *,
     micro_plan: bool = False,
+    user_request: str = "",
+    mode: str = "",
 ) -> bool:
     from agent.core.loop_settings import plan_auto_approve_micro_enabled, plan_review_enabled
 
+    mode_norm = (mode or plan.get("mode") or "").strip().lower()
+    if mode_norm == "code":
+        return False  # DEAD: code uses code_agent — never plan review
     if not plan_review_enabled():
         return False
     if micro_plan and plan_auto_approve_micro_enabled():
         return False
+    if micro_plan:
+        try:
+            from agent.core.code_scaffolds import is_habit_tracker_goal
+
+            goal = (user_request or plan.get("user_goal") or "").strip()
+            if is_habit_tracker_goal(goal):
+                return False
+        except Exception:
+            pass
     if (plan.get("approval_status") or "").lower() == "approved":
         return False
     return True
@@ -288,17 +336,19 @@ def enrich_plan_from_ledger(
         data = raw if isinstance(raw, dict) else {}
 
     if not data.get("user_goal"):
-        if mode in ("learn_syllabus_build", "character_build"):
+        if mode in ("learn_syllabus_build", "character_build", "writing"):
             from agent.core.plan_descriptions import short_topic_for_plan
 
             title = short_topic_for_plan(user_request)
             if mode == "learn_syllabus_build":
                 data["user_goal"] = f"Build a learning syllabus for course '{title}'."
-            else:
+            elif mode == "character_build":
                 data["user_goal"] = f"Build a roleplay persona: {title}."
+            else:
+                data["user_goal"] = f"Write: {title}."
         else:
             data["user_goal"] = user_request.strip()[:2000]
-    elif mode in ("learn_syllabus_build", "character_build"):
+    elif mode in ("learn_syllabus_build", "character_build", "writing"):
         goal = str(data.get("user_goal") or "")
         if any(
             tok in goal.lower()
@@ -315,8 +365,10 @@ def enrich_plan_from_ledger(
             title = short_topic_for_plan(goal or user_request)
             if mode == "learn_syllabus_build":
                 data["user_goal"] = f"Build a learning syllabus for course '{title}'."
-            else:
+            elif mode == "character_build":
                 data["user_goal"] = f"Build a roleplay persona: {title}."
+            else:
+                data["user_goal"] = f"Write: {title}."
     if not data.get("approach_summary"):
         steps = data.get("steps") or []
         kinds = [s.get("step_kind", "") for s in steps if isinstance(s, dict)]
@@ -339,6 +391,8 @@ def enrich_plan_from_ledger(
         "research",
         "character_build",
         "learn_syllabus_build",
+        "writing",
+        "code",
     )
     prefix = "Capabilities" if cap_act else "Tools"
     if hints and mode == "research" and offline:
@@ -355,6 +409,8 @@ def enrich_plan_from_ledger(
         skip_static_cap = cap_act and mode in (
             "learn_syllabus_build",
             "character_build",
+            "writing",
+            "code",
         )
         if not skip_static_cap:
             fallback = milestone_hints_for_mode(

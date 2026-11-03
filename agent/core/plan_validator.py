@@ -87,6 +87,8 @@ CAPABILITY_ACT_MODES = frozenset({
     "research",
     "character_build",
     "learn_syllabus_build",
+    "writing",
+    "code",
 })
 
 CAPABILITY_STEP_KIND_HINTS: dict[str, dict[str, str]] = {
@@ -117,6 +119,44 @@ CAPABILITY_STEP_KIND_HINTS: dict[str, dict[str, str]] = {
         "synthesize": "Call `cap.learn.write_syllabus@v1` with full syllabus JSON.",
         "finalize": "Call `cap.learn.finalize_course@v1`.",
     },
+    "writing": {
+        "write": (
+            "Call `cap.writing.init_document@v1` if needed, then "
+            "`cap.writing.draft_sections@v1` with grouped subsections."
+        ),
+        "work": (
+            "Call `cap.writing.init_document@v1` if needed, then "
+            "`cap.writing.draft_sections@v1` with grouped subsections."
+        ),
+        "read": (
+            "Ingest attached sources: call `cap.writing.ingest_sources@v1` once. "
+            "Use SCRATCHPAD on the draft step."
+        ),
+        "finalize": (
+            "Call `cap.writing.finalize_deliverable@v1` (compiles the draft). "
+            "Do not invent capability IDs."
+        ),
+    },
+    "code": {
+        "explore": (
+            "Call `cap.dev.recon@v1` (tree + outline). "
+            "Optional `cap.dev.project_setup@v1` if no project buffer."
+        ),
+        "read": "Call `cap.dev.read_region@v1` or `cap.dev.recon@v1`.",
+        "code": (
+            "Call `cap.dev.edit_apply@v1` / `cap.dev.create_file@v1` "
+            "(docs: `cap.dev.write_docs@v1`)."
+        ),
+        "work": (
+            "Wide allowlist: edit/create/recon/tests/docs via `cap.dev.*`. "
+            "Do not invent capability IDs."
+        ),
+        "tdd_red": "Create failing tests via `cap.dev.create_file@v1` / edit_apply.",
+        "tdd_green": "Implement via `cap.dev.edit_apply@v1`; verify with `cap.dev.run_tests@v1`.",
+        "tdd_refactor": "Refactor via edit_apply; lint and re-run tests.",
+        "verify": "Call `cap.dev.run_tests@v1` / `cap.dev.run_linter@v1`.",
+        "finalize": "Call `cap.dev.sync_project@v1`. Do not invent capability IDs.",
+    },
 }
 
 MODE_MIN_STEPS: dict[str, int] = {
@@ -130,6 +170,14 @@ MODE_MIN_STEPS: dict[str, int] = {
 }
 
 TDD_KEYWORDS = ("implement", "build", "feature", "fix bug", "add ", "create ", "tdd", "pytest")
+TDD_FIRST_KEYWORDS = (
+    "failing test",
+    "failing tests",
+    "tests first",
+    "test first",
+    "write failing",
+    "tdd",
+)
 
 MAX_STEP_DESCRIPTION_CHARS = 600
 _RESEARCH_STEP_KINDS = ("search", "read", "synthesize", "finalize")
@@ -260,7 +308,7 @@ def mode_step_description(
 ) -> str:
     """Canonical step description for a mode/kind pair (overwrites planner leakage)."""
     req = (user_request or "the task").strip()[:500]
-    if mode_key in ("character_build", "learn_syllabus_build"):
+    if mode_key in ("character_build", "learn_syllabus_build", "writing"):
         return capability_step_description(
             mode_key,
             step_kind,
@@ -480,6 +528,9 @@ def build_fallback_research_plan(
     if explore_brief_ran:
         plan["explore_brief_ran"] = True
     _attach_research_capabilities(plan, offline=offline_research)
+    from agent.core.implementation_plan import ensure_implementation_block
+
+    ensure_implementation_block(plan, "research", user_request=user_request)
     return plan, f"Recipe fallback plan ({recipe.recipe_id})."
 
 
@@ -684,16 +735,11 @@ def expand_dynamic_code_plan(
     plan: dict[str, Any],
     user_request: str,
 ) -> tuple[dict[str, Any], str]:
-    req = (user_request or "the code task").strip()[:500]
+    from agent.capabilities.adapters import attach_capability_ids_to_plan
+
     template: list[tuple[str, str]] = [
-        (
-            "work",
-            f"Code work: read/grep, edit, sync, run_pytest/linter as needed. {req}",
-        ),
-        (
-            "finalize",
-            f"Confirm deliverable and finish_task. {req}",
-        ),
+        ("work", capability_step_description("code", "work", user_request)),
+        ("finalize", capability_step_description("code", "finalize", user_request)),
     ]
     new_steps: list[dict[str, Any]] = []
     for kind, desc in template:
@@ -707,31 +753,98 @@ def expand_dynamic_code_plan(
         })
     plan["steps"] = new_steps
     plan["dynamic_plan"] = True
+    attach_capability_ids_to_plan(plan, mode="code")
     return plan, f"Dynamic code plan ({len(new_steps)} steps: work + finalize)."
+
+
+def should_expand_tdd_code_plan(user_request: str) -> bool:
+    low = (user_request or "").lower()
+    return any(kw in low for kw in TDD_FIRST_KEYWORDS)
+
+
+def expand_tdd_code_plan(
+    plan: dict[str, Any],
+    user_request: str,
+    *,
+    skip_explore: bool = False,
+) -> tuple[dict[str, Any], str]:
+    from agent.capabilities.adapters import CODE_TDD_TEMPLATE_STEPS
+
+    low = (user_request or "").lower()
+    template = list(CODE_TDD_TEMPLATE_STEPS)
+    if skip_explore or "tiny" in low or "from scratch" in low or "only:" in low:
+        template = [step for step in template if step[0] != "explore"]
+    new_steps: list[dict[str, Any]] = []
+    for kind, cap_id in template:
+        _, default, _ = BUDGET_RUBRIC.get(kind, (4, 10, 16))
+        new_steps.append({
+            "status": "pending",
+            "description": capability_step_description("code", kind, user_request),
+            "step_kind": kind,
+            "capability_id": cap_id,
+            "focus": "implement" if kind.startswith("tdd") else kind,
+            "max_iterations": default,
+        })
+    plan["steps"] = new_steps
+    plan["dynamic_plan"] = True
+    explore_note = " (no explore)" if len(template) < len(CODE_TDD_TEMPLATE_STEPS) else ""
+    return plan, f"Dynamic TDD code plan ({len(new_steps)} steps{explore_note})."
 
 
 def expand_dynamic_writing_plan(
     plan: dict[str, Any],
     user_request: str,
+    *,
+    has_attachments: bool = False,
+    writing_brief: dict | None = None,
 ) -> tuple[dict[str, Any], str]:
-    req = (user_request or "the writing task").strip()[:500]
-    template: list[tuple[str, str]] = [
-        ("work", f"Draft sections and refine. {req}"),
-        ("finalize", f"compile_final_document and finish_task. {req}"),
-    ]
+    from agent.functions.writing_brief import WritingBrief
+
+    brief = WritingBrief.from_plan_dict(writing_brief)
+    use_sources = has_attachments or (brief is not None and brief.scope == "from_sources")
+    if use_sources:
+        template: list[tuple[str, str]] = [
+            ("read", capability_step_description("writing", "read", user_request, writing_brief=writing_brief)),
+            ("work", capability_step_description("writing", "work", user_request, writing_brief=writing_brief)),
+            ("finalize", capability_step_description("writing", "finalize", user_request, writing_brief=writing_brief)),
+        ]
+        caps = {
+            "read": "cap.writing.ingest_sources@v1",
+            "work": "cap.writing.draft_sections@v1",
+            "write": "cap.writing.draft_sections@v1",
+            "finalize": "cap.writing.finalize_deliverable@v1",
+        }
+    else:
+        template = [
+            ("work", capability_step_description("writing", "work", user_request, writing_brief=writing_brief)),
+            ("finalize", capability_step_description("writing", "finalize", user_request, writing_brief=writing_brief)),
+        ]
+        caps = {
+            "work": "cap.writing.draft_sections@v1",
+            "write": "cap.writing.draft_sections@v1",
+            "finalize": "cap.writing.finalize_deliverable@v1",
+        }
     new_steps: list[dict[str, Any]] = []
+    work_budget = 6
+    if brief and brief.advance_when == "scope_met":
+        work_budget = 10
     for kind, desc in template:
         _, default, _ = BUDGET_RUBRIC.get(kind, (4, 6, 8))
+        budget = work_budget if kind in ("work", "write") and brief else default
         new_steps.append({
             "status": "pending",
             "description": desc,
             "step_kind": kind,
-            "focus": "write",
-            "max_iterations": default,
+            "focus": "write" if kind != "read" else "read",
+            "capability_id": caps[kind],
+            "max_iterations": budget,
         })
     plan["steps"] = new_steps
     plan["dynamic_plan"] = True
-    return plan, f"Dynamic writing plan ({len(new_steps)} steps)."
+    if writing_brief:
+        plan["writing_brief"] = writing_brief
+    label = "with sources" if use_sources else f"{len(new_steps)} steps"
+    return plan, f"Dynamic writing plan ({label})."
 
 
 def _apply_capability_descriptions_to_plan(
@@ -741,19 +854,28 @@ def _apply_capability_descriptions_to_plan(
     *,
     persona_research_lore: bool = False,
     learn_syllabus_web: bool = False,
+    writing_brief: dict | None = None,
 ) -> None:
     """Overwrite step descriptions with canonical capability-first copy."""
     for step in plan.get("steps") or []:
         if not isinstance(step, dict):
             continue
         kind = (step.get("step_kind") or "work").strip().lower()
-        step["description"] = mode_step_description(
-            mode,
-            kind,
-            user_request,
-            persona_research_lore=persona_research_lore,
-            learn_syllabus_web=learn_syllabus_web,
-        )
+        if mode == "writing":
+            step["description"] = capability_step_description(
+                mode,
+                kind,
+                user_request,
+                writing_brief=writing_brief or plan.get("writing_brief"),
+            )
+        else:
+            step["description"] = mode_step_description(
+                mode,
+                kind,
+                user_request,
+                persona_research_lore=persona_research_lore,
+                learn_syllabus_web=learn_syllabus_web,
+            )
 
 
 def build_fallback_persona_plan(
@@ -779,6 +901,9 @@ def build_fallback_persona_plan(
     plan["planner_fallback"] = True
     plan["status"] = "in_progress"
     plan["current_step_index"] = 0
+    from agent.core.implementation_plan import ensure_implementation_block
+
+    ensure_implementation_block(plan, "character_build", user_request=user_request)
     return plan, f"Recipe fallback plan ({recipe.recipe_id})."
 
 
@@ -805,6 +930,75 @@ def build_fallback_learn_plan(
     plan["planner_fallback"] = True
     plan["status"] = "in_progress"
     plan["current_step_index"] = 0
+    from agent.core.implementation_plan import ensure_implementation_block
+
+    ensure_implementation_block(plan, "learn_syllabus_build", user_request=user_request)
+    return plan, f"Recipe fallback plan ({recipe.recipe_id})."
+
+
+def build_fallback_writing_plan(
+    user_request: str,
+    *,
+    dynamic_loop: bool = True,
+    has_attachments: bool = False,
+    writing_brief: dict | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Deterministic writing plan when the LLM planner fails all retries."""
+    from agent.functions.writing import build_capability_plan_from_recipe, resolve_recipe
+
+    recipe = resolve_recipe(
+        dynamic_loop=dynamic_loop,
+        has_attachments=has_attachments,
+        writing_brief=writing_brief,
+    )
+    plan = build_capability_plan_from_recipe(
+        recipe,
+        user_request,
+        dynamic_loop=dynamic_loop,
+        has_attachments=has_attachments,
+        writing_brief=writing_brief,
+    )
+    _apply_capability_descriptions_to_plan(plan, "writing", user_request, writing_brief=writing_brief)
+    if writing_brief:
+        plan["writing_brief"] = writing_brief
+    plan["planner_fallback"] = True
+    plan["status"] = "in_progress"
+    plan["current_step_index"] = 0
+    from agent.core.implementation_plan import ensure_implementation_block
+
+    ensure_implementation_block(plan, "writing", user_request=user_request)
+    return plan, f"Recipe fallback plan ({recipe.recipe_id})."
+
+
+def build_fallback_code_plan(
+    user_request: str,
+    *,
+    dynamic_loop: bool = True,
+    documentation: bool = False,
+    tdd: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """Deterministic code plan when the LLM planner fails all retries."""
+    from agent.functions.code import build_capability_plan_from_recipe, resolve_recipe
+
+    recipe = resolve_recipe(
+        dynamic_loop=dynamic_loop,
+        documentation=documentation,
+        tdd=tdd,
+    )
+    plan = build_capability_plan_from_recipe(
+        recipe,
+        user_request,
+        dynamic_loop=dynamic_loop,
+        documentation=documentation,
+        tdd=tdd,
+    )
+    _apply_capability_descriptions_to_plan(plan, "code", user_request)
+    plan["planner_fallback"] = True
+    plan["status"] = "in_progress"
+    plan["current_step_index"] = 0
+    from agent.core.implementation_plan import ensure_implementation_block
+
+    ensure_implementation_block(plan, "code", user_request=user_request)
     return plan, f"Recipe fallback plan ({recipe.recipe_id})."
 
 
@@ -891,6 +1085,8 @@ def validate_and_tune_plan(
     persona_research_lore: bool = False,
     learn_syllabus_web: bool = False,
     offline_research: bool = False,
+    has_attachments: bool = False,
+    writing_brief: dict | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """
     Ensure step_kind and realistic max_iterations; cap steps and total budget.
@@ -1111,7 +1307,9 @@ def validate_and_tune_plan(
             from .loop_settings import dynamic_loop_enabled
 
             if dynamic_loop_enabled():
-                plan, expand_note = expand_dynamic_writing_plan(plan, user_request)
+                plan, expand_note = expand_dynamic_writing_plan(
+                    plan, user_request, has_attachments=has_attachments, writing_brief=writing_brief
+                )
                 notes.append(expand_note)
                 steps = plan["steps"]
                 total_steps = len(steps)
@@ -1120,12 +1318,25 @@ def validate_and_tune_plan(
 
     if mode == "code" and user_request:
         try:
+            from agent.core.code_scaffolds import is_habit_tracker_goal
+
+            habit_micro = bool(plan.get("micro_plan")) and is_habit_tracker_goal(
+                user_request
+            )
+        except ImportError:
+            habit_micro = False
+        try:
             from .loop_settings import dynamic_loop_enabled
 
-            if dynamic_loop_enabled() and len(steps) < 3:
-                plan, dyn_note = expand_dynamic_code_plan(plan, user_request)
-                notes.append(dyn_note)
-                steps = plan.get("steps") or []
+            if not habit_micro:
+                if should_expand_tdd_code_plan(user_request) and len(steps) < 4:
+                    plan, tdd_note = expand_tdd_code_plan(plan, user_request)
+                    notes.append(tdd_note)
+                    steps = plan.get("steps") or []
+                elif dynamic_loop_enabled() and len(steps) < 3:
+                    plan, dyn_note = expand_dynamic_code_plan(plan, user_request)
+                    notes.append(dyn_note)
+                    steps = plan.get("steps") or []
         except ImportError:
             pass
         try:
@@ -1234,6 +1445,90 @@ def validate_and_tune_plan(
                     learn_syllabus_web=learn_syllabus_web,
                 )
                 notes.append(f"Step: replaced tool-language description for {kind}.")
+
+    if mode_key == "writing":
+        from agent.capabilities.adapters import attach_capability_ids_to_plan
+
+        if writing_brief:
+            plan["writing_brief"] = writing_brief
+            if writing_brief.get("has_attachments"):
+                plan["writing_has_attachments"] = True
+        attach_capability_ids_to_plan(plan, mode="writing")
+        try:
+            from agent.functions.writing import resolve_recipe as resolve_writing_recipe
+            from .loop_settings import dynamic_loop_enabled
+
+            recipe = resolve_writing_recipe(
+                dynamic_loop=dynamic_loop_enabled(),
+                has_attachments=has_attachments or bool(plan.get("writing_has_attachments")),
+                writing_brief=writing_brief or plan.get("writing_brief"),
+            )
+            plan["capability_recipe"] = recipe.recipe_id
+        except ImportError:
+            try:
+                from agent.functions.writing import resolve_recipe as resolve_writing_recipe
+
+                recipe = resolve_writing_recipe(dynamic_loop=True)
+                plan["capability_recipe"] = recipe.recipe_id
+            except ImportError:
+                pass
+        tool_leak_tokens = tool_leak_tokens_for_mode("writing")
+        for step in plan.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            kind = (step.get("step_kind") or "work").strip().lower()
+            if has_tool_leak(step.get("description") or "", tool_leak_tokens):
+                step["description"] = mode_step_description(
+                    "writing",
+                    kind,
+                    user_request,
+                )
+                notes.append(f"Step: replaced tool-language description for {kind}.")
+            brief_for_desc = writing_brief or plan.get("writing_brief")
+            if brief_for_desc and kind in ("work", "write", "read", "finalize"):
+                step["description"] = capability_step_description(
+                    "writing",
+                    kind,
+                    user_request,
+                    writing_brief=brief_for_desc,
+                )
+
+    if mode_key == "code":
+        from agent.capabilities.adapters import attach_capability_ids_to_plan
+
+        attach_capability_ids_to_plan(plan, mode="code")
+        try:
+            from agent.functions.code import resolve_recipe as resolve_code_recipe
+            from agent.policies.recon_policy import is_documentation_task
+            from .loop_settings import dynamic_loop_enabled
+
+            recipe = resolve_code_recipe(
+                dynamic_loop=dynamic_loop_enabled(),
+                documentation=is_documentation_task(user_request),
+            )
+            plan["capability_recipe"] = recipe.recipe_id
+        except ImportError:
+            pass
+        tool_leak_tokens = tool_leak_tokens_for_mode("code")
+        for step in plan.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            kind = (step.get("step_kind") or "work").strip().lower()
+            if has_tool_leak(step.get("description") or "", tool_leak_tokens):
+                step["description"] = capability_step_description(
+                    "code",
+                    kind,
+                    user_request,
+                )
+                notes.append(f"Step: replaced tool-language description for {kind}.")
+
+    from agent.core.implementation_plan import (
+        ensure_implementation_block,
+        should_write_living_plan,
+    )
+
+    if should_write_living_plan(plan, mode_key):
+        ensure_implementation_block(plan, mode_key, user_request=user_request)
 
     return plan, notes
 

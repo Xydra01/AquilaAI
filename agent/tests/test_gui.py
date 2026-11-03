@@ -38,13 +38,12 @@ def test_agent_worker_signals(qtbot, qapp):
     mock_agent.client.warmup.return_value = (True, "Model ready.")
     mock_agent.client.ensure_warmup.return_value = (True, "Model ready.")
     with patch('gui.get_agent', return_value=mock_agent):
-        # Use qtbot to wait for the background thread to emit the finished_signal
-        with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
-            worker.start()
-            
-        # Verify the signal carried the exact result from the mock (including the worker's prepend string)
-        assert blocker.args == ["✅ Task Completed:\n✅ Task complete!"]
-        assert mock_agent.run_unified_task.called
+        with patch("agent.core.apply_runtime_settings"):
+            with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
+                worker.start()
+
+            assert blocker.args == ["✅ Task Completed:\n✅ Task complete!"]
+            assert mock_agent.run_unified_task.called
 
 
 def test_agent_worker_approve_and_run_does_not_unbound_extract(qtbot, qapp):
@@ -59,9 +58,11 @@ def test_agent_worker_approve_and_run_does_not_unbound_extract(qtbot, qapp):
     mock_agent.approve_and_run_task.return_value = "Report written (10167 bytes)."
     mock_agent.client.model_name = "aquila"
     mock_agent.client.warmup.return_value = (True, "Model ready.")
+    mock_agent.client.ensure_warmup.return_value = (True, "Model ready.")
     with patch("gui.get_agent", return_value=mock_agent):
-        with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
-            worker.start()
+        with patch("agent.core.apply_runtime_settings"):
+            with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
+                worker.start()
     text = blocker.args[0]
     assert not text.startswith("❌ Error")
     assert "Task Completed" in text or "Report written" in text
@@ -123,29 +124,23 @@ def test_agent_worker_chat_streaming(qtbot, qapp):
         yield {"message": {"content": "Stream "}}
         yield {"message": {"content": "Test!"}}
     mock_agent.run_chat.return_value = mock_generator()
+    mock_agent.client.ensure_warmup.return_value = (True, "Model ready.")
     with patch('gui.get_agent', return_value=mock_agent):
-        
-        signals = []
-        worker.ledger_signal.connect(signals.append)
-        
-        with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
-            worker.start()
-            
-        # 1. The worker must combine the chunks into a final string for finished_signal
-        assert blocker.args == ["Stream Test!"]
-        
-        # 2. The worker must emit EACH chunk sequentially to the ledger_signal
-        assert signals == ["Stream ", "Test!"]
-        
-        # 3. CRITICAL: The worker must pass the correct parameters to run_chat!
-        assert mock_agent.run_chat.called
-        args, kwargs = mock_agent.run_chat.call_args
+        with patch("agent.core.apply_runtime_settings"):
+            signals = []
+            worker.ledger_signal.connect(signals.append)
 
-        # Validate it routed the images, the history, and requested a stream via kwargs!
-        assert kwargs.get("user_input") == "Hi"
-        assert kwargs.get("chat_history") == mock_history
-        assert kwargs.get("image_payloads") == mock_images
-        assert kwargs.get("stream") is True
+            with qtbot.waitSignal(worker.finished_signal, timeout=2000) as blocker:
+                worker.start()
+
+            assert blocker.args == ["Stream Test!"]
+            assert signals == ["Stream ", "Test!"]
+            assert mock_agent.run_chat.called
+            args, kwargs = mock_agent.run_chat.call_args
+            assert kwargs.get("user_input") == "Hi"
+            assert kwargs.get("chat_history") == mock_history
+            assert kwargs.get("image_payloads") == mock_images
+            assert kwargs.get("stream") is True
 
 def test_stream_chat_token_ui_update(qtbot, qapp):
     """TDD Goal: Ensure stream_chat_token appends text without throwing Enum/Attribute errors."""

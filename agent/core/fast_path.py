@@ -21,12 +21,18 @@ _MULTI_STEP = re.compile(
     re.I,
 )
 
-_MODES_WITH_FAST_PATH = frozenset({"code", "writing", "research"})
+_MODES_WITH_FAST_PATH = frozenset({"writing", "research"})  # code: DEAD — uses code_agent, no micro-plan
 
 
 def fast_path_enabled() -> bool:
     raw = os.getenv("AQUILA_FAST_PATH", "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
+
+
+def always_full_plan_enabled() -> bool:
+    """When True: never use micro-plans, even for short/simple tasks."""
+    raw = os.getenv("AQUILA_ALWAYS_FULL_PLAN", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def micro_plan_max_words() -> int:
@@ -40,10 +46,12 @@ def micro_plan_max_words() -> int:
 def explore_brief_enabled(mode: str, user_request: str, *, micro_plan: bool = False) -> bool:
     if micro_plan:
         return False
+    if (mode or "").strip().lower() == "code":
+        return False  # DEAD: code uses code_agent.py
     raw = os.getenv("AQUILA_EXPLORE_BRIEF", "0").strip().lower()
     if raw in ("0", "false", "no", "off"):
         return False
-    if mode not in ("code", "research"):
+    if mode not in ("research",):
         return False
     try:
         from agent.policies import get_context_profile
@@ -69,9 +77,17 @@ def should_micro_plan(
     text_chunks: list | None = None,
     image_payloads: list | None = None,
 ) -> bool:
+    mode_norm = (mode or "task").strip().lower()
+    # DEAD: code uses code_agent.py — never micro-plan / slot-fill for code.
+    if mode_norm == "code":
+        return False
     if harness_force_micro_plan():
-        mode_norm = (mode or "task").strip().lower()
         return mode_norm in _MODES_WITH_FAST_PATH
+    text = (user_request or "").strip()
+    # Habit-tracker greenfield prompts always use the OS TDD micro-plan (slot-fill).
+    # (Removed for code mode — see early return above.)
+    if always_full_plan_enabled():
+        return False
     try:
         from .loop_settings import (
             dynamic_loop_enabled,
@@ -89,7 +105,6 @@ def should_micro_plan(
         pass
     if not fast_path_enabled():
         return False
-    mode_norm = (mode or "task").strip().lower()
     if mode_norm not in _MODES_WITH_FAST_PATH:
         return False
     if text_chunks or image_payloads:
@@ -116,54 +131,127 @@ def _dynamic_work_finalize(mode_norm: str, objective: str) -> list[dict[str, Any
     _, fin_default, _ = BUDGET_RUBRIC.get("finalize", (4, 6, 8))
     finalize_step: dict[str, Any] = {
         "status": "pending",
-        "description": (
-            "Finalize deliverable report"
-            if mode_norm == "research"
-            else "Finalize and finish_task"
-        ),
+        "description": "Finalize deliverable report",
         "step_kind": "finalize",
         "focus": "deliver",
         "max_iterations": fin_default,
     }
     if mode_norm == "research":
         finalize_step["capability_id"] = "cap.research.finalize_deliverable@v1"
-    return [
+    elif mode_norm == "writing":
+        finalize_step["capability_id"] = "cap.writing.finalize_deliverable@v1"
+    elif mode_norm == "code":
+        finalize_step["description"] = "Sync via cap.dev.sync_project@v1"
+        finalize_step["capability_id"] = "cap.dev.sync_project@v1"
+    work_step: dict[str, Any] = {
+        "status": "pending",
+        "description": objective[:240],
+        "step_kind": "work" if mode_norm != "writing" else "write",
+        "focus": mode_norm if mode_norm != "writing" else "write",
+        "max_iterations": work_default,
+    }
+    if mode_norm == "writing":
+        work_step["capability_id"] = "cap.writing.draft_sections@v1"
+    elif mode_norm == "code":
+        work_step["description"] = f"Create files via cap.dev.create_file@v1: {objective[:160]}"
+        work_step["capability_id"] = "cap.dev.create_file@v1"
+    return [work_step, finalize_step]
+
+
+def _habit_tracker_micro_steps(objective: str) -> list[dict[str, Any]]:
+    """TDD micro-plan for tiny habit-tracker greenfield prompts."""
+    use_batch = os.getenv("AQUILA_CODE_BATCH_WRITE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if use_batch:
+        work_cap = "cap.dev.write_files@v1"
+        work_desc = "Write tests, habit.py, and README in one batch"
+        work_kind = "work"
+    else:
+        work_cap = "cap.dev.create_file@v1"
+        work_desc = "Write failing tests (tests/test_habit.py)"
+        work_kind = "tdd_red"
+    steps: list[dict[str, Any]] = [
         {
             "status": "pending",
-            "description": objective[:240],
-            "step_kind": "work",
-            "focus": mode_norm,
-            "max_iterations": work_default,
+            "description": work_desc,
+            "step_kind": work_kind,
+            "capability_id": work_cap,
+            "slot_fill": True,
+            "slot_fill_path": "tests/test_habit.py",
+            "max_iterations": 4,
         },
-        finalize_step,
     ]
+    if not use_batch:
+        steps.append(
+            {
+                "status": "pending",
+                "description": "Implement habit.py CLI (add / done / list)",
+                "step_kind": "tdd_green",
+                "capability_id": "cap.dev.create_file@v1",
+                "slot_fill": True,
+                "slot_fill_path": "habit.py",
+                "max_iterations": 4,
+            }
+        )
+        steps.append(
+            {
+                "status": "pending",
+                "description": "Run pytest until green",
+                "step_kind": "verify",
+                "capability_id": "cap.dev.run_tests@v1",
+                "slot_fill": True,
+                "max_iterations": 3,
+            }
+        )
+        steps.append(
+            {
+                "status": "pending",
+                "description": "Write README.md",
+                "step_kind": "work",
+                "capability_id": "cap.dev.create_file@v1",
+                "slot_fill": True,
+                "slot_fill_path": "README.md",
+                "max_iterations": 3,
+            }
+        )
+    else:
+        steps.append(
+            {
+                "status": "pending",
+                "description": "Run pytest until green",
+                "step_kind": "verify",
+                "capability_id": "cap.dev.run_tests@v1",
+                "slot_fill": True,
+                "max_iterations": 3,
+            }
+        )
+    steps.append(
+        {
+            "status": "pending",
+            "description": "Sync via cap.dev.sync_project@v1",
+            "step_kind": "finalize",
+            "capability_id": "cap.dev.sync_project@v1",
+            "slot_fill": True,
+            "max_iterations": 4,
+        }
+    )
+    _ = objective
+    return steps
 
 
 def _step_for_mode(mode: str, objective: str) -> list[dict[str, Any]]:
     mode_norm = (mode or "task").strip().lower()
+    if mode_norm == "code":
+        # DEAD: code uses code_agent — return empty (should_micro_plan already False).
+        return []
     try:
         from .loop_settings import dynamic_loop_enabled
 
-        if dynamic_loop_enabled() and mode_norm in (
-            "code",
-            "research",
-            "writing",
-        ):
-            if mode_norm == "code" and os.getenv(
-                "AQUILA_MICRO_PLAN_CODE_SINGLE", ""
-            ).strip().lower() in ("1", "true", "yes", "on"):
-                from .plan_validator import BUDGET_RUBRIC
-
-                _, work_default, _ = BUDGET_RUBRIC.get("work", (8, 14, 24))
-                return [
-                    {
-                        "status": "pending",
-                        "description": f"Implement: {objective[:200]}",
-                        "step_kind": "work",
-                        "focus": "implement",
-                        "max_iterations": work_default,
-                    },
-                ]
+        if dynamic_loop_enabled() and mode_norm in ("research", "writing"):
             return _dynamic_work_finalize(mode_norm, objective)
     except ImportError:
         pass
@@ -190,42 +278,15 @@ def _step_for_mode(mode: str, objective: str) -> list[dict[str, Any]]:
                 "status": "pending",
                 "description": f"Draft: {objective[:200]}",
                 "step_kind": "write",
+                "capability_id": "cap.writing.draft_sections@v1",
                 "max_iterations": 4,
             },
             {
                 "status": "pending",
-                "description": "Finalize document",
+                "description": "Finalize deliverable report",
                 "step_kind": "finalize",
+                "capability_id": "cap.writing.finalize_deliverable@v1",
                 "max_iterations": 3,
-            },
-        ]
-    if mode_norm == "code":
-        if os.getenv("AQUILA_MICRO_PLAN_CODE_SINGLE", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            return [
-                {
-                    "status": "pending",
-                    "description": f"Implement: {objective[:200]}",
-                    "step_kind": "micro",
-                    "max_iterations": 6,
-                },
-            ]
-        return [
-            {
-                "status": "pending",
-                "description": f"Implement: {objective[:200]}",
-                "step_kind": "code",
-                "max_iterations": 6,
-            },
-            {
-                "status": "pending",
-                "description": "Verify with tests or lint",
-                "step_kind": "verify",
-                "max_iterations": 4,
             },
         ]
     return [

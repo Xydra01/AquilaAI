@@ -72,6 +72,30 @@ def test_research_offline_step_entry_hints(tmp_path):
     assert "web_search" not in search
 
 
+def test_writing_step_entry_hints_use_capability_ids(tmp_path):
+    engine = _engine("writing", tmp_path=tmp_path)
+    write_hint = _hint_os_line(engine, "write")
+    finalize = _hint_os_line(engine, "finalize")
+    assert "cap.writing.draft_sections@v1" in write_hint
+    assert "cap.writing.finalize_deliverable@v1" in finalize
+    assert "write_section" not in write_hint
+    assert "finish_task" not in finalize
+
+
+def test_code_step_entry_hints_use_capability_ids(tmp_path):
+    engine = _engine("code", tmp_path=tmp_path)
+    explore = _hint_os_line(engine, "explore")
+    work = _hint_os_line(engine, "work")
+    finalize = _hint_os_line(engine, "finalize")
+    assert "cap.dev.recon@v1" in explore
+    assert "cap.dev.project_setup@v1" in work
+    assert "cap.dev.create_file@v1" in work
+    assert "cap.dev.sync_project@v1" in finalize
+    assert "get_directory_tree" not in explore
+    assert "finish_task" not in finalize
+    assert "run_pytest" not in work
+
+
 def test_capability_budget_and_stall_nudges():
     engine = _engine("research")
     assert "cap.research.finalize_deliverable@v1" in engine._capability_budget_override_msg(
@@ -85,6 +109,17 @@ def test_capability_budget_and_stall_nudges():
 
     learn = _engine("learn_syllabus_build")
     assert "cap.learn.finalize_course@v1" in learn._capability_final_stall_nudge()
+
+    writing = _engine("writing")
+    assert "cap.writing.finalize_deliverable@v1" in writing._capability_budget_override_msg(
+        is_final_step=True
+    )
+
+    code = _engine("code")
+    assert "cap.dev.sync_project@v1" in code._capability_budget_override_msg(is_final_step=True)
+    assert "cap.dev.sync_project@v1" in code._capability_step_budget_final_override()
+    assert "cap.dev.sync_project@v1" in code._capability_final_stall_nudge()
+    assert "finish_task" not in code._capability_final_stall_nudge()
 
     task = _engine("task")
     assert "finish_task" in task._capability_budget_override_msg(is_final_step=True)

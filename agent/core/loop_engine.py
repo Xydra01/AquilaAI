@@ -19,6 +19,8 @@ from agent.policies import (
     should_proactive_summarize,
 )
 from agent.storage import load_workspace_summary
+from agent.core.loop_settings import run_state_enabled, capability_repeat_guard_enabled
+from agent.core.run_state import TaskRunContext
 from agent.policies import CHARACTER_BUILD_FORBIDDEN_FILE_TOOLS
 from agent.policies import build_allowed_tool_names
 from agent.policies import is_system_error_response, timeout_compress_retry_enabled
@@ -26,10 +28,8 @@ from agent.research import UrlVisitRegistry
 from agent.coding import PathVisitRegistry
 from .loop_coach import LoopCoach
 from agent.policies import get_step_policy
-from agent.policies import RECON_PLAYBOOK_MARKDOWN, code_explore_hint
+from agent.policies import RECON_PLAYBOOK_MARKDOWN
 from agent.policies import (
-    WRITE_PROJECT_MARKDOWN_MAX_CHARS,
-    WRITE_PROJECT_MARKDOWN_SOFT_CHARS,
     compact_read_code_outline_result,
 )
 from .episode_tracker import (
@@ -80,11 +80,19 @@ class LoopEngine:
         persona_research_lore: bool = False,
         learn_syllabus_web: bool = False,
         offline_research: bool = False,
+        writing_brief: dict | None = None,
         agent=None,
         parent_task_id: str | None = None,
         micro_plan: bool = False,
         mcp_bridge=None,
     ):
+        mode_norm = (mode or "").strip().lower()
+        if mode_norm == "code":
+            raise RuntimeError(
+                "LoopEngine no longer runs code mode. "
+                "Use agent.core.code_agent.run_tool_session instead "
+                "(see main.run_unified_task early return)."
+            )
         self.client = client
         self.executor = executor
         self.console = console
@@ -110,6 +118,7 @@ class LoopEngine:
         self.persona_research_lore = bool(persona_research_lore)
         self.learn_syllabus_web = bool(learn_syllabus_web)
         self.offline_research = bool(offline_research)
+        self.writing_brief = dict(writing_brief) if writing_brief else None
         self._offline_sources_available = False
         self._scratchpad_injected_this_step: bool = False
         self._agent = agent
@@ -117,12 +126,28 @@ class LoopEngine:
         self._micro_plan = bool(micro_plan)
         self._mcp_bridge = mcp_bridge
         self._act_turns = 0
+        self._last_act_needs_reflect = False
+        self._bound_cap_id = ""
+        self._slot_fill_active = False
+        self._slot_fill_path = ""
         self._dynamic_loop_active = False
         self._milestone_tracker = None
         self._task_episode_state: TaskRunState | None = None
         self._dynamic_palette_logged = False
         self._milestone_advance_nudged = False
         self._dynamic_schema_minimal = False
+        self._create_file_block_counts: dict[str, int] = {}
+        self._create_file_path_attempts: dict[str, int] = {}
+        self._read_region_step_counts: dict[int, int] = {}
+        self._update_checklist_step_counts: dict[int, int] = {}
+        self._sync_project_step_counts: dict[int, int] = {}
+
+    def _writing_brief_for_policy(self, state: dict | None = None) -> dict | None:
+        if self.mode != "writing":
+            return None
+        if state and isinstance(state.get("writing_brief"), dict):
+            return state["writing_brief"]
+        return self.writing_brief
 
     _READ_ONLY_TOOLS = frozenset({
         "read_file",
@@ -157,7 +182,13 @@ class LoopEngine:
         text_chunks=None,
         image_payloads=None,
         thinking_callback=None,
+        attachment_paths: list | None = None,
     ) -> str:
+        if (self.mode or "").strip().lower() == "code":
+            # DEAD: code uses code_agent.py — constructor should already have blocked this.
+            raise RuntimeError(
+                "LoopEngine.run() refused mode=code. Use code_agent.run_tool_session."
+            )
         if self._use_legacy_loop():
             from loop_engine_legacy_snapshot import LoopEngine as _LegacyEngine
 
@@ -196,6 +227,7 @@ class LoopEngine:
             text_chunks=text_chunks,
             image_payloads=image_payloads,
             thinking_callback=thinking_callback,
+            attachment_paths=attachment_paths,
         )
 
     def _run_continuous(
@@ -208,6 +240,7 @@ class LoopEngine:
         text_chunks=None,
         image_payloads=None,
         thinking_callback=None,
+        attachment_paths: list | None = None,
     ) -> str:
         from .task_context import reset_active_task_id, set_active_task_id
 
@@ -222,6 +255,7 @@ class LoopEngine:
                 text_chunks=text_chunks,
                 image_payloads=image_payloads,
                 thinking_callback=thinking_callback,
+                attachment_paths=attachment_paths,
             )
         finally:
             reset_active_task_id(task_token)
@@ -271,6 +305,7 @@ class LoopEngine:
         grace_used_this_step = False
         tools_succeeded_this_step: set[str] = set()
         caps_succeeded_this_step: set[str] = set()
+        self._last_capability_feedback = ""
         final_step_stalls = 0
         finalize_nudge_sent = False
         stall_limit = int(os.getenv("AQUILA_FINAL_STEP_STALL_LIMIT", "8"))
@@ -316,8 +351,14 @@ class LoopEngine:
                 self._task_web_search_cap = task_web_search_cap()
                 self._auto_advance_milestones = auto_advance_milestones_enabled()
             else:
+                self._task_episode_state = None
                 self._task_web_search_cap = 0
-                self._auto_advance_milestones = False
+                if self.mode == "code":
+                    self._milestone_tracker = MilestoneTracker()
+                    self._auto_advance_milestones = True
+                else:
+                    self._milestone_tracker = None
+                    self._auto_advance_milestones = False
         except ImportError:
             self._dynamic_loop_active = False
             self._milestone_tracker = None
@@ -327,6 +368,26 @@ class LoopEngine:
         self._dynamic_palette_logged = False
         self._milestone_advance_nudged = False
         self._dynamic_schema_minimal = False
+        self._run_ctx = TaskRunContext.load(
+            task_name,
+            self.mode,
+            goal=user_request,
+            instance_id=self.instance_id,
+            workspace_summary=self.workspace_summary or "",
+        )
+        if self.mode == "code" and self._milestone_tracker is not None:
+            from .loop_objectives import apply_ground_truth_to_milestone_state
+
+            apply_ground_truth_to_milestone_state(
+                self._milestone_tracker.state,
+                self.mode,
+                self._run_ctx.ground_truth,
+            )
+        self._create_file_block_counts: dict[str, int] = {}
+        self._create_file_path_attempts: dict[str, int] = {}
+        self._read_region_step_counts: dict[int, int] = {}
+        self._update_checklist_step_counts: dict[int, int] = {}
+        self._sync_project_step_counts: dict[int, int] = {}
 
         while loop_tick < max_loop_ticks:
             if cancel_check and cancel_check():
@@ -335,6 +396,11 @@ class LoopEngine:
             try:
                 has_finish = False
                 state = read_json_state(task_file)
+                if self.mode == "writing" and self._milestone_tracker:
+                    brief = state.get("writing_brief")
+                    if isinstance(brief, dict):
+                        self._milestone_tracker.state.writing_brief = brief
+                        self.writing_brief = brief
                 if state["status"] == "completed":
                     return (
                         f"✅ {self.mode_label} completed successfully. "
@@ -344,7 +410,14 @@ class LoopEngine:
                 current_idx = state["current_step_index"]
                 if last_step_idx is not None and current_idx != last_step_idx:
                     step_episodes_run = 0
+                    self._create_file_block_counts = {}
+                    self._create_file_path_attempts = {}
+                    self._read_region_step_counts = {}
+                    self._update_checklist_step_counts = {}
+                    self._sync_project_step_counts = {}
                 last_step_idx = current_idx
+                if getattr(self, "_run_ctx", None):
+                    self._run_ctx.step_index = current_idx
                 if current_idx >= len(state["steps"]):
                     return "✅ All steps are completed."
 
@@ -357,6 +430,9 @@ class LoopEngine:
                 elif self.mode == "writing":
                     default_kind = "write"
                 step_kind = step.get("step_kind") or default_kind
+                self._bound_cap_id = str(step.get("capability_id") or "").strip()
+                self._slot_fill_path = str(step.get("slot_fill_path") or "").strip()
+                self._slot_fill_active = self._should_slot_fill(step, step_kind)
                 current_objective, desc_fixed = sanitize_step_description(
                     step.get("description", ""),
                     step_kind=step_kind,
@@ -378,6 +454,7 @@ class LoopEngine:
                     persona_research_lore=self.persona_research_lore,
                     learn_syllabus_web=self.learn_syllabus_web,
                     offline_research=self.offline_research,
+                    writing_brief=self._writing_brief_for_policy(state),
                 )
                 is_final_step = current_idx == len(state["steps"]) - 1
                 if (
@@ -394,6 +471,22 @@ class LoopEngine:
                     )
 
                 episode_count = step_episodes_run
+                if getattr(self, "_run_ctx", None):
+                    self._run_ctx.episode = episode_count
+                if (
+                    self.mode == "code"
+                    and episode_count == 0
+                    and self._maybe_advance_satisfied_code_step(
+                        step_kind, state, task_file
+                    )
+                ):
+                    ledger_text += (
+                        f"\n✅ OS: `{step_kind}` deliverable already in buffer — advancing.\n"
+                    )
+                    if ui_callback:
+                        ui_callback(ledger_text)
+                    step_episodes_run = 0
+                    continue
                 step_run = StepRunState(
                     plan_step_index=current_idx,
                     total_steps=len(state["steps"]),
@@ -451,6 +544,45 @@ class LoopEngine:
                             ui_callback(ledger_text)
 
                 if (
+                    self._capability_research_active()
+                    and self.mode == "writing"
+                    and episode_count == 0
+                    and not self._capability_attachments_ingested
+                    and self._has_attachment_sources(text_chunks)
+                    and step_kind in ("read", "write", "work")
+                ):
+                    auto_msg = self._auto_ingest_persona_attachments(
+                        task_name,
+                        user_request,
+                        text_chunks,
+                        skip_advance=True,
+                    )
+                    if auto_msg:
+                        self._capability_attachments_ingested = True
+                        caps_succeeded_this_step.add("cap.writing.ingest_sources@v1")
+                        if self._milestone_tracker:
+                            self._milestone_tracker.record_capability(
+                                "cap.writing.ingest_sources@v1",
+                                auto_msg,
+                                mode=self.mode,
+                            )
+                        advance_hint = (
+                            "Next: `cap.writing.draft_sections@v1` using SCRATCHPAD sources."
+                            if step_kind in ("write", "work")
+                            else "Next: mark_objective_complete or call ingest once if needed."
+                        )
+                        conversation_history.append({
+                            "role": "user",
+                            "content": (
+                                f"Tool Outputs:\n{auto_msg}\n\n"
+                                f"✅ OS: Source attachments pre-ingested into scratchpad. {advance_hint}"
+                            ),
+                        })
+                        ledger_text += f"\n{auto_msg}\n"
+                        if ui_callback:
+                            ui_callback(ledger_text)
+
+                if (
                     step_kind == "delegate"
                     and episode_count == 0
                     and self.mode in ("task", "autonomous")
@@ -476,6 +608,7 @@ class LoopEngine:
                         advance_summary=delegate_result[:500],
                         client=self.client,
                         memory=self.memory,
+                        run_ctx=getattr(self, "_run_ctx", None),
                     )
                     recent_tool_signatures = []
                     step_entry_injected = False
@@ -520,6 +653,7 @@ class LoopEngine:
                             advance_summary="Skipped read ingest — lore from search step.",
                             client=self.client,
                             memory=self.memory,
+                            run_ctx=getattr(self, "_run_ctx", None),
                         )
                         recent_tool_signatures = []
                         step_entry_injected = False
@@ -568,6 +702,7 @@ class LoopEngine:
                                 advance_summary="OS auto-ingested persona source material.",
                                 client=self.client,
                                 memory=self.memory,
+                                run_ctx=getattr(self, "_run_ctx", None),
                             )
                             recent_tool_signatures = []
                             step_entry_injected = False
@@ -585,7 +720,48 @@ class LoopEngine:
                     current_objective=current_objective,
                     step_run=step_run,
                     step_kind=step_kind,
+                    episode_count=episode_count,
                 )
+
+                if (
+                    self.mode == "code"
+                    and episode_count == 0
+                    and step_kind in ("work", "code", "tdd_red", "tdd_green", "verify")
+                ):
+                    try:
+                        from agent.core.code_scaffolds import (
+                            dispatch_scaffold_files,
+                            scaffold_dispatch_should_run,
+                        )
+
+                        goal = getattr(self, "_user_request", "") or ""
+                        if scaffold_dispatch_should_run(goal):
+                            written = dispatch_scaffold_files(goal)
+                            if written:
+                                user_msg += (
+                                    "\n\n✅ OS: Scaffold files written to buffer: "
+                                    + ", ".join(f"`{p}`" for p in written)
+                                    + ". Run `cap.dev.run_tests@v1`, then sync."
+                                )
+                                if self._milestone_tracker:
+                                    self._milestone_tracker.state.file_edited = True
+                                    self._milestone_tracker.state.tests_drafted = True
+                                    self._milestone_tracker.state.deliverable_draft = True
+                                fast_msg = self._try_habit_tracker_scaffold_fast_path(
+                                    task_file=task_file,
+                                    task_name=task_name,
+                                    state=state,
+                                    source_registry=source_registry,
+                                    cancel_check=cancel_check,
+                                    attachment_text_chunks=text_chunks,
+                                )
+                                if fast_msg is not None:
+                                    ledger_text += fast_msg
+                                    if ui_callback:
+                                        ui_callback(ledger_text)
+                                    return ledger_text
+                    except Exception:
+                        pass
 
                 if self.mode == "research" and step.get("capability_id"):
                     try:
@@ -746,6 +922,16 @@ class LoopEngine:
 
                 message_dict = self._format_user_message(user_msg, image_payloads)
                 profile = get_context_profile()
+                # Keep last capability outcome visible when RunState is disabled.
+                feedback = (getattr(self, "_last_capability_feedback", "") or "").strip()
+                if feedback and not run_state_enabled():
+                    banner = (
+                        "**LAST CAPABILITY RESULT (do not ignore — continue from this, "
+                        "do not restart as if the project were empty):**\n"
+                        f"{feedback[:2500]}\n\n"
+                    )
+                    user_msg = banner + user_msg
+                    message_dict = self._format_user_message(user_msg, image_payloads)
                 if (
                     self.mode == "code"
                     and step_kind == "explore"
@@ -753,12 +939,14 @@ class LoopEngine:
                     and not self._recon_tools_used(conversation_history)
                 ):
                     user_msg += (
-                        "\n\n⚠️ OS: Stuck in explore — call get_directory_tree then "
-                        "read_code_outline before more list_directory/search_files."
+                        "\n\n⚠️ OS: Stuck in explore — call `cap.dev.recon@v1` "
+                        "(tree + outline) before more reads."
                     )
                     message_dict = self._format_user_message(user_msg, image_payloads)
                 if profile.max_scrape_chars_per_turn > 0:
                     scrape_budget_remaining[0] = profile.max_scrape_chars_per_turn
+                if self._micro_plan and len(conversation_history) > 4:
+                    conversation_history[:] = conversation_history[-4:]
                 self._maybe_compress_conversation(
                     conversation_history,
                     profile,
@@ -766,13 +954,13 @@ class LoopEngine:
                     proactive_note=True,
                 )
 
-                active_memory = build_loop_messages(
+                active_memory = self._assemble_loop_messages(
                     system_prompt=self.system_prompt,
-                    rolling_summary=self.workspace_summary,
                     step_entry=step_entry_msgs,
                     conversation_history=conversation_history,
                     user_message=message_dict,
                     profile=profile,
+                    include_full_goal=episode_count == 0,
                 )
 
                 if self._force_full_schema and not self._dynamic_loop_active:
@@ -782,6 +970,7 @@ class LoopEngine:
                     schema = self._schema_for_capability_step(
                         step_kind,
                         is_final_step=is_final_step,
+                        step=step,
                     )
                 else:
                     schema = self._schema_for_step(
@@ -791,28 +980,44 @@ class LoopEngine:
                     )
 
                 run_think_phase = self._should_run_think_phase(
-                    parse_retries, skip_think_phase=skip_think_phase
+                    parse_retries,
+                    skip_think_phase=skip_think_phase,
+                    step_kind=step_kind,
                 )
                 if run_think_phase:
                     tool_preview = self._format_tool_preview_for_think(step_kind=step_kind)
+                    think_anchor = ""
+                    if run_state_enabled() and getattr(self, "_run_ctx", None):
+                        think_anchor = (
+                            "\n\n**PROGRESS ANCHOR (authoritative):**\n"
+                            + self._run_ctx.render_think_anchor()
+                        )
                     think_user_msg = (
                         user_msg
+                        + think_anchor
                         + tool_preview
-                        + "\n\n**THINK TURN:** Reason about tool results and plan next "
-                        "actions in plain text. You cannot execute tools in this message — "
-                        "no JSON. Plan which tools from the list above you will call on the "
-                        "**next** act turn."
+                        + "\n\n**THINK TURN:** Continue from **RUN STATE** / last capability "
+                        "and Tool Outputs above. Plan the *next* action only — do not restate "
+                        "the whole goal as if nothing ran."
+                        + (
+                            " If RUN STATE shows a failed last capability, do not claim an "
+                            "earlier step succeeded."
+                            if run_state_enabled()
+                            else ""
+                        )
+                        + " You cannot execute tools in this message — no JSON. Name which tool "
+                        "from the list above you will call on the **next** act turn."
                     )
                     think_message_dict = self._format_user_message(
                         think_user_msg, image_payloads
                     )
-                    think_memory = build_loop_messages(
+                    think_memory = self._assemble_loop_messages(
                         system_prompt=self.system_prompt,
-                        rolling_summary=self.workspace_summary,
                         step_entry=step_entry_msgs,
                         conversation_history=conversation_history,
                         user_message=think_message_dict,
                         profile=profile,
+                        include_full_goal=episode_count == 0,
                     )
                     if ui_callback:
                         ui_callback(
@@ -858,13 +1063,13 @@ class LoopEngine:
                             )
                         )
                         message_dict = self._format_user_message(user_msg, image_payloads)
-                        active_memory = build_loop_messages(
+                        active_memory = self._assemble_loop_messages(
                             system_prompt=self.system_prompt,
-                            rolling_summary=self.workspace_summary,
                             step_entry=step_entry_msgs,
                             conversation_history=conversation_history,
                             user_message=message_dict,
                             profile=profile,
+                            include_full_goal=episode_count == 0,
                         )
 
                 # Never pair assistant JSON prefill with a JSON Schema format dict —
@@ -1046,14 +1251,23 @@ class LoopEngine:
                 })
 
                 _schema_kind = (
-                    "capability_action"
-                    if self._capability_research_active()
-                    else "agent_action"
+                    "capability_slot_fill"
+                    if self._slot_fill_active and self._bound_cap_id
+                    else (
+                        "capability_action"
+                        if self._capability_research_active()
+                        else "agent_action"
+                    )
+                )
+                _parse_tool_names = (
+                    frozenset({self._bound_cap_id})
+                    if self._slot_fill_active and self._bound_cap_id
+                    else (self._schema_tool_names or None)
                 )
                 parsed_response = parse_agent_response(
                     response_text,
                     quiet=False,
-                    tool_names=self._schema_tool_names or None,
+                    tool_names=_parse_tool_names,
                     format_mode=self._last_format_mode,
                     registry=self.base_tools,
                     schema_kind=_schema_kind,
@@ -1187,6 +1401,7 @@ class LoopEngine:
                         continue
 
                 parse_retries = 0
+                self._last_act_needs_reflect = False
 
                 pending_final_report = parsed_response.get("final_report") or ""
                 if pending_final_report and self._milestone_tracker:
@@ -1255,6 +1470,7 @@ class LoopEngine:
                 )
                 if _empty_turn:
                     parse_retries += 1
+                    self._last_act_needs_reflect = True
                     fallback_applied = False
                     if self._capability_research_active() and parse_retries >= 2:
                         from agent.functions.research import recommended_capability_for_step
@@ -1333,6 +1549,107 @@ class LoopEngine:
                     parallel_read_results = self._execute_reads_parallel(tool_calls)
 
                 if self._capability_research_active() and capability_calls:
+                    if capability_repeat_guard_enabled():
+                        rep_block = self._capability_repeat_pre_execute_block(
+                            capability_calls,
+                            recent_tool_signatures,
+                            loop_coach=loop_coach,
+                            is_final_step=is_final_step,
+                        )
+                        if rep_block:
+                            conversation_history.append({
+                                "role": "user",
+                                "content": f"Tool Outputs:\n{rep_block}",
+                            })
+                            recent_reasoning_hashes.clear()
+                            recent_tool_signatures.clear()
+                            if hasattr(self.console, "event"):
+                                tool_names = sorted(
+                                    str(c.get("id") or "")
+                                    for c in capability_calls
+                                    if isinstance(c, dict)
+                                )
+                                self.console.event(
+                                    "repetition_loop_detected",
+                                    step_index=current_idx,
+                                    capability_ids=tool_names,
+                                    hint_preview=str(rep_block)[:400],
+                                    blocked_before_execute=True,
+                                )
+                            self._last_act_needs_reflect = True
+                            continue
+                        path_rep = self._create_file_path_repeat_pre_execute_block(
+                            capability_calls,
+                            loop_coach=loop_coach,
+                        )
+                        if path_rep:
+                            conversation_history.append({
+                                "role": "user",
+                                "content": f"Tool Outputs:\n{path_rep}",
+                            })
+                            recent_reasoning_hashes.clear()
+                            if hasattr(self.console, "event"):
+                                self.console.event(
+                                    "create_file_path_repeat_blocked",
+                                    step_index=current_idx,
+                                    hint_preview=str(path_rep)[:400],
+                                    blocked_before_execute=True,
+                                )
+                            self._last_act_needs_reflect = True
+                            continue
+                    # Detect identical capability+reasoning loops BEFORE execute so
+                    # the 3rd repeat never re-runs setup/recon (soft coach was too late).
+                    if self._dynamic_loop_active:
+                        tool_names = sorted(
+                            str(c.get("id") or "")
+                            for c in capability_calls
+                            if isinstance(c, dict)
+                        )
+                        reasoning = (
+                            parsed_response.get("reasoning", "")
+                            if isinstance(parsed_response, dict)
+                            else ""
+                        )
+                        combo_hash = hash(reasoning + "".join(tool_names))
+                        recent_reasoning_hashes.append(combo_hash)
+                        if (
+                            len(recent_reasoning_hashes) >= 3
+                            and len(set(recent_reasoning_hashes[-3:])) == 1
+                        ):
+                            pending_ms = [
+                                lbl
+                                for lbl, ok in self._milestone_tracker.state._checks(
+                                    self.mode, is_final_step=is_final_step
+                                )
+                                if not ok
+                            ] if self._milestone_tracker else []
+                            rep_call = capability_calls[0] if capability_calls else {}
+                            rep_hint = loop_coach.repetition_break_hint(
+                                pending_ms,
+                                self._schema_tool_names or frozenset(),
+                                repeat_cap_id=str(rep_call.get("id") or "") if isinstance(rep_call, dict) else "",
+                                repeat_file_path=str(
+                                    (rep_call.get("arguments") or {}).get("file_path") or ""
+                                )
+                                if isinstance(rep_call, dict)
+                                else "",
+                            )
+                            conversation_history.append({
+                                "role": "user",
+                                "content": f"Tool Outputs:\n{rep_hint}",
+                            })
+                            recent_reasoning_hashes.clear()
+                            recent_tool_signatures.clear()
+                            if hasattr(self.console, "event"):
+                                self.console.event(
+                                    "repetition_loop_detected",
+                                    step_index=current_idx,
+                                    capability_ids=tool_names,
+                                    reasoning_preview=str(reasoning)[:300],
+                                    hint_preview=str(rep_hint)[:400],
+                                    blocked_before_execute=True,
+                                )
+                            continue
                     cap_batch = self._execute_capability_batch(
                         capability_calls,
                         task_name=task_name,
@@ -1345,7 +1662,15 @@ class LoopEngine:
                         pending_final_report=pending_final_report,
                         caps_succeeded=caps_succeeded_this_step,
                     )
+                    if capability_repeat_guard_enabled() and capability_calls:
+                        self._track_capability_signatures(
+                            capability_calls, recent_tool_signatures
+                        )
                     last_tool_output = cap_batch.get("last_output", "")
+                    if cap_batch.get("last_cap_ok"):
+                        self._last_act_needs_reflect = False
+                    else:
+                        self._last_act_needs_reflect = True
                     if cap_batch.get("finish_ok"):
                         has_finish = True
                         finish_msg = last_tool_output
@@ -1364,6 +1689,7 @@ class LoopEngine:
                             persona_research_lore=self.persona_research_lore,
                             learn_syllabus_web=self.learn_syllabus_web,
                             offline_research=self.offline_research,
+                            writing_brief=self._writing_brief_for_policy(state),
                         )
                         last_cap = str(cap_batch["last_cap_id"])
                         advance_fn = getattr(
@@ -1373,21 +1699,55 @@ class LoopEngine:
                             last_cap,
                             True,
                             step_kind=step_kind,
+                            result_summary=str(cap_batch.get("last_output") or ""),
+                            result_data=cap_batch.get("last_cap_data") or {},
+                            milestone_tracker=self._milestone_tracker,
                         ):
-                            has_advance = True
-                            summary_fn = getattr(
-                                cap_policy, "advance_summary_for_capability", None
+                            gate = (
+                                self._habit_tracker_advance_block(step_kind=step_kind)
+                                if step_kind in ("work", "code", "finalize")
+                                else None
                             )
-                            advance_summary = (
-                                summary_fn(last_cap)
-                                if callable(summary_fn)
-                                else f"Completed {last_cap}."
-                            )
-                            last_tool_output += (
-                                f"\n\n✅ OS: {advance_summary} Advancing to next plan step."
-                            )
+                            if gate:
+                                has_advance = False
+                                last_tool_output += f"\n\n{gate}"
+                            else:
+                                has_advance = True
+                                summary_fn = getattr(
+                                    cap_policy, "advance_summary_for_capability", None
+                                )
+                                advance_summary = (
+                                    summary_fn(last_cap)
+                                    if callable(summary_fn)
+                                    else f"Completed {last_cap}."
+                                )
+                                last_tool_output += (
+                                    f"\n\n✅ OS: {advance_summary} Advancing to next plan step."
+                                )
 
-                # Legacy tool-act path; skipped when `_uses_capability_act()` (capability-act modes).
+                    if (
+                        not has_advance
+                        and not has_finish
+                        and self.mode == "code"
+                        and step_kind in ("work", "code")
+                        and getattr(self, "_run_ctx", None)
+                    ):
+                        from agent.core.implementation_plan import code_work_checklist_complete
+
+                        if code_work_checklist_complete(self._run_ctx.checklist):
+                            gate = self._habit_tracker_advance_block(step_kind=step_kind)
+                            if gate:
+                                last_tool_output += f"\n\n{gate}"
+                            else:
+                                has_advance = True
+                                advance_summary = "Checklist complete for work step."
+                                last_tool_output += (
+                                    f"\n\n✅ OS: {advance_summary} Advancing to next plan step."
+                                )
+
+                # Legacy tool-act path; skipped when `_uses_capability_act()`
+                # (research/character/learn/writing/code). Code-mode tool OS BLOCK
+                # arms below are unreachable for mode=code after CAPABILITY_ACT_MODES.
                 for i, tc in enumerate(tool_calls):
                     if self._uses_capability_act():
                         break
@@ -1453,7 +1813,8 @@ class LoopEngine:
 
                             if gate:
                                 suffix = (
-                                    " Run sync_project_to_disk then run_pytest."
+                                    " Call `cap.dev.sync_project@v1` then "
+                                    "`cap.dev.run_tests@v1`."
                                     if step_kind in ("tdd_red", "tdd_green")
                                     else ""
                                 )
@@ -1590,25 +1951,6 @@ class LoopEngine:
                             result = (
                                 f"❌ OS BLOCK: web_search cap ({self._task_web_search_cap}) "
                                 "for this task. Synthesize from saved notes."
-                            )
-                        elif (
-                            step_kind in ("explore", "read")
-                            and tool_name in ("write_project_markdown", "append_project_markdown")
-                        ):
-                            result = (
-                                "❌ OS BLOCK: write_project_markdown belongs on a "
-                                "'code' step after recon. Finish explore with "
-                                "mark_objective_complete, then write ARCHITECTURE.md "
-                                "and README.md on the code step."
-                            )
-                        elif tool_name in (
-                            "write_project_markdown",
-                            "append_project_markdown",
-                        ) and doc_markdown_writes_this_turn >= 1:
-                            result = (
-                                f"❌ OS BLOCK: Only one {tool_name} call per turn "
-                                "(JSON truncation). Run again next turn for the other file "
-                                "or use append_project_markdown."
                             )
                         elif tool_name in (
                             "search_files",
@@ -1970,9 +2312,12 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
-                    and self._dynamic_loop_active
                     and self._milestone_tracker
                     and self._auto_advance_milestones
+                    and (
+                        self._dynamic_loop_active
+                        or self.mode == "code"
+                    )
                     and self._milestone_tracker.should_suggest_advance(
                         self.mode, is_final_step=is_final_step
                     )
@@ -2119,6 +2464,7 @@ class LoopEngine:
                         advance_summary=advance_summary,
                         client=self.client,
                         memory=self.memory,
+                        run_ctx=getattr(self, "_run_ctx", None),
                     )
                     recent_tool_signatures = []
                     step_entry_injected = False
@@ -2152,6 +2498,8 @@ class LoopEngine:
                                 self._milestone_tracker.note_final_report()
                     read_notes_this_step = False
                     self._milestone_advance_nudged = False
+                    loop_tick += 1
+                    continue
 
                 if has_finish:
                     saved = save_task_deliverable(
@@ -2220,13 +2568,27 @@ class LoopEngine:
                         and self._task_episode_state is not None
                         and not self._task_episode_state.at_episode_limit()
                     ):
+                        soft_limit_msg = (
+                            "Tool Outputs:\n💡 OS: Step episode soft limit reached — "
+                            "task budget remains. Continue with capabilities or "
+                        )
+                        if self._uses_capability_act():
+                            if self.mode == "code":
+                                soft_limit_msg += (
+                                    "complete checklist items / run_tests; step auto-advances "
+                                    "when milestones are met."
+                                )
+                            else:
+                                soft_limit_msg += (
+                                    "complete step milestones; step will auto-advance when ready."
+                                )
+                        else:
+                            soft_limit_msg += (
+                                "mark_objective_complete when milestones are met."
+                            )
                         conversation_history.append({
                             "role": "user",
-                            "content": (
-                                "Tool Outputs:\n💡 OS: Step episode soft limit reached — "
-                                "task budget remains. Continue with mixed tools or "
-                                "mark_objective_complete when milestones are met."
-                            ),
+                            "content": soft_limit_msg,
                         })
                         continue
                     if current_idx == len(state["steps"]) - 1:
@@ -2242,6 +2604,8 @@ class LoopEngine:
                         conversation_history,
                         grace_used_this_step,
                         tools_succeeded_this_step,
+                        mode=self.mode,
+                        capability_act=self._uses_capability_act(),
                     ):
                         self._log_forced_advance(
                             "iteration_limit", step_index=current_idx
@@ -2256,6 +2620,7 @@ class LoopEngine:
                             advance_summary="OS forced advance (iteration limit)",
                             client=self.client,
                             memory=self.memory,
+                            run_ctx=getattr(self, "_run_ctx", None),
                         )
                         recent_tool_signatures = []
                         step_entry_injected = False
@@ -2271,11 +2636,37 @@ class LoopEngine:
                             sort_keys=True,
                         )
                         recent_tool_signatures.append(sig)
+                if self._capability_research_active() and capability_calls:
+                    for call in capability_calls:
+                        if not isinstance(call, dict):
+                            continue
+                        sig = json.dumps(
+                            {
+                                "id": call.get("id"),
+                                "arguments": {
+                                    k: v
+                                    for k, v in dict(call.get("arguments") or {}).items()
+                                    if k != "topic"
+                                },
+                            },
+                            sort_keys=True,
+                        )
+                        recent_tool_signatures.append(sig)
 
-                # --- NEW: Repetition loop detector ---
-                if self._dynamic_loop_active:
-                    tool_names = sorted(tc.get("name") or "" for tc in tool_calls if isinstance(tc, dict))
-                    reasoning = parsed_response.get("reasoning", "") if isinstance(parsed_response, dict) else ""
+                # --- Repetition loop detector (legacy tool path; capabilities checked pre-execute) ---
+                if self._dynamic_loop_active and not (
+                    self._capability_research_active() and capability_calls
+                ):
+                    tool_names = sorted(
+                        tc.get("name") or ""
+                        for tc in tool_calls
+                        if isinstance(tc, dict)
+                    )
+                    reasoning = (
+                        parsed_response.get("reasoning", "")
+                        if isinstance(parsed_response, dict)
+                        else ""
+                    )
                     combo_hash = hash(reasoning + "".join(tool_names))
                     recent_reasoning_hashes.append(combo_hash)
 
@@ -2292,9 +2683,15 @@ class LoopEngine:
                         recent_reasoning_hashes.clear()
                         recent_tool_signatures.clear()
                         if hasattr(self.console, "event"):
-                            self.console.event("repetition_loop_detected", step_index=current_idx)
+                            self.console.event(
+                                "repetition_loop_detected",
+                                step_index=current_idx,
+                                capability_ids=tool_names,
+                                reasoning_preview=str(reasoning)[:300],
+                                hint_preview=str(rep_hint)[:400],
+                            )
                         continue
-                # --- END NEW ---
+                # --- END ---
 
                 block_msg = url_registry.duplicate_tool_block(recent_tool_signatures)
                 if block_msg:
@@ -2367,6 +2764,7 @@ class LoopEngine:
                                     advance_summary="OS forced advance (stall halt)",
                                     client=self.client,
                                     memory=self.memory,
+                                    run_ctx=getattr(self, "_run_ctx", None),
                                 )
                                 recent_tool_signatures = []
                                 step_entry_injected = False
@@ -2379,22 +2777,39 @@ class LoopEngine:
                 if (
                     not has_advance
                     and not has_finish
-                    and self._dynamic_loop_active
                     and self._milestone_tracker
                     and not self._auto_advance_milestones
                     and not self._milestone_advance_nudged
+                    and (
+                        self._dynamic_loop_active
+                        or self.mode == "code"
+                    )
                     and self._milestone_tracker.should_suggest_advance(
                         self.mode, is_final_step=is_final_step
                     )
                 ):
                     self._milestone_advance_nudged = True
-                    conversation_history.append({
-                        "role": "user",
-                        "content": (
+                    if self._uses_capability_act() and self.mode == "code":
+                        nudge = (
+                            "Tool Outputs:\n💡 OS: Checklist/milestones look complete. "
+                            "Run `cap.dev.run_tests@v1` or finish remaining checklist items — "
+                            "the step will auto-advance when criteria are met."
+                        )
+                    elif self._uses_capability_act():
+                        nudge = (
+                            "Tool Outputs:\n💡 OS: Step milestones look complete. "
+                            "The step will auto-advance on the next successful verify capability, "
+                            "or keep working if something is still missing."
+                        )
+                    else:
+                        nudge = (
                             "Tool Outputs:\n💡 OS: Step milestones look complete. "
                             "Call mark_objective_complete to advance, or keep working "
                             "if something is still missing."
-                        ),
+                        )
+                    conversation_history.append({
+                        "role": "user",
+                        "content": nudge,
                     })
 
                 if (
@@ -2530,6 +2945,26 @@ class LoopEngine:
                 "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
                 "Call `mark_objective_complete` or the next learn capability if done."
             )
+        if self.mode == "writing":
+            if is_final_step:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                    "Call `cap.writing.finalize_deliverable@v1` now."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                "Call `mark_objective_complete` or `cap.writing.draft_sections@v1` if done."
+            )
+        if self.mode == "code":
+            if is_final_step:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                    "Call `cap.dev.sync_project@v1` now."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
+                "Work step auto-advances when core checklist items are done or tests pass."
+            )
         return (
             "\n\n⚠️ CRITICAL OS OVERRIDE: Task episode budget exhausted. "
             "Call `mark_objective_complete` if done."
@@ -2556,6 +2991,23 @@ class LoopEngine:
                 "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Call "
                 "`cap.learn.finalize_course@v1`."
             )
+        if self.mode == "writing":
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Call "
+                "`cap.writing.finalize_deliverable@v1`."
+            )
+        if self.mode == "code":
+            block = self._finalize_habit_tracker_block()
+            if block:
+                return (
+                    "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Create missing files "
+                    "with `cap.dev.create_file@v1` (e.g. README.md), then call "
+                    "`cap.dev.sync_project@v1` once."
+                )
+            return (
+                "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Call "
+                "`cap.dev.sync_project@v1`."
+            )
         return (
             "\n\n⚠️ CRITICAL OS OVERRIDE: TIME IS UP. Finalize via capability now."
         )
@@ -2574,6 +3026,10 @@ class LoopEngine:
                 )
             if self.mode == "learn_syllabus_build":
                 return "Call `cap.learn.finalize_course@v1` in one JSON turn."
+            if self.mode == "writing":
+                return "Call `cap.writing.finalize_deliverable@v1` in one JSON turn."
+            if self.mode == "code":
+                return "Call `cap.dev.sync_project@v1` in one JSON turn."
         return (
             "Call `save_research_note` with key findings, then output "
             "`final_report` and `finish_task` in one JSON turn."
@@ -2664,6 +3120,7 @@ class LoopEngine:
             persona_research_lore=self.persona_research_lore,
             learn_syllabus_web=self.learn_syllabus_web,
             offline_research=self.offline_research,
+            writing_brief=self.writing_brief,
         )
         allowed = build_allowed_tool_names(
             mode=self.mode,
@@ -2840,25 +3297,28 @@ class LoopEngine:
         }
 
     def _should_run_think_phase(
-        self, parse_retries: int, *, skip_think_phase: bool = False
+        self,
+        parse_retries: int,
+        *,
+        skip_think_phase: bool = False,
+        step_kind: str = "",
     ) -> bool:
-        if skip_think_phase or parse_retries > 0:
+        if skip_think_phase:
             return False
         try:
-            from .loop_settings import act_two_phase_enabled
+            from agent.policies.thinking_tiers import should_run_reflect_pass
 
-            if not act_two_phase_enabled():
-                return False
+            return should_run_reflect_pass(
+                mode=self.mode,
+                micro_plan=bool(self._micro_plan),
+                parse_retries=parse_retries,
+                last_act_needs_reflect=bool(
+                    getattr(self, "_last_act_needs_reflect", False)
+                ),
+                model_name=getattr(self.client, "model_name", None),
+            )
         except ImportError:
             return False
-        from agent.policies import resolve_thinking_policy
-
-        policy = resolve_thinking_policy(
-            surface="reflect",
-            model_name=getattr(self.client, "model_name", None),
-            has_format_schema=False,
-        )
-        return policy.think is True
 
     def _format_tool_preview_for_think(self, *, step_kind: str = "") -> str:
         if not self._schema_tool_names:
@@ -3107,8 +3567,13 @@ class LoopEngine:
     def _recon_complete_in_history(conversation_history: list[dict]) -> bool:
         blob = LoopEngine._tool_output_blob(conversation_history, "")
         lower = blob.lower()
-        return "read_code_outline" in lower or "get_directory_tree" in lower
-
+        return (
+            "read_code_outline" in lower
+            or "get_directory_tree" in lower
+            or "cap.dev.recon@v1" in lower
+            or "recon complete" in lower
+            or "recon (" in lower
+        )
     def _build_step_entry_messages(
         self,
         task_name: str,
@@ -3121,7 +3586,62 @@ class LoopEngine:
         except Exception:
             notes = "No research notes found for this task."
         if self.mode == "code" and step_kind == "explore":
-            hint = code_explore_hint()
+            hint = (
+                "Recon: call `cap.dev.recon@v1` (tree + outline). "
+                "Optional `cap.dev.project_setup@v1` if no project buffer. "
+                "Do not invent capability IDs."
+            )
+        elif self.mode == "code" and step_kind == "read":
+            hint = (
+                "Read: call `cap.dev.read_region@v1` or `cap.dev.recon@v1`. "
+                "Do not invent capability IDs."
+            )
+        elif self.mode == "code" and step_kind in ("code", "work"):
+            hint = (
+                "Implement: `cap.dev.project_setup@v1` once if buffer empty, then "
+                "`cap.dev.create_file@v1` (file_path + full content) for tests and source, "
+                "`cap.dev.edit_apply@v1` for patches, `cap.dev.run_tests@v1` to verify. "
+                "Tick checklist via `cap.plan.update_checklist@v1`. Step auto-advances "
+                "when core checklist items are done or tests pass."
+            )
+        elif self.mode == "code" and step_kind == "tdd_red":
+            if self._slot_fill_active:
+                hint = (
+                    "TDD red (slot-fill): send ONLY `arguments.content` — OS binds "
+                    f"`{self._slot_fill_path or 'tests/test_habit.py'}`. "
+                    "Write 3–5 short pytest tests (~40 lines max). No edge-case suites."
+                )
+            else:
+                hint = (
+                    "TDD red: call ONLY `cap.dev.create_file@v1` with `file_path` "
+                    "(e.g. tests/test_habit.py) and full pytest code in `arguments.content`."
+                )
+        elif self.mode == "code" and step_kind == "tdd_green":
+            if self._slot_fill_active:
+                hint = (
+                    "TDD green (slot-fill): send ONLY `arguments.content` — OS binds "
+                    f"`{self._slot_fill_path or 'habit.py'}`. "
+                    "Minimal CLI: add / done / list, habits.json storage (~40 lines)."
+                )
+            else:
+                hint = (
+                    "TDD green: create `habit.py` via `cap.dev.create_file@v1` if missing, "
+                    "then `cap.dev.edit_apply@v1` or `cap.dev.run_tests@v1` until green."
+                )
+        elif self.mode == "code" and step_kind == "tdd_refactor":
+            hint = (
+                "TDD refactor: edit via `cap.dev.edit_apply@v1`, lint and re-run tests."
+            )
+        elif self.mode == "code" and step_kind == "verify":
+            hint = (
+                "Verify: call `cap.dev.run_tests@v1` / `cap.dev.run_linter@v1` "
+                "(sync via `cap.dev.sync_project@v1` if needed)."
+            )
+        elif self.mode == "code" and step_kind == "finalize":
+            hint = (
+                "Finalize: create `README.md` with `cap.dev.create_file@v1` if missing, "
+                "then call `cap.dev.sync_project@v1`."
+            )
         elif self.mode == "character_build" and step_kind == "search":
             hint = (
                 "Gather lore: call `cap.persona.gather_lore@v1` once with a focused topic. "
@@ -3168,6 +3688,32 @@ class LoopEngine:
             )
         elif self.mode == "learn_syllabus_build" and step_kind == "finalize":
             hint = "Call `cap.learn.finalize_course@v1` (empty arguments ok)."
+        elif self.mode == "writing" and step_kind in ("write", "work"):
+            brief_hint = ""
+            if self.writing_brief:
+                from agent.functions.writing_brief import WritingBrief
+
+                brief = WritingBrief.from_plan_dict(self.writing_brief)
+                if brief:
+                    brief_hint = f" Brief: {brief.milestone_summary()}."
+            hint = (
+                "Draft: call `cap.writing.init_document@v1` if no buffer exists, then "
+                "`cap.writing.draft_sections@v1` with grouped subsections. "
+                "section_header = plain title (no #); content = body only "
+                "(do NOT repeat the title as a leading # / ## heading). "
+                f"{brief_hint} Use SCRATCHPAD sources when present. "
+                "Optional `cap.writing.read_outline@v1`. Do not invent capability IDs."
+            )
+        elif self.mode == "writing" and step_kind == "read":
+            hint = (
+                "Ingest sources: call `cap.writing.ingest_sources@v1` once "
+                "(attachments are in context). Then mark_objective_complete."
+            )
+        elif self.mode == "writing" and step_kind == "finalize":
+            hint = (
+                "Finalize: call `cap.writing.finalize_deliverable@v1` "
+                "(empty arguments ok; compiles the draft). Do not invent capability IDs."
+            )
         elif self.mode == "research" and step_kind in ("search", "read"):
             if self.offline_research:
                 hint = (
@@ -3211,6 +3757,14 @@ class LoopEngine:
                     "Dynamic research loop: interleave gather / append-note / synthesize "
                     "capabilities until milestones are met, then advance."
                 )
+            elif self.mode == "code":
+                hint = (
+                    "Dynamic code work: interleave `cap.dev.edit_apply@v1`, "
+                    "`cap.dev.create_file@v1`, `cap.dev.recon@v1`, "
+                    "`cap.dev.run_tests@v1`, and `cap.dev.write_docs@v1`. "
+                    "Wide allowlist — not phase-locked. Call mark_objective_complete "
+                    "when step milestones are met."
+                )
             else:
                 hint = (
                     "Dynamic work phase: interleave read, grep, edit, test, and notes. "
@@ -3224,9 +3778,9 @@ class LoopEngine:
             in ("1", "true", "yes", "on")
         ):
             hint = (
-                "Harness smoke: init_code_project('harness-smoke'), write harness_smoke.py "
-                "with print('HARNESS_OK'), sync_project_to_disk, run python harness_smoke.py, "
-                "then finish_task. No exploration."
+                "Harness smoke: `cap.dev.project_setup@v1` (init harness-smoke), "
+                "`cap.dev.create_file@v1` with harness_smoke.py printing HARNESS_OK, "
+                "then `cap.dev.sync_project@v1`. No exploration."
             )
         else:
             hint = get_step_kind_hint(step_kind, mode=self.mode)
@@ -3238,24 +3792,26 @@ class LoopEngine:
             f"OS HINT: {hint}",
         ]
         if self.mode == "code":
-            parts.append(RECON_PLAYBOOK_MARKDOWN)
+            if step_kind in ("explore", "read"):
+                parts.append(RECON_PLAYBOOK_MARKDOWN)
             if (
                 step_kind == "code"
                 and conversation_history
                 and self._recon_complete_in_history(conversation_history)
             ):
                 parts.append(
-                    "RECON COMPLETE: Documentation workflow — one file per turn, "
-                    f"<= {WRITE_PROJECT_MARKDOWN_SOFT_CHARS} chars per write_project_markdown call. "
-                    "Turn A: write_project_markdown('ARCHITECTURE.md', …). "
-                    "Turn B: write_project_markdown('README.md', …) or append_project_markdown "
-                    "if a file needs more sections. "
-                    "Do not bundle two writes in one tools array. "
-                    "Do not re-run get_directory_tree or read_code_outline."
+                    "RECON COMPLETE: Documentation workflow — one file per turn via "
+                    "`cap.dev.write_docs@v1`. "
+                    "Turn A: ARCHITECTURE.md. Turn B: README.md (or append). "
+                    "Do not re-run `cap.dev.recon@v1`."
                 )
-        if self.workspace_summary:
+        if self.workspace_summary and not run_state_enabled():
             parts.append(
                 f"--- WORKSPACE SUMMARY ---\n{self.workspace_summary[:8000]}\n--- END ---"
+            )
+        elif run_state_enabled():
+            parts.append(
+                "Progress context is in the RUN STATE block (injected separately)."
             )
         if self.mode == "code":
             try:
@@ -3270,15 +3826,15 @@ class LoopEngine:
                     )
                     parts.insert(
                         2,
-                        "SCOPE: Work ONLY inside CODE_PROJECT_ROOT. Use get_directory_tree "
-                        "(max_depth=2) on the project root, then read_code_outline — NOT "
-                        "list_directory on the parent workspace or get_directory_tree on agent-projects.",
+                        "SCOPE: Work ONLY inside CODE_PROJECT_ROOT. Call "
+                        "`cap.dev.recon@v1` on the project root, then "
+                        "`cap.dev.read_region@v1` — not parent workspace exploration.",
                     )
                 else:
                     parts.insert(
                         1,
-                        "CODE_PROJECT_ROOT: (none) — call init_code_project or "
-                        "attach_existing_repo before file edits.",
+                        "CODE_PROJECT_ROOT: (none) — call `cap.dev.project_setup@v1` "
+                        "before file edits.",
                     )
             except ImportError:
                 pass
@@ -3291,6 +3847,11 @@ class LoopEngine:
             )
         ):
             self._scratchpad_injected_this_step = True
+            if self.mode == "writing" and step_kind in ("write", "work") and notes.strip():
+                parts.insert(
+                    1,
+                    "SOURCE MATERIAL: Use facts from SCRATCHPAD below when drafting sections.",
+                )
             if self.mode in ("character_build", "learn_syllabus_build") and step_kind == "synthesize":
                 from tool_library.agent_tools import _scratchpad_byte_limit
 
@@ -3312,7 +3873,78 @@ class LoopEngine:
                 "Use `cap.research.ingest_offline@v1` with attachment text, human journal, "
                 "and saved research notes."
             )
+        living = self._living_plan_step_context(task_name, step_kind)
+        if living:
+            parts.append(living)
+        if self._capability_research_active():
+            from agent.capabilities.adapters import (
+                PLAN_CHECKLIST_CAP_IDS,
+                allowed_capabilities_for_step,
+                default_capability_for_step,
+            )
+            from agent.capabilities.schema_hints import format_capability_argument_hints
+            from agent.parser.structured_schema import capability_schema_enrich_max
+
+            allowed_caps = allowed_capabilities_for_step(
+                step_kind,
+                mode=self.mode,
+                offline=self.offline_research,
+                has_attachments=self._has_attachment_sources(),
+                is_final_step=(step_kind == "finalize"),
+                persona_research_lore=self.persona_research_lore,
+                learn_syllabus_web=self.learn_syllabus_web,
+            )
+            action_caps = sorted(allowed_caps - PLAN_CHECKLIST_CAP_IDS)
+            if len(action_caps) > capability_schema_enrich_max():
+                default_cap = default_capability_for_step(
+                    step_kind,
+                    mode=self.mode,
+                    offline=self.offline_research,
+                    has_attachments=self._has_attachment_sources(),
+                    persona_research_lore=self.persona_research_lore,
+                    learn_syllabus_web=self.learn_syllabus_web,
+                )
+                hints = format_capability_argument_hints(
+                    action_caps,
+                    max_caps=6,
+                    prioritize=default_cap,
+                )
+                if hints:
+                    parts.append(f"**Capability argument shapes:**\n{hints}")
         return [{"role": "user", "content": "\n".join(parts)}]
+
+    def _living_plan_step_context(self, task_name: str, step_kind: str) -> str:
+        """Inject open checklist from implementation_plan when available."""
+        kind = (step_kind or "").strip().lower()
+        if kind in ("finalize", "explore", "search") and self.mode != "code":
+            # Still inject for code explore/work; skip only pure finalize for brevity
+            if kind == "finalize":
+                return ""
+        try:
+            from agent.core.implementation_plan import (
+                format_implementation_for_act,
+                living_plan_modes,
+                should_write_living_plan,
+            )
+            from agent.core.task_artifacts import read_plan_dict
+
+            if (self.mode or "") not in living_plan_modes():
+                return ""
+            plan = read_plan_dict(task_name, self.mode)
+            if not plan or not should_write_living_plan(plan, self.mode):
+                return ""
+            body = format_implementation_for_act(plan)
+            if not body.strip():
+                return ""
+            nudge = (
+                "\nAfter finishing a checklist item, call "
+                "`cap.plan.update_checklist@v1` with item_ids (or texts) to mark it done."
+            )
+            if kind == "finalize":
+                nudge = ""
+            return f"{body}{nudge}"
+        except Exception:
+            return ""
 
     def _build_user_message(
         self,
@@ -3326,16 +3958,387 @@ class LoopEngine:
         max_step_iterations: int | None = None,
         turn_phase: str | None = None,
         step_kind: str,
+        episode_count: int = 0,
     ) -> str:
         progress = step_run.format_progress() if step_run else (
             f"Step {current_idx + 1}/{total_steps} ({step_kind})"
         )
+        if run_state_enabled() and episode_count > 0 and getattr(self, "_run_ctx", None):
+            goal_line = f"**Goal (summary):** {self._run_ctx.goal_summary}\n\n"
+        else:
+            goal_line = f"**Ultimate Topic/Goal:** {user_request}\n\n"
         return (
-            f"**Ultimate Topic/Goal:** {user_request}\n\n"
+            f"{goal_line}"
             f"**YOUR CURRENT OBJECTIVE ({progress}):**\n"
             f"> {current_objective}\n"
             f"**Step kind:** {step_kind}"
         )
+
+    def _assemble_loop_messages(
+        self,
+        *,
+        system_prompt: str,
+        step_entry: list[dict],
+        conversation_history: list[dict],
+        user_message: dict,
+        profile=None,
+        include_full_goal: bool = False,
+    ) -> list[dict]:
+        if run_state_enabled() and getattr(self, "_run_ctx", None):
+            return self._run_ctx.build_turn_messages(
+                system_prompt=system_prompt,
+                step_entry=step_entry,
+                conversation_history=conversation_history,
+                user_message=user_message,
+                profile=profile or get_context_profile(),
+                include_full_goal=include_full_goal,
+                legacy_workspace_summary=self.workspace_summary or "",
+            )
+        return build_loop_messages(
+            system_prompt=system_prompt,
+            rolling_summary=self.workspace_summary,
+            step_entry=step_entry,
+            conversation_history=conversation_history,
+            user_message=user_message,
+            profile=profile or get_context_profile(),
+        )
+
+    def _checkpoint_run_state(
+        self,
+        *,
+        cap_id: str,
+        summary_text: str,
+        harness_ctx=None,
+        ok: bool | None = None,
+        result=None,
+    ) -> None:
+        if not run_state_enabled() or not getattr(self, "_run_ctx", None):
+            return
+        if result is not None:
+            meta = self._run_ctx.checkpoint_capability(
+                cap_id=cap_id,
+                result=result,
+                summary_text=summary_text,
+                harness_ctx=harness_ctx,
+                client=self.client,
+                milestone_tracker=self._milestone_tracker,
+                profile=get_context_profile(),
+            )
+        else:
+            meta = self._run_ctx.checkpoint_outcome(
+                cap_id=cap_id,
+                ok=bool(ok),
+                summary_text=summary_text,
+                harness_ctx=harness_ctx,
+                client=self.client,
+                milestone_tracker=self._milestone_tracker,
+                profile=get_context_profile(),
+            )
+        if hasattr(self.console, "event"):
+            self.console.event(
+                "run_state_checkpoint",
+                cap_id=cap_id,
+                ok=ok if ok is not None else getattr(result, "ok", None),
+                **meta,
+            )
+
+    def _record_capability_outcome(
+        self,
+        *,
+        cap_id: str,
+        ok: bool,
+        summary_text: str,
+        harness_ctx=None,
+        result=None,
+    ) -> None:
+        self._last_capability_feedback = summary_text
+        self._checkpoint_run_state(
+            cap_id=cap_id,
+            ok=ok,
+            summary_text=summary_text,
+            harness_ctx=harness_ctx,
+            result=result,
+        )
+
+    def _habit_tracker_advance_block(self, *, step_kind: str = "") -> str | None:
+        """Block work→finalize until habit-tracker deliverables exist in buffer."""
+        kind = (step_kind or "").strip().lower()
+        if kind not in ("work", "code", "finalize"):
+            return None
+        from agent.core.code_scaffolds import habit_tracker_work_complete, is_habit_tracker_goal
+
+        goal = (getattr(self, "_user_request", "") or "").lower()
+        if not is_habit_tracker_goal(goal):
+            return None
+        if habit_tracker_work_complete():
+            return None
+        return (
+            "❌ OS BLOCK: Habit-tracker deliverables incomplete. Create "
+            "`habit.py`, `tests/test_habit.py`, and `README.md` with "
+            "`cap.dev.create_file@v1` before advancing to finalize."
+        )
+
+    def _create_file_content_block(self, args: dict) -> str | None:
+        """OS block when create_file is missing or empty content."""
+        file_path = str(args.get("file_path") or "").strip()
+        if "content" not in args or args.get("content") is None:
+            block = (
+                "❌ OS BLOCK: `cap.dev.create_file@v1` requires "
+                "`arguments.content` (full file body as a string) and "
+                "`arguments.file_path`. You did not send `content`. "
+                "Retry with both — put the complete test/source text in content."
+            )
+        elif not str(args.get("content") or "").strip():
+            block = (
+                "❌ OS BLOCK: `cap.dev.create_file@v1` requires non-empty "
+                "`arguments.content` (full file body). You sent an empty string. "
+                "Retry with complete test or source code in content."
+            )
+        elif self._micro_plan and self._slot_fill_active:
+            line_count = len(str(args.get("content") or "").splitlines())
+            if line_count > 50:
+                block = (
+                    f"❌ OS BLOCK: micro-plan slot-fill content is {line_count} lines "
+                    "(max 50). Write a minimal file: 3–5 short pytest tests OR a "
+                    "small habit.py CLI (~40 lines). No edge-case suites."
+                )
+            else:
+                return None
+        else:
+            return None
+        norm = file_path.replace("\\", "/")
+        if norm.endswith("__init__.py"):
+            block += (
+                "\n\n💡 COACH: You do not need `tests/__init__.py` for pytest. "
+                "Create `tests/test_habit.py` (or the goal's named test file) with "
+                "full pytest content in `arguments.content`."
+            )
+        fp = file_path or "__missing__"
+        attempt = self._create_file_block_counts.get(fp, 0) + 1
+        self._create_file_block_counts[fp] = attempt
+        coach = LoopCoach(
+            mode=self.mode,
+            capability_research=self._capability_research_active(),
+        )
+        block += coach.create_file_retry_hint(
+            fp,
+            attempt,
+            goal=getattr(self, "_user_request", "") or "",
+        )
+        return block
+
+    def _create_file_goal_path_block(self, args: dict) -> str | None:
+        """Block wrong filenames when the user goal names specific deliverables."""
+        file_path = str(args.get("file_path") or "").strip().replace("\\", "/")
+        if not file_path:
+            return None
+        goal = (getattr(self, "_user_request", "") or "").lower()
+        low = file_path.lower()
+        if "habit.py" in goal:
+            if low.endswith("habits.py") and not low.endswith("/habit.py"):
+                return (
+                    "❌ OS BLOCK: Goal requires `habit.py` (singular CLI module), "
+                    "not `habits.py`. Retry `cap.dev.create_file@v1` with "
+                    "`file_path` = `habit.py` and full CLI source in `arguments.content`."
+                )
+            if low.endswith("habits.json") and "content" in args:
+                return (
+                    "❌ OS BLOCK: Do not create `habits.json` directly — it is the "
+                    "runtime data file. Create `habit.py` first; it should write "
+                    "`habits.json` when run."
+                )
+        return None
+
+    def _finalize_habit_tracker_block(self) -> str | None:
+        """Block finalize sync when required habit-tracker files are still missing."""
+        goal = (getattr(self, "_user_request", "") or "").lower()
+        if "habit.py" not in goal or "readme" not in goal:
+            return None
+        from agent.tool_library import code_canvas_tools as canvas
+
+        state = canvas._load_state()
+        if not state:
+            return None
+        paths = []
+        raw = state.get("files")
+        if isinstance(raw, dict):
+            paths = [str(p).replace("\\", "/") for p in raw.keys()]
+        elif isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict) and entry.get("path"):
+                    paths.append(str(entry["path"]).replace("\\", "/"))
+        has_habit = any(p == "habit.py" or p.endswith("/habit.py") for p in paths)
+        has_readme = any(p.lower().endswith("readme.md") for p in paths)
+        missing: list[str] = []
+        if not has_habit:
+            missing.append("`habit.py`")
+        if not has_readme:
+            missing.append("`README.md`")
+        if not missing:
+            return None
+        return (
+            "❌ OS BLOCK (finalize): Missing "
+            + ", ".join(missing)
+            + ". Create them with `cap.dev.create_file@v1` before "
+            "`cap.dev.sync_project@v1`."
+        )
+
+    def _bump_create_file_path_attempt(self, file_path: str) -> int:
+        fp = (file_path or "").strip().replace("\\", "/") or "__missing__"
+        attempt = self._create_file_path_attempts.get(fp, 0) + 1
+        self._create_file_path_attempts[fp] = attempt
+        return attempt
+
+    def _run_tests_impl_required_block(self) -> str | None:
+        """Block run_tests when tests exist but no implementation .py is in the buffer."""
+        from agent.core.implementation_plan import is_code_impl_source_path, is_code_test_path
+        from agent.tool_library import code_canvas_tools as canvas
+
+        state = canvas._load_state()
+        if not state:
+            return None
+        raw = state.get("files")
+        paths: list[str] = []
+        if isinstance(raw, dict):
+            paths = [str(p) for p in raw.keys()]
+        elif isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict) and entry.get("path"):
+                    paths.append(str(entry["path"]))
+        test_files = [p for p in paths if is_code_test_path(p)]
+        impl_files = [p for p in paths if is_code_impl_source_path(p)]
+        if test_files and not impl_files:
+            goal = (getattr(self, "_user_request", "") or "").lower()
+            impl_hint = "habit.py" if "habit.py" in goal else "the implementation module (.py)"
+            return (
+                "❌ OS BLOCK: Tests exist but no implementation `.py` file in the buffer. "
+                f"Create `{impl_hint}` via `cap.dev.create_file@v1` with full CLI source "
+                "in `arguments.content` before calling `cap.dev.run_tests@v1`."
+            )
+        return None
+
+    def _create_file_exists_block(self, args: dict) -> str | None:
+        """OS block when create_file targets a path already in the code buffer."""
+        file_path = str(args.get("file_path") or "").strip()
+        if not file_path:
+            return None
+        if "content" not in args or args.get("content") is None:
+            return None
+        if not str(args.get("content") or "").strip():
+            return None
+        from agent.tool_library import code_canvas_tools as canvas
+
+        if not canvas.buffer_has_file(file_path):
+            return None
+        norm = file_path.replace("\\", "/")
+        attempt = self._bump_create_file_path_attempt(norm)
+        coach = LoopCoach(
+            mode=self.mode,
+            capability_research=self._capability_research_active(),
+        )
+        block = (
+            f"❌ OS BLOCK: `cap.dev.create_file@v1` cannot create `{norm}` — "
+            "the file already exists in the project buffer. "
+            "Use `cap.dev.read_region@v1` to inspect it, "
+            "`cap.dev.edit_apply@v1` to modify it, or `cap.dev.run_tests@v1` "
+            "if tests are ready."
+        )
+        block += coach.create_file_exists_hint(
+            norm,
+            attempt,
+            goal=getattr(self, "_user_request", "") or "",
+        )
+        if attempt >= 3:
+            block = coach.create_file_path_repeat_block(norm, attempt)
+        return block
+
+    def _create_file_path_repeat_pre_execute_block(
+        self,
+        capability_calls: list[dict],
+        *,
+        loop_coach: LoopCoach,
+    ) -> str | None:
+        if not capability_calls:
+            return None
+        call = capability_calls[0]
+        if not isinstance(call, dict):
+            return None
+        if call.get("id") != "cap.dev.create_file@v1":
+            return None
+        file_path = str((call.get("arguments") or {}).get("file_path") or "").strip()
+        if not file_path:
+            return None
+        norm = file_path.replace("\\", "/")
+        prior = self._create_file_path_attempts.get(norm, 0)
+        if prior < 2:
+            return None
+        attempt = prior + 1
+        return loop_coach.create_file_path_repeat_block(norm, attempt)
+
+    @staticmethod
+    def _create_file_path_signature(call: dict) -> str:
+        args = dict(call.get("arguments") or {})
+        fp = str(args.get("file_path") or "").strip().replace("\\", "/")
+        return f"cap.dev.create_file@v1|{fp}"
+
+    @staticmethod
+    def _capability_call_signature(call: dict) -> str:
+        return json.dumps(
+            {
+                "id": call.get("id"),
+                "arguments": {
+                    k: v
+                    for k, v in dict(call.get("arguments") or {}).items()
+                    if k != "topic"
+                },
+            },
+            sort_keys=True,
+        )
+
+    def _capability_repeat_pre_execute_block(
+        self,
+        capability_calls: list[dict],
+        recent_signatures: list[str],
+        *,
+        loop_coach: LoopCoach,
+        is_final_step: bool,
+    ) -> str | None:
+        if not capability_calls:
+            return None
+        call = capability_calls[0]
+        if not isinstance(call, dict):
+            return None
+        sig = self._capability_call_signature(call)
+        if (
+            len(recent_signatures) >= 2
+            and recent_signatures[-1] == sig
+            and recent_signatures[-2] == sig
+        ):
+            pending_ms: list[str] = []
+            if self._milestone_tracker:
+                pending_ms = [
+                    lbl
+                    for lbl, ok in self._milestone_tracker.state._checks(
+                        self.mode, is_final_step=is_final_step
+                    )
+                    if not ok
+                ]
+            return loop_coach.repetition_break_hint(
+                pending_ms,
+                self._schema_tool_names or frozenset(),
+                repeat_cap_id=str(call.get("id") or ""),
+                repeat_file_path=str((call.get("arguments") or {}).get("file_path") or ""),
+            )
+        return None
+
+    @staticmethod
+    def _track_capability_signatures(
+        capability_calls: list[dict],
+        recent_signatures: list[str],
+    ) -> None:
+        for call in capability_calls:
+            if isinstance(call, dict):
+                recent_signatures.append(LoopEngine._capability_call_signature(call))
 
     def _format_user_message(self, user_msg: str, image_payloads) -> dict:
         if image_payloads:
@@ -3384,13 +4387,14 @@ class LoopEngine:
             return False
         self._log_forced_advance("parse_failure_limit", step_index=current_idx)
         advance_json_state(task_file, "OS forced advance (parse failure limit)")
-        on_step_advance(
+        self.workspace_summary = on_step_advance(
             conversation_history=conversation_history,
             instance_id=self.instance_id,
             task_name=task_name,
             advance_summary="OS forced advance (parse failure limit)",
             client=self.client,
             memory=self.memory,
+            run_ctx=getattr(self, "_run_ctx", None),
         )
         return True
 
@@ -3400,15 +4404,32 @@ class LoopEngine:
         conversation_history: list[dict],
         grace_used: bool,
         tools_succeeded: set[str],
+        *,
+        mode: str = "",
+        capability_act: bool = False,
     ) -> bool:
         """Inject save-and-advance hint before forcing advance. Returns True if injected."""
         if tools_succeeded or grace_used:
-            conversation_history.append({
-                "role": "user",
-                "content": (
+            mode_norm = (mode or "").strip().lower()
+            if capability_act and mode_norm == "code":
+                content = (
+                    "Tool Outputs:\n⚠️ OS: Step budget exhausted. "
+                    "Tick remaining checklist items via `cap.plan.update_checklist@v1` "
+                    "or run `cap.dev.run_tests@v1` — step auto-advances when criteria are met."
+                )
+            elif capability_act and mode_norm == "research":
+                content = (
+                    "Tool Outputs:\n⚠️ OS: Step budget exhausted. "
+                    "Save progress with `cap.research.append_note@v1` or synthesize notes."
+                )
+            else:
+                content = (
                     "Tool Outputs:\n⚠️ OS: Step budget exhausted. "
                     "Call save_research_note with partial progress, then mark_objective_complete."
-                ),
+                )
+            conversation_history.append({
+                "role": "user",
+                "content": content,
             })
             return True
         return False
@@ -3420,7 +4441,10 @@ class LoopEngine:
             if msg.get("role") != "user":
                 continue
             content = msg.get("content", "")
-            if isinstance(content, str) and "Tool 'run_pytest' result:" in content:
+            if isinstance(content, str) and (
+                "Tool 'run_pytest' result:" in content
+                or "Capability 'cap.dev.run_tests@v1' result:" in content
+            ):
                 parts.append(content)
                 break
         return "\n".join(parts)
@@ -3439,23 +4463,23 @@ class LoopEngine:
         if step_kind == "tdd_red":
             if "failed" not in lower and "error" not in lower:
                 return (
-                    "❌ OS BLOCK (tdd_red): Call run_pytest and confirm failing tests "
-                    "(output should mention failed) before mark_objective_complete."
+                    "❌ OS BLOCK (tdd_red): Call `cap.dev.run_tests@v1` and confirm "
+                    "failing tests (output should mention failed) before "
+                    "mark_objective_complete."
                 )
         if step_kind == "tdd_green":
             failed_m = re.search(r"(\d+) failed", blob)
             if failed_m and int(failed_m.group(1)) > 0:
                 return (
-                    "❌ OS BLOCK (tdd_green): run_pytest must show 0 failed "
+                    "❌ OS BLOCK (tdd_green): `cap.dev.run_tests@v1` must show 0 failed "
                     "before mark_objective_complete."
                 )
             if "✅ pytest" not in blob and "passed" not in lower:
                 return (
-                    "❌ OS BLOCK (tdd_green): Call run_pytest until tests pass "
-                    "before mark_objective_complete."
+                    "❌ OS BLOCK (tdd_green): Call `cap.dev.run_tests@v1` until tests "
+                    "pass before mark_objective_complete."
                 )
         return None
-
     @staticmethod
     def _tool_output_blob(conversation_history: list[dict], last_tool_output: str) -> str:
         parts = [last_tool_output or ""]
@@ -3463,7 +4487,9 @@ class LoopEngine:
             if msg.get("role") != "user":
                 continue
             content = msg.get("content", "")
-            if isinstance(content, str) and "Tool '" in content:
+            if isinstance(content, str) and (
+                "Tool '" in content or "Capability '" in content
+            ):
                 parts.append(content)
         return "\n".join(parts)
 
@@ -3471,8 +4497,13 @@ class LoopEngine:
     def _recon_tools_used(conversation_history: list[dict]) -> bool:
         blob = LoopEngine._tool_output_blob(conversation_history, "")
         lower = blob.lower()
-        return "get_directory_tree" in lower or "read_code_outline" in lower
-
+        return (
+            "get_directory_tree" in lower
+            or "read_code_outline" in lower
+            or "cap.dev.recon@v1" in lower
+            or "recon complete" in lower
+            or "recon (" in lower
+        )
     @staticmethod
     def _explore_advance_gate(
         conversation_history: list[dict],
@@ -3495,9 +4526,16 @@ class LoopEngine:
             and (succeeded & read_tools)
         ):
             return None
+        if "cap.dev.recon@v1" in succeeded:
+            return None
 
         blob = LoopEngine._tool_output_blob(conversation_history, last_tool_output)
         lower = blob.lower()
+        has_recon_cap = (
+            "cap.dev.recon@v1" in lower
+            or "recon complete" in lower
+            or "recon (" in lower
+        )
         has_outline = "read_code_outline" in lower or "project:" in lower
         has_tree = "get_directory_tree" in lower or "directory tree for:" in lower
         has_search = (
@@ -3508,8 +4546,17 @@ class LoopEngine:
             or "web_search" in lower
             or "read_webpage" in lower
         )
-        has_region = "read_file_region" in lower or "read_file" in lower
-        has_doc = "write_project_markdown" in lower
+        has_region = (
+            "read_file_region" in lower
+            or "read_file" in lower
+            or "cap.dev.read_region@v1" in lower
+        )
+        has_doc = (
+            "write_project_markdown" in lower
+            or "cap.dev.write_docs@v1" in lower
+        )
+        if has_recon_cap:
+            return None
         if has_outline and (has_search or has_region or has_doc):
             return None
         if has_tree and has_outline and (has_region or has_doc):
@@ -3520,8 +4567,8 @@ class LoopEngine:
             return None
         return (
             "❌ OS BLOCK (explore): Complete reconnaissance first — "
-            "get_directory_tree + read_code_outline, then read_file_region or grep_repo "
-            "(or write_project_markdown for doc tasks) before mark_objective_complete."
+            "`cap.dev.recon@v1` (tree + outline), then `cap.dev.read_region@v1` "
+            "(or `cap.dev.write_docs@v1` for doc tasks) before mark_objective_complete."
         )
 
     def _maybe_compress_conversation(
@@ -3533,6 +4580,14 @@ class LoopEngine:
         proactive_note: bool = False,
     ) -> bool:
         """Compress in-step history when approaching token cap. Returns True if compressed."""
+        if self._micro_plan:
+            try:
+                from .loop_settings import run_digest_compress_for_micro_plan
+
+                if not run_digest_compress_for_micro_plan():
+                    return False
+            except ImportError:
+                return False
         from agent.policies import compress_step_transcript
 
         est = estimate_messages_tokens(conversation_history)
@@ -3933,6 +4988,8 @@ class LoopEngine:
         "research",
         "character_build",
         "learn_syllabus_build",
+        "writing",
+        # DEAD: "code" — code mode uses code_agent.run_tool_session, not LoopEngine
     })
 
     def _uses_capability_act(self) -> bool:
@@ -3953,14 +5010,164 @@ class LoopEngine:
             return True
         return bool((self.human_research_notes or "").strip())
 
+    def _maybe_advance_satisfied_code_step(
+        self,
+        step_kind: str,
+        state: dict,
+        task_file: str,
+    ) -> bool:
+        """Auto-advance when the code canvas buffer already satisfies this step."""
+        kind = (step_kind or "").strip().lower()
+        try:
+            from agent.tool_library import code_canvas_tools as canvas
+            from agent.core.main import advance_json_state, read_json_state
+        except ImportError:
+            return False
+        satisfied = False
+        if kind == "tdd_red":
+            satisfied = canvas.buffer_has_file("tests/test_habit.py")
+        elif kind == "tdd_green":
+            satisfied = canvas.buffer_has_file("habit.py")
+        elif kind == "work":
+            satisfied = canvas.buffer_has_file("README.md")
+        if not satisfied:
+            return False
+        advance_json_state(task_file, f"OS: {kind} deliverable already in buffer.")
+        fresh = read_json_state(task_file)
+        state.clear()
+        state.update(fresh)
+        return True
+
+    def _try_habit_tracker_scaffold_fast_path(
+        self,
+        *,
+        task_file: str,
+        task_name: str,
+        state: dict,
+        source_registry,
+        cancel_check=None,
+        attachment_text_chunks: list | None = None,
+    ) -> str | None:
+        """After scaffold dispatch: run tests + sync without LLM file-writing loops."""
+        try:
+            from agent.core.code_scaffolds import (
+                habit_tracker_work_complete,
+                is_habit_tracker_goal,
+            )
+            from agent.core.loop_settings import scaffold_dispatch_enabled
+            from agent.core.main import advance_json_state, complete_ledger_state, read_json_state
+        except ImportError:
+            return None
+
+        goal = getattr(self, "_user_request", "") or ""
+        if not scaffold_dispatch_enabled() or not is_habit_tracker_goal(goal):
+            return None
+        if not habit_tracker_work_complete():
+            return None
+
+        steps = state.get("steps") or []
+        verify_idx = next(
+            (i for i, s in enumerate(steps) if (s.get("step_kind") or "") == "verify"),
+            None,
+        )
+        finalize_idx = next(
+            (i for i, s in enumerate(steps) if (s.get("step_kind") or "") == "finalize"),
+            None,
+        )
+        target = verify_idx if verify_idx is not None else finalize_idx
+        if target is None:
+            return None
+
+        idx = int(state.get("current_step_index") or 0)
+        while idx < target:
+            if idx < len(steps):
+                steps[idx]["status"] = "completed"
+                steps[idx]["result"] = "OS: scaffold fast path — files pre-written."
+            idx += 1
+        state["current_step_index"] = idx
+        state["steps"] = steps
+        with open(task_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=4)
+
+        parts: list[str] = [
+            "\n\n⚡ OS: Scaffold fast path — skipping file-writing LLM turns."
+        ]
+
+        if verify_idx is not None:
+            test_batch = self._execute_capability_batch(
+                [{"id": "cap.dev.run_tests@v1", "arguments": {}}],
+                task_name=task_name,
+                step_kind="verify",
+                step_index=verify_idx,
+                source_registry=source_registry,
+                cancel_check=cancel_check,
+                attachment_text_chunks=attachment_text_chunks,
+            )
+            parts.append("\n" + str(test_batch.get("last_output") or ""))
+            if not test_batch.get("last_cap_ok"):
+                parts.append("\n❌ Scaffold fast path: tests failed.")
+                return "".join(parts)
+            advance_json_state(task_file, "Scaffold fast path: tests passed.")
+            state = read_json_state(task_file)
+            steps = state.get("steps") or steps
+
+        idx = int(state.get("current_step_index") or 0)
+        while idx < len(steps) and (steps[idx].get("step_kind") or "") != "finalize":
+            steps[idx]["status"] = "completed"
+            steps[idx]["result"] = "OS: scaffold fast path — skipped."
+            idx += 1
+        state["current_step_index"] = idx
+        state["steps"] = steps
+        with open(task_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=4)
+
+        if idx < len(steps) and (steps[idx].get("step_kind") or "") == "finalize":
+            sync_batch = self._execute_capability_batch(
+                [{"id": "cap.dev.sync_project@v1", "arguments": {}}],
+                task_name=task_name,
+                step_kind="finalize",
+                step_index=idx,
+                source_registry=source_registry,
+                cancel_check=cancel_check,
+                attachment_text_chunks=attachment_text_chunks,
+            )
+            parts.append("\n" + str(sync_batch.get("last_output") or ""))
+            if not sync_batch.get("last_cap_ok"):
+                parts.append("\n❌ Scaffold fast path: sync failed.")
+                return "".join(parts)
+            advance_json_state(task_file, "Scaffold fast path: synced to disk.")
+
+        complete_ledger_state(task_file, "✅ Habit tracker scaffold fast path complete.")
+        parts.append("\n✅ Scaffold fast path complete.")
+        return "".join(parts)
+
+    def _should_slot_fill(self, step: dict, step_kind: str) -> bool:
+        cap_id = str(step.get("capability_id") or "").strip()
+        if not cap_id:
+            return False
+        if step.get("slot_fill"):
+            return True
+        try:
+            from .loop_settings import slot_fill_enabled
+
+            if slot_fill_enabled():
+                return True
+        except ImportError:
+            pass
+        return bool(self._micro_plan and self.mode == "code")
+
     def _schema_for_capability_step(
         self,
         step_kind: str,
         *,
         is_final_step: bool = False,
+        step: dict | None = None,
     ) -> dict:
         from agent.capabilities.adapters import allowed_capabilities_for_step
-        from agent.parser.structured_schema import build_capability_action_json_schema
+        from agent.parser.structured_schema import (
+            build_capability_action_json_schema,
+            build_capability_slot_fill_schema,
+        )
 
         allowed = allowed_capabilities_for_step(
             step_kind,
@@ -3973,10 +5180,23 @@ class LoopEngine:
         )
         self._schema_tool_names = allowed
         require_report = is_final_step or step_kind == "finalize"
+        from agent.capabilities.adapters import PLAN_CHECKLIST_CAP_IDS
+
+        bound = str((step or {}).get("capability_id") or self._bound_cap_id or "").strip()
+        if self._slot_fill_active and bound:
+            omit: list[str] = []
+            if str(getattr(self, "_slot_fill_path", "") or "").strip():
+                omit.append("file_path")
+            return build_capability_slot_fill_schema(
+                bound,
+                require_final_report=require_report,
+                omit_arg_keys=tuple(omit),
+            )
         return build_capability_action_json_schema(
             allowed,
             require_final_report=require_report,
             max_capabilities_per_turn=1,
+            action_cap_ids=allowed - PLAN_CHECKLIST_CAP_IDS,
         )
 
     def _build_capability_context(
@@ -4013,19 +5233,25 @@ class LoopEngine:
             source_registry=source_registry,
             step_index=step_index,
             step_kind=step_kind,
+            writing_brief=self.writing_brief,
         )
 
     def _normalize_capability_calls(self, capabilities: list) -> list[dict]:
-        out: list[dict] = []
-        if not isinstance(capabilities, list):
-            return out
-        for item in capabilities:
-            if isinstance(item, dict):
-                cap_id = item.get("id") or item.get("capability_id")
-                args = item.get("arguments") or item.get("params") or {}
-                if cap_id:
-                    out.append({"id": str(cap_id).strip(), "arguments": dict(args)})
-        return out[:1]
+        from agent.capabilities.heal_calls import heal_capability_calls
+
+        bound = str(getattr(self, "_bound_cap_id", "") or "").strip()
+        normalized: list[dict] = []
+        for call in capabilities or []:
+            if not isinstance(call, dict):
+                continue
+            item = dict(call)
+            if self._slot_fill_active and bound:
+                if not item.get("id"):
+                    item["id"] = bound
+                if "arguments" not in item:
+                    item = {"id": bound, "arguments": item}
+            normalized.append(item)
+        return heal_capability_calls(normalized)[:1]
 
     def _execute_capability_batch(
         self,
@@ -4057,6 +5283,7 @@ class LoopEngine:
         finish_ok = False
         last_cap_id = ""
         last_cap_ok = False
+        last_cap_data: dict = {}
         from agent.policies import get_step_policy
 
         cap_policy = getattr(self, "_step_policy", None)
@@ -4067,29 +5294,230 @@ class LoopEngine:
                 persona_research_lore=self.persona_research_lore,
                 learn_syllabus_web=self.learn_syllabus_web,
                 offline_research=self.offline_research,
+                writing_brief=self.writing_brief,
             )
         step_caps = caps_succeeded if caps_succeeded is not None else set()
         finalize_caps = frozenset({
             "cap.research.finalize_deliverable@v1",
             "cap.persona.finalize@v1",
             "cap.learn.finalize_course@v1",
+            "cap.writing.finalize_deliverable@v1",
+            "cap.writing.compile_document@v1",
         })
         for call in capability_calls:
             cap_id = call.get("id", "")
             args = dict(call.get("arguments") or {})
+            if cap_id == "cap.dev.create_file@v1":
+                if self._slot_fill_active and not str(args.get("file_path") or "").strip():
+                    sp = str(getattr(self, "_slot_fill_path", "") or "").strip()
+                    if sp:
+                        args["file_path"] = sp
+                from agent.core.code_scaffolds import heal_habit_tracker_create_file
+
+                fp_key = str(args.get("file_path") or "__missing__")
+                healed = heal_habit_tracker_create_file(
+                    goal=getattr(self, "_user_request", "") or "",
+                    args=args,
+                    step_kind=step_kind,
+                    block_attempt=self._create_file_block_counts.get(fp_key, 0),
+                )
+                if healed:
+                    args.update(healed)
+            elif cap_id == "cap.dev.write_files@v1":
+                from agent.core.code_scaffolds import heal_habit_tracker_write_files
+
+                healed = heal_habit_tracker_write_files(
+                    goal=getattr(self, "_user_request", "") or "",
+                    args=args,
+                    step_kind=step_kind,
+                    block_attempt=len(self._create_file_block_counts),
+                )
+                if healed:
+                    args.update(healed)
+            read_region_count = self._read_region_step_counts.get(step_index, 0)
+            update_checklist_count = self._update_checklist_step_counts.get(step_index, 0)
+            sync_project_count = self._sync_project_step_counts.get(step_index, 0)
             validate_fn = getattr(cap_policy, "validate_capability_call", None)
             if callable(validate_fn):
                 block = validate_fn(
                     cap_id,
                     tools_succeeded=step_caps,
+                    read_region_step_count=read_region_count,
+                    update_checklist_step_count=update_checklist_count,
+                    sync_project_step_count=sync_project_count,
+                    file_path=str(args.get("file_path") or ""),
                 )
                 if block:
                     last_parts.append(block + "\n")
+                    self._record_capability_outcome(
+                        cap_id=cap_id,
+                        ok=False,
+                        summary_text=block,
+                        harness_ctx=ctx,
+                    )
                     self.console.log_tool_execution(f"cap:{cap_id}", args, block)
+                    executed += 1
+                    last_cap_id = cap_id
+                    last_cap_ok = False
+                    continue
+            create_block = (
+                self._create_file_content_block(args)
+                if cap_id == "cap.dev.create_file@v1"
+                else None
+            )
+            if create_block:
+                last_parts.append(create_block + "\n")
+                self._record_capability_outcome(
+                    cap_id=cap_id,
+                    ok=False,
+                    summary_text=create_block,
+                    harness_ctx=ctx,
+                )
+                self.console.log_tool_execution(f"cap:{cap_id}", args, create_block)
+                executed += 1
+                last_cap_id = cap_id
+                last_cap_ok = False
+                continue
+            goal_path_block = (
+                self._create_file_goal_path_block(args)
+                if cap_id == "cap.dev.create_file@v1"
+                else None
+            )
+            if goal_path_block:
+                last_parts.append(goal_path_block + "\n")
+                self._record_capability_outcome(
+                    cap_id=cap_id,
+                    ok=False,
+                    summary_text=goal_path_block,
+                    harness_ctx=ctx,
+                )
+                self.console.log_tool_execution(f"cap:{cap_id}", args, goal_path_block)
+                executed += 1
+                last_cap_id = cap_id
+                last_cap_ok = False
+                continue
+            exists_block = (
+                self._create_file_exists_block(args)
+                if cap_id == "cap.dev.create_file@v1"
+                else None
+            )
+            if exists_block:
+                last_parts.append(exists_block + "\n")
+                self._record_capability_outcome(
+                    cap_id=cap_id,
+                    ok=False,
+                    summary_text=exists_block,
+                    harness_ctx=ctx,
+                )
+                self.console.log_tool_execution(f"cap:{cap_id}", args, exists_block)
+                executed += 1
+                last_cap_id = cap_id
+                last_cap_ok = False
+                continue
+            if cap_id == "cap.dev.sync_project@v1":
+                finalize_block = self._finalize_habit_tracker_block()
+                if finalize_block:
+                    self._sync_project_step_counts[step_index] = sync_project_count + 1
+                    coach = (
+                        "\n\n💡 COACH: On finalize, call `cap.dev.create_file@v1` with "
+                        "`file_path` = `README.md` and short usage docs in "
+                        "`arguments.content`, then `cap.dev.sync_project@v1` once."
+                    )
+                    last_parts.append(finalize_block + coach + "\n")
+                    self._record_capability_outcome(
+                        cap_id=cap_id,
+                        ok=False,
+                        summary_text=finalize_block,
+                        harness_ctx=ctx,
+                    )
+                    self.console.log_tool_execution(f"cap:{cap_id}", args, finalize_block)
+                    executed += 1
+                    last_cap_id = cap_id
+                    last_cap_ok = False
+                    continue
+            if cap_id == "cap.dev.run_tests@v1":
+                impl_block = self._run_tests_impl_required_block()
+                if impl_block:
+                    last_parts.append(impl_block + "\n")
+                    self._record_capability_outcome(
+                        cap_id=cap_id,
+                        ok=False,
+                        summary_text=impl_block,
+                        harness_ctx=ctx,
+                    )
+                    self.console.log_tool_execution(f"cap:{cap_id}", args, impl_block)
+                    executed += 1
+                    last_cap_id = cap_id
+                    last_cap_ok = False
+                    continue
+            if cap_id == "cap.dev.edit_apply@v1":
+                from agent.tool_library import code_canvas_tools as canvas
+
+                fp = str(args.get("file_path") or "").strip()
+                if fp and not canvas.buffer_has_file(fp):
+                    block = (
+                        f"❌ OS BLOCK: `{fp}` is not in the project buffer. "
+                        "Use `cap.dev.create_file@v1` with `file_path` and full "
+                        "`arguments.content` to create it first."
+                    )
+                    last_parts.append(block + "\n")
+                    self._record_capability_outcome(
+                        cap_id=cap_id,
+                        ok=False,
+                        summary_text=block,
+                        harness_ctx=ctx,
+                    )
+                    self.console.log_tool_execution(f"cap:{cap_id}", args, block)
+                    executed += 1
+                    last_cap_id = cap_id
+                    last_cap_ok = False
+                    continue
+                missing = [
+                    k
+                    for k in ("file_path", "old_string", "new_string")
+                    if not str(args.get(k) or "").strip()
+                ]
+                if missing:
+                    block = (
+                        "❌ OS BLOCK: `cap.dev.edit_apply@v1` requires "
+                        f"{', '.join(missing)}. Retry with complete arguments."
+                    )
+                    if fp and not str(args.get("content") or "").strip():
+                        block += (
+                            "\n\n💡 COACH: For a new file, use `cap.dev.create_file@v1` "
+                            f"with `file_path` = `{fp}` and the full file body in "
+                            "`arguments.content` — not edit_apply."
+                        )
+                    last_parts.append(block + "\n")
+                    self._record_capability_outcome(
+                        cap_id=cap_id,
+                        ok=False,
+                        summary_text=block,
+                        harness_ctx=ctx,
+                    )
+                    self.console.log_tool_execution(f"cap:{cap_id}", args, block)
+                    executed += 1
+                    last_cap_id = cap_id
+                    last_cap_ok = False
                     continue
             if pending_final_report and cap_id == "cap.research.finalize_deliverable@v1":
                 args.setdefault("report_body", pending_final_report)
-            if not args.get("topic"):
+            # Do not stuff the full user goal into create/edit/test caps — it
+            # crowds out real args (content) and confuses small models.
+            _skip_topic = frozenset({
+                "cap.dev.create_file@v1",
+                "cap.dev.edit_apply@v1",
+                "cap.dev.run_tests@v1",
+                "cap.dev.run_linter@v1",
+                "cap.dev.sync_project@v1",
+                "cap.dev.write_docs@v1",
+                "cap.dev.recon@v1",
+                "cap.dev.read_region@v1",
+                "cap.dev.project_setup@v1",
+                "cap.plan.update_checklist@v1",
+                "cap.plan.read_implementation@v1",
+            })
+            if cap_id not in _skip_topic and not args.get("topic"):
                 args.setdefault("topic", getattr(self, "_user_request", "") or task_name)
             if cap_id == "cap.learn.write_syllabus@v1":
                 from agent.capabilities.learn.write_syllabus import coerce_syllabus_content
@@ -4100,9 +5528,18 @@ class LoopEngine:
             self.console.log_tool_start(f"cap:{cap_id}", args)
             result = run_capability(cap_id, ctx, args)
             executed += 1
+            if cap_id == "cap.dev.read_region@v1":
+                self._read_region_step_counts[step_index] = read_region_count + 1
+            if cap_id == "cap.plan.update_checklist@v1":
+                self._update_checklist_step_counts[step_index] = update_checklist_count + 1
+            if cap_id == "cap.dev.sync_project@v1":
+                self._sync_project_step_counts[step_index] = sync_project_count + 1
             last_cap_id = cap_id
             last_cap_ok = bool(result.ok)
-            text = result.summary or (result.error_message or "No output.")
+            last_cap_data = dict(getattr(result, "data", None) or {})
+            from agent.capabilities.base import format_capability_result_for_llm
+
+            text = format_capability_result_for_llm(result)
             if (
                 not result.ok
                 and cap_id == "cap.learn.write_syllabus@v1"
@@ -4114,9 +5551,59 @@ class LoopEngine:
                     '(or put nodes/title fields directly in arguments). '
                     "Do not invent capability IDs outside the allowed list."
                 )
-            if result.data:
-                text += f"\n(data keys: {', '.join(sorted(result.data.keys()))})"
+            if (
+                not result.ok
+                and cap_id == "cap.dev.create_file@v1"
+                and "content" in (result.error_message or text or "").lower()
+            ):
+                text += (
+                    "\n\n❌ OS HINT: Retry `cap.dev.create_file@v1` with "
+                    "arguments.file_path AND arguments.content (full file text). "
+                    "Do not call create_file with only a path."
+                )
+            if (
+                not result.ok
+                and cap_id == "cap.dev.create_file@v1"
+                and "exists" in (result.error_message or text or "").lower()
+            ):
+                fp = str(args.get("file_path") or "").strip()
+                attempt = self._bump_create_file_path_attempt(fp)
+                coach = LoopCoach(
+                    mode=self.mode,
+                    capability_research=self._capability_research_active(),
+                )
+                text += coach.create_file_exists_hint(
+                    fp,
+                    attempt,
+                    goal=getattr(self, "_user_request", "") or "",
+                )
+            if result.ok and cap_id == "cap.dev.project_setup@v1":
+                text += (
+                    "\n\n✅ OS: Project buffer ready. Do NOT call project_setup or "
+                    "recon again. Next: `cap.dev.create_file@v1` for failing tests "
+                    "(e.g. tests/test_habit.py), then implement with "
+                    "`cap.dev.edit_apply@v1` / create_file for source."
+                )
+            if result.ok and cap_id == "cap.dev.recon@v1" and step_kind in (
+                "work",
+                "code",
+                "tdd_red",
+                "tdd_green",
+                "tdd_refactor",
+                "",
+            ):
+                text += (
+                    "\n\n✅ OS: Recon done for this work step. Do NOT re-recon. "
+                    "Next: create/edit files or run_tests."
+                )
             last_parts.append(f"Capability '{cap_id}' result:\n{text}\n")
+            self._record_capability_outcome(
+                cap_id=cap_id,
+                ok=bool(result.ok),
+                summary_text=text,
+                harness_ctx=ctx,
+                result=result,
+            )
             self.console.log_tool_execution(f"cap:{cap_id}", args, text)
             if result.ok:
                 step_caps.add(cap_id)
@@ -4144,6 +5631,7 @@ class LoopEngine:
             "finish_ok": finish_ok,
             "last_cap_id": last_cap_id,
             "last_cap_ok": last_cap_ok,
+            "last_cap_data": last_cap_data,
         }
 
 

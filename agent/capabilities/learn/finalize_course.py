@@ -5,7 +5,11 @@ from pydantic import BaseModel
 
 from agent.capabilities.base import CapabilityContext, CapabilityResult
 from agent.capabilities.registry import CapabilitySpec, register_capability
-from agent.tool_library.learn_tools import finalize_course
+from agent.tool_library.learn_tools import (
+    course_id_from_syllabus_task,
+    ensure_active_syllabus_build,
+    finalize_course,
+)
 
 
 class FinalizeCourseInput(BaseModel):
@@ -13,6 +17,9 @@ class FinalizeCourseInput(BaseModel):
 
 
 def _run_finalize(ctx: CapabilityContext, inp: FinalizeCourseInput) -> CapabilityResult:
+    course_id = course_id_from_syllabus_task(ctx.task_id)
+    if course_id:
+        ensure_active_syllabus_build(ctx.instance_id, course_id)
     result = finalize_course()
     ok = str(result).startswith("✅")
     if ok:

@@ -113,6 +113,7 @@ class AgentWorker(QThread):
         attached_images=None,
         chat_history=None,
         instance_id=None,
+        attachment_paths=None,
         persona_id=None,
         persona_research_lore: bool = False,
         learn_syllabus_web: bool = False,
@@ -127,6 +128,7 @@ class AgentWorker(QThread):
         light_coding_block: str = "",
         execute_approved: bool = False,
         offline_research: bool = False,
+        writing_brief: dict | None = None,
     ):
         super().__init__()
         self.task_name = task_name
@@ -134,6 +136,7 @@ class AgentWorker(QThread):
         self.mode = mode
         self.attached_chunks = attached_chunks or []
         self.attached_images = attached_images or []
+        self.attachment_paths = attachment_paths or []
         self.model_user_content = prompt
         self.chat_history = chat_history or []
         self.instance_id = instance_id or get_active_instance_id()
@@ -151,6 +154,7 @@ class AgentWorker(QThread):
         self.light_coding_block = light_coding_block or ""
         self.execute_approved = execute_approved
         self.offline_research = offline_research
+        self.writing_brief = dict(writing_brief) if writing_brief else None
         self.cancel_flag = False
         self.user_reply = ""
         self.reply_event = threading.Event()
@@ -222,12 +226,7 @@ class AgentWorker(QThread):
         agent = get_agent(self.instance_id)
         from agent.core import apply_runtime_settings
 
-        apply_runtime_settings(agent.client)
-        profile = get_instance(self.instance_id)
-        if profile and profile.ollama_base_url:
-            agent.client.configure(base_url=profile.ollama_base_url.strip())
-        if profile and profile.ollama_model:
-            agent.client.configure(model_name=profile.ollama_model.strip())
+        apply_runtime_settings(agent.client, instance_id=self.instance_id)
         try:
             if self.mode.lower() == "chat":
                 from agent.aquila_runtime.cpu_timeouts import (
@@ -373,7 +372,7 @@ class AgentWorker(QThread):
                 from agent.core import act_two_phase_enabled
 
                 set_runtime_context(getattr(agent.client, "model_name", None))
-                warm_ok, warm_msg = agent.client.warmup()
+                warm_ok, warm_msg = agent.client.ensure_warmup()
                 self.ledger_signal.emit(
                     f"{'✅' if warm_ok else '⚠️'} Model warmup: {warm_msg}\n"
                 )
@@ -391,9 +390,11 @@ class AgentWorker(QThread):
                         cancel_check=lambda: self.cancel_flag,
                         text_chunks=self.attached_chunks,
                         image_payloads=self.attached_images,
+                        attachment_paths=self.attachment_paths,
                         persona_research_lore=self.persona_research_lore,
                         learn_syllabus_web=self.learn_syllabus_web,
                         offline_research=self.offline_research,
+                        writing_brief=self.writing_brief,
                         thinking_callback=think_cb,
                     )
                 else:
@@ -405,9 +406,11 @@ class AgentWorker(QThread):
                         cancel_check=lambda: self.cancel_flag,
                         text_chunks=self.attached_chunks,
                         image_payloads=self.attached_images,
+                        attachment_paths=self.attachment_paths,
                         persona_research_lore=self.persona_research_lore,
                         learn_syllabus_web=self.learn_syllabus_web,
                         offline_research=self.offline_research,
+                        writing_brief=self.writing_brief,
                         thinking_callback=think_cb,
                     )
                 text = res if isinstance(res, str) else str(res)
@@ -460,12 +463,17 @@ class SleepWorker(QThread):
 class WarmupModelWorker(QThread):
     finished_signal = Signal(bool, str)
 
+    def __init__(self, instance_id: str | None = None):
+        super().__init__()
+        self.instance_id = instance_id
+
     def run(self):
         try:
-            from agent.core import apply_runtime_settings, client
+            from agent.core import apply_runtime_settings, get_agent
 
-            apply_runtime_settings(client)
-            ok, message = client.warmup()
+            agent = get_agent(self.instance_id)
+            apply_runtime_settings(agent.client, instance_id=self.instance_id)
+            ok, message = agent.client.ensure_warmup()
             self.finished_signal.emit(ok, message)
         except Exception as e:
             self.finished_signal.emit(False, str(e))
@@ -618,7 +626,7 @@ class AquilaOS(MSFluentWindow):
         raw = os.getenv("AQUILA_WARMUP_ON_START", "1").strip().lower()
         if raw in ("0", "false", "no", "off"):
             return
-        self._warmup_worker = WarmupModelWorker(self)
+        self._warmup_worker = WarmupModelWorker(self.active_instance_id)
         self._warmup_worker.finished_signal.connect(self._on_startup_warmup_finished)
         self._warmup_worker.start()
 
@@ -947,6 +955,22 @@ class AquilaOS(MSFluentWindow):
                 return
             if not page.is_streaming_learn_chat():
                 return
+        if mode_flag == "writing" and isinstance(page, WritingPage):
+            if page.is_compose_view():
+                return
+            if not page.is_quick_task_view():
+                return
+        if mode_flag == "code":
+            from agent.policies.model_tiers import check_code_model
+
+            model_check = check_code_model(surface="gui")
+            if not model_check.ok:
+                QMessageBox.warning(
+                    self,
+                    "Code Mode — model not supported",
+                    model_check.message,
+                )
+                return
         if mode_flag == "chat" and isinstance(page, ChatPage):
             if page.light_coding_enabled and not page.light_coding_repo_path:
                 QMessageBox.warning(
@@ -1073,6 +1097,7 @@ class AquilaOS(MSFluentWindow):
             chunks,
             self.attached_images,
             chat_history=chat_history,
+            attachment_paths=list(self.attached_file_paths),
             instance_id=self.active_instance_id,
             persona_id=persona_id,
             course_id=course_id,
@@ -1092,8 +1117,40 @@ class AquilaOS(MSFluentWindow):
         self.attached_file_paths = []
         if hasattr(page, "attach_button"):
             page.attach_button.setText(
-                "📎 Attach" if mode_flag in ("chat", "character", "learn") else "📎"
+                "📎 Attach"
+                if mode_flag in ("chat", "character", "learn", "writing", "research")
+                else "📎"
             )
+        self._refresh_attachment_previews(page)
+        self._wire_worker(self.worker, page)
+
+    def _start_writing_task(
+        self,
+        *,
+        task_name: str,
+        prompt: str,
+        chunks: list,
+        images: list,
+        page: "WritingPage",
+        writing_brief: dict | None = None,
+    ) -> None:
+        page.set_run_buttons_running(True)
+        page.update_ledger("", clear=True)
+        self._chat_streaming = False
+        self.worker = AgentWorker(
+            task_name,
+            prompt,
+            "writing",
+            chunks,
+            images,
+            attachment_paths=list(self.attached_file_paths),
+            instance_id=self.active_instance_id,
+            writing_brief=writing_brief,
+        )
+        self.attached_chunks = []
+        self.attached_images = []
+        self.attached_file_names = []
+        self.attached_file_paths = []
         self._refresh_attachment_previews(page)
         self._wire_worker(self.worker, page)
 
@@ -1252,7 +1309,12 @@ class AquilaOS(MSFluentWindow):
         from agent.core.task_artifacts import extract_plan_review_result
 
         page = self.current_page()
-        plan_result = extract_plan_review_result(result)
+        worker_mode = (getattr(self.worker, "mode", "") or "").strip().lower()
+        # Phase 3: code mode never opens plan review (code_agent has no plan).
+        if worker_mode == "code":
+            plan_result = None
+        else:
+            plan_result = extract_plan_review_result(result)
         if plan_result:
             parts = plan_result.split("|", 2)
             task_name = parts[1] if len(parts) > 1 else getattr(self.worker, "task_name", "")
@@ -1294,9 +1356,12 @@ class AquilaOS(MSFluentWindow):
                 page.show_walkthrough_if_present()
 
     def _open_plan_review_dialog(self, page) -> None:
+        pending = getattr(self, "_pending_plan_review", None) or {}
+        if (pending.get("mode") or "").strip().lower() == "code":
+            self._pending_plan_review = None
+            return
         from agent.gui.gui_widgets.plan_review_dialog import PlanReviewDialog
 
-        pending = getattr(self, "_pending_plan_review", None) or {}
         dlg = PlanReviewDialog(
             self,
             task_name=pending.get("task_name", ""),

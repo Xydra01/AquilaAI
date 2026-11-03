@@ -14,10 +14,70 @@ def test_code_milestones_implement_and_tests():
     assert tr.state.evidence_count == 1
     tr.record_tool("replace_lines", "✅ patched", mode="code")
     assert tr.state.file_edited
+    # No fake verify bucket: evidence + implement alone is 2/2
+    checks = dict(tr.state._checks("code", is_final_step=False))
+    assert checks["evidence"] is True
+    assert checks["implement"] is True
+    assert "verify" not in checks
+    assert "tests" not in checks
+    assert tr.should_suggest_advance("code", is_final_step=False)
     tr.record_tool("run_pytest", "3 passed", mode="code")
     assert tr.state.tests_green is True
+    checks = dict(tr.state._checks("code", is_final_step=False))
+    assert checks["tests"] is True
     assert tr.should_suggest_advance("code", is_final_step=False)
     assert not tr.should_allow_finish("code", is_final_step=False)
+
+
+def test_code_milestones_not_false_complete_after_create_file():
+    from agent.capabilities.base import CapabilityResult
+
+    tr = MilestoneTracker()
+    tr.record_capability(
+        "cap.dev.recon@v1",
+        CapabilityResult.success("Recon (2 part(s)).", tool_result="tree"),
+        mode="code",
+    )
+    tr.record_capability(
+        "cap.dev.create_file@v1",
+        CapabilityResult.success("Created", file_path="habit.py"),
+        mode="code",
+    )
+    checks = dict(tr.state._checks("code", is_final_step=False))
+    assert checks == {"evidence": True, "implement": True}
+    assert tr.state.completed_count("code", is_final_step=False) == 2
+    assert tr.state.total_count("code", is_final_step=False) == 2
+    line = tr.state.progress_line("code", is_final_step=False)
+    assert "2/2" in line
+    assert "verify" not in line
+
+
+def test_create_file_empty_path_does_not_tick_implement():
+    from agent.capabilities.base import CapabilityResult
+
+    tr = MilestoneTracker()
+    tr.record_capability(
+        "cap.dev.create_file@v1",
+        CapabilityResult.success("Created"),
+        mode="code",
+    )
+    checks = dict(tr.state._checks("code", is_final_step=False))
+    assert checks["implement"] is False
+
+
+def test_create_file_test_path_ticks_tests_drafted_not_implement():
+    from agent.capabilities.base import CapabilityResult
+
+    tr = MilestoneTracker()
+    tr.record_capability(
+        "cap.dev.create_file@v1",
+        CapabilityResult.success("Created", file_path="tests/test_habit.py"),
+        mode="code",
+    )
+    assert tr.state.tests_drafted is True
+    assert tr.state.file_edited is False
+    checks = dict(tr.state._checks("code", is_final_step=False))
+    assert checks.get("tests") is True
 
 
 def test_code_finish_on_final_with_report():
@@ -135,3 +195,31 @@ def test_build_milestones_character_with_lore():
     ingest = next(m for m in milestones if m["id"] == "ingest")
     assert "gather_lore" in ingest["success_criteria"]
     assert "ingest_sources" in ingest["success_criteria"]
+
+
+def test_writing_init_does_not_complete_draft_milestone():
+    from agent.capabilities.base import CapabilityResult
+
+    tr = MilestoneTracker()
+    tr.state.writing_brief = {"scope": "standard", "advance_when": "scope_met", "target_sections": 4}
+    tr.record_capability(
+        "cap.writing.init_document@v1",
+        CapabilityResult.success("ok"),
+        mode="writing",
+    )
+    checks = dict(tr.state._checks("writing", is_final_step=False))
+    assert checks.get("draft") is False
+
+
+def test_writing_draft_sections_complete_single_draft_milestone():
+    from agent.capabilities.base import CapabilityResult
+
+    tr = MilestoneTracker()
+    tr.state.writing_brief = {"scope": "quick_edit", "advance_when": "single_draft"}
+    tr.record_capability(
+        "cap.writing.draft_sections@v1",
+        CapabilityResult.success("ok"),
+        mode="writing",
+    )
+    checks = dict(tr.state._checks("writing", is_final_step=False))
+    assert checks.get("draft") is True

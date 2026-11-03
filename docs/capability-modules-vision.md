@@ -1,6 +1,6 @@
 # Capability Modules Vision
 
-Aquila is moving from **LLM-orchestrated raw tools** to **code-orchestrated capabilities** for high-friction modes. **Research is the reference implementation** — capability-only, no legacy tool act path. **Character build and Learn syllabus build** are also on the capability act path via `LoopEngine.CAPABILITY_ACT_MODES`.
+Aquila is moving from **LLM-orchestrated raw tools** to **code-orchestrated capabilities** for high-friction modes. **Research is the reference implementation** — capability-only, no legacy tool act path. **Character build, Learn syllabus build, and Writing** use the capability act path via `LoopEngine.CAPABILITY_ACT_MODES`. **Code mode uses filesystem tools** (`code_agent.run_tool_session`), not `cap.dev.*` in the live loop (capabilities remain registered for MCP/compat).
 
 ## Layer model
 
@@ -17,7 +17,7 @@ Tools (web_search, save_research_note, …)
 1. **Code orchestrates** — recipes and capabilities run many tool calls inside Python; the LLM picks among ~5–7 capabilities per turn, not ~14 tools.
 2. **Batch inside capabilities** — e.g. `cap.research.gather_web_sources@v1` runs search, auto-scrape, read, register sources, and append notes in one act turn.
 3. **Composer / recipes** — `agent/functions/recipes.py` maps intent to capability sequences (`full_pipeline`, persona/learn recipes, etc.).
-4. **Capability-only act modes** — Research, `character_build`, and `learn_syllabus_build` emit `capabilities[]`; raw tools stay inside handlers.
+4. **Capability-only act modes** — Research, `character_build`, `learn_syllabus_build`, and `writing` emit `capabilities[]`; raw tools stay inside handlers. **Code** emits `tools[]` via `code_agent` (Phase 1–3).
 5. **Versioned IDs** — capabilities use stable IDs like `cap.research.gather_web_sources@v1`.
 
 ## Why capabilities replace tools in the act loop (ADR)
@@ -82,6 +82,10 @@ Template and fallback plans include `capability_id`, optional `params`, and `cap
 
 Legacy `step_kind` values map to default capabilities via `agent/capabilities/adapters.py`.
 
+### Living implementation plans (design plane)
+
+Non-micro plans for code, writing, research, learn, and character also persist `implementation` on the plan JSON and `implementation_plan.md` in the task bundle. That design checklist is separate from thin OS ledger steps (often work→finalize). Mid-run updates use `cap.plan.update_checklist@v1` / `cap.plan.read_implementation@v1` (allowed on work/synthesize/write steps).
+
 ## Reference implementation checklist (Research)
 
 Use this when migrating another mode:
@@ -106,8 +110,8 @@ Optional QA: `AQUILA_RESEARCH_RECIPE_STRICT=1` auto-runs step `capability_id` on
 |-------|------|-------------------|--------|
 | 1 | Research | `cap.research.*`, `cap.web.*` | Done (reference) |
 | 2 | character_build / learn_syllabus | `cap.persona.*`, `cap.learn.*` | Done — `CAPABILITY_ACT_MODES`; plan, act-hint, and fallback layers are capability-first (same contract as research) |
-| 3 | writing | `cap.writing.*` | Next |
-| 4 | code | `cap.dev.*` composites | Pending |
+| 3 | writing | `cap.writing.*` | Done — linear draft pipeline; second specialist reference after research |
+| 4 | code | `cap.dev.*` composites | Done — recon/edit/test/sync composites; wide dynamic `work` allowlist; `AQUILA_DEV_RAW_TOOL` escape |
 | 5 | task/autonomous | `cap.delegate.*` recipes | Pending |
 
 Shared gate: `LoopEngine.CAPABILITY_ACT_MODES` / `_uses_capability_act()` — add a mode string when migrating.
@@ -134,18 +138,19 @@ When using the Aquila MCP host:
 Go/no-go suite:
 
 ```bash
-python -m pytest agent/tests/test_research_capability_parity.py agent/tests/test_character_capability_parity.py agent/tests/test_learn_capability_parity.py agent/tests/test_capabilities_*.py agent/tests/test_research_capability_loop.py -q -m "not live"
+python -m pytest agent/tests/test_research_capability_parity.py agent/tests/test_character_capability_parity.py agent/tests/test_learn_capability_parity.py agent/tests/test_writing_capability_parity.py agent/tests/test_code_capability_parity.py agent/tests/test_capabilities_*.py agent/tests/test_research_capability_loop.py -q -m "not live"
 ```
 
 - Unit: `test_capabilities_primitives.py`, `test_capabilities_composites.py`
 - Foundation: `test_capabilities_foundation.py`
 - Loop/schema: `test_research_capability_loop.py`
-- Character/Learn: `test_character_capability_parity.py`, `test_learn_capability_parity.py`
+- Character/Learn/Writing/Code: `test_character_capability_parity.py`, `test_learn_capability_parity.py`, `test_writing_capability_parity.py`, `test_code_capability_parity.py`
 - Policy/offline: `test_offline_research.py`
 
 ## Out of scope (follow-on)
 
-- Writing / code / task capability migration (items 3–5)
+- Task/autonomous capability migration (item 5)
 - Global removal of raw tool act loop in non-capability modes
 - Workflow editor UI (4.0) — capability IDs become block types there
 - Tutor-time learn tools (mastery / archive) as capabilities
+- Full removal of `cap.dev.raw_tool@v1` (restricted via `AQUILA_DEV_RAW_TOOL`; keep for harness/debug)

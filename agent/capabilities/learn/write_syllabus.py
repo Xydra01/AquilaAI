@@ -8,7 +8,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from agent.capabilities.base import CapabilityContext, CapabilityResult
 from agent.capabilities.registry import CapabilitySpec, register_capability
-from agent.tool_library.learn_tools import write_syllabus_file
+from agent.tool_library.learn_tools import (
+    course_id_from_syllabus_task,
+    ensure_active_syllabus_build,
+    write_syllabus_file,
+)
 
 
 def coerce_syllabus_content(arguments: dict[str, Any] | None) -> str | None:
@@ -50,6 +54,9 @@ class WriteSyllabusInput(BaseModel):
 
 
 def _run_write(ctx: CapabilityContext, inp: WriteSyllabusInput) -> CapabilityResult:
+    course_id = course_id_from_syllabus_task(ctx.task_id)
+    if course_id:
+        ensure_active_syllabus_build(ctx.instance_id, course_id)
     result = write_syllabus_file(inp.content)
     ok = str(result).startswith("✅")
     if ok:

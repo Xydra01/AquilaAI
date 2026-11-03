@@ -48,6 +48,37 @@ def test_act_two_phase_off(monkeypatch):
     assert act_two_phase_enabled() is False
 
 
+def test_act_two_phase_micro_defaults_off(monkeypatch):
+    from agent.core.loop_settings import act_two_phase_for_micro_plan
+
+    monkeypatch.delenv("AQUILA_ACT_TWO_PHASE_MICRO", raising=False)
+    assert act_two_phase_for_micro_plan() is False
+
+
+def test_act_two_phase_micro_on(monkeypatch):
+    from agent.core.loop_settings import act_two_phase_for_micro_plan
+
+    monkeypatch.setenv("AQUILA_ACT_TWO_PHASE_MICRO", "1")
+    assert act_two_phase_for_micro_plan() is True
+
+
+def test_reflect_on_failure_defaults(monkeypatch):
+    from agent.core.loop_settings import reflect_on_failure_enabled
+
+    monkeypatch.delenv("AQUILA_REFLECT_ON_FAILURE", raising=False)
+    monkeypatch.delenv("AQUILA_ACT_TWO_PHASE", raising=False)
+    assert reflect_on_failure_enabled(micro_plan=False) is True
+    assert reflect_on_failure_enabled(micro_plan=True) is False
+
+
+def test_reflect_on_failure_decoupled_from_two_phase(monkeypatch):
+    from agent.core.loop_settings import reflect_on_failure_enabled
+
+    monkeypatch.delenv("AQUILA_REFLECT_ON_FAILURE", raising=False)
+    monkeypatch.setenv("AQUILA_ACT_TWO_PHASE", "0")
+    assert reflect_on_failure_enabled(micro_plan=False) is True
+
+
 def test_plan_num_predict_default(monkeypatch):
     monkeypatch.delenv("AQUILA_PLAN_NUM_PREDICT", raising=False)
     assert plan_num_predict() == 2048

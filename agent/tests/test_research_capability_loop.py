@@ -1,6 +1,17 @@
 """Loop integration: capability schema and step adapter."""
+import pytest
+
 from agent.capabilities.adapters import allowed_capabilities_for_step
 from agent.parser.structured_schema import build_capability_action_json_schema
+
+
+@pytest.fixture(autouse=True)
+def _clear_capability_schema_cache():
+    from agent.parser import structured_schema as ss
+
+    ss._capability_action_schema_cache.clear()
+    yield
+    ss._capability_action_schema_cache.clear()
 
 
 def test_capability_schema_size_bounded():
@@ -11,12 +22,9 @@ def test_capability_schema_size_bounded():
     assert len(allowed) <= 7
 
 
-def test_capability_schema_is_flat_enum_not_anyof():
-    """3.5 contract: flat id enum + freeform args — no anyOf/const branches.
-
-    Embedding per-cap Pydantic trees in Ollama format is fragile; args are
-    validated in run_capability. Schema+assistant prefill also causes HTTP 400.
-    """
+def test_capability_schema_flat_when_enrich_disabled(monkeypatch):
+    """Flat id enum + freeform args when enrichment is disabled."""
+    monkeypatch.setenv("AQUILA_CAPABILITY_SCHEMA_ENRICH", "0")
     allowed = allowed_capabilities_for_step("work", offline=True)
     schema = build_capability_action_json_schema(list(allowed))  # list must coerce
     items = schema["properties"]["capabilities"]["items"]
@@ -26,6 +34,32 @@ def test_capability_schema_is_flat_enum_not_anyof():
     assert set(id_prop["enum"]) == set(allowed)
     assert items["properties"]["arguments"]["type"] == "object"
     assert items["properties"]["arguments"].get("additionalProperties") is True
+
+
+def test_capability_schema_enriched_when_small_allowlist(monkeypatch):
+    """Research search has 2 action caps — Tier A anyOf branches with typed args."""
+    monkeypatch.setenv("AQUILA_CAPABILITY_SCHEMA_ENRICH", "1")
+    allowed = allowed_capabilities_for_step("search", offline=True)
+    from agent.capabilities.adapters import PLAN_CHECKLIST_CAP_IDS
+
+    schema = build_capability_action_json_schema(
+        allowed,
+        action_cap_ids=allowed - PLAN_CHECKLIST_CAP_IDS,
+    )
+    items = schema["properties"]["capabilities"]["items"]
+    assert "anyOf" in items
+    assert len(items["anyOf"]) == len(allowed)
+    create_like = next(
+        (
+            b
+            for b in items["anyOf"]
+            if "gather_web_sources" in str(b["properties"]["id"].get("const", ""))
+        ),
+        None,
+    )
+    assert create_like is not None
+    args = create_like["properties"]["arguments"]
+    assert "properties" in args
 
 
 def test_finalize_schema_requires_final_report():

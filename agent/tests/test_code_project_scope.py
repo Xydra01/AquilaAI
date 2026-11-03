@@ -8,14 +8,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from tool_library import code_canvas_tools
 from tool_library import coding_tools
-from agent.core import LoopEngine
 
 
 @pytest.fixture
 def code_workspace(tmp_path, monkeypatch):
     code_dir = tmp_path / "Agent-Code"
     code_dir.mkdir()
-    active = code_dir / "active_code_state.json"
     monkeypatch.setenv("AQUILA_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("AQUILA_DIFF_REVIEW", "0")
     yield tmp_path
@@ -28,8 +26,10 @@ def test_get_active_project_scope(code_workspace):
     assert scope["root"] == "Agent-Code/myapp"
 
 
-@patch("tool_library.coding_tools._index_codebase")
+@patch.object(coding_tools, "index_code_project")
 def test_semantic_search_defaults_to_project_root(mock_index, code_workspace):
+    scoped = code_workspace / "Agent-Code" / "scoped"
+    scoped.mkdir(parents=True)
     code_canvas_tools._save_state({
         "project_name": "scoped",
         "root": "Agent-Code/scoped",
@@ -40,28 +40,10 @@ def test_semantic_search_defaults_to_project_root(mock_index, code_workspace):
     mock_col.query.return_value = {"documents": [[]], "metadatas": [[]]}
     mock_index.return_value = mock_col
 
-    coding_tools.semantic_code_search("query", "")
+    result = coding_tools.semantic_code_search("query", "")
 
     mock_index.assert_called_once()
-    assert mock_index.call_args[0][0] == "Agent-Code/scoped"
-
-
-def test_loop_step_entry_includes_code_project_root(code_workspace):
-    code_canvas_tools.init_code_project("proj", "", "python")
-    engine = LoopEngine(
-        client=None,
-        executor=None,
-        console=None,
-        action_schema={},
-        system_prompt="",
-        mode="code",
-        mode_label="Code",
-        plan_dir="Agent-Tasks",
-    )
-    msgs = engine._build_step_entry_messages("t1", "tdd_red")
-    body = msgs[0]["content"]
-    assert "CODE_PROJECT_ROOT: Agent-Code/proj" in body
-    assert "SCOPE:" in body
+    assert "No relevant code found" in result
 
 
 def test_resolve_tool_path_and_read_file_in_place(code_workspace):

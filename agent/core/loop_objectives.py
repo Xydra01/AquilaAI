@@ -76,6 +76,37 @@ MILESTONE_CAPABILITY_HINTS: dict[str, dict[str, list[str]]] = {
         "progress": ["cap.learn.write_syllabus@v1"],
         "deliver": ["cap.learn.finalize_course@v1"],
     },
+    "writing": {
+        "draft": [
+            "cap.writing.ingest_sources@v1",
+            "cap.writing.init_document@v1",
+            "cap.writing.draft_sections@v1",
+        ],
+        "deliver": [
+            "cap.writing.compile_document@v1",
+            "cap.writing.finalize_deliverable@v1",
+        ],
+    },
+    "code": {
+        "evidence": [
+            "cap.dev.recon@v1",
+            "cap.dev.read_region@v1",
+            "cap.dev.project_setup@v1",
+        ],
+        "implement": [
+            "cap.dev.edit_apply@v1",
+            "cap.dev.create_file@v1",
+            "cap.dev.write_docs@v1",
+        ],
+        "verify": [
+            "cap.dev.run_tests@v1",
+            "cap.dev.run_linter@v1",
+            "cap.dev.sync_project@v1",
+        ],
+        "deliver": [
+            "cap.dev.sync_project@v1",
+        ],
+    },
 }
 
 # step_kind → milestone bucket id (research: add when migrating milestone display)
@@ -94,6 +125,23 @@ MILESTONE_BUCKET_BY_KIND: dict[str, dict[str, str]] = {
         "work": "progress",
         "finalize": "deliver",
     },
+    "writing": {
+        "read": "draft",
+        "write": "draft",
+        "work": "draft",
+        "finalize": "deliver",
+    },
+    "code": {
+        "explore": "evidence",
+        "read": "evidence",
+        "code": "implement",
+        "work": "implement",
+        "tdd_red": "implement",
+        "tdd_green": "implement",
+        "tdd_refactor": "implement",
+        "verify": "verify",
+        "finalize": "deliver",
+    },
 }
 
 MILESTONE_BUCKET_LABELS: dict[str, str] = {
@@ -103,6 +151,8 @@ MILESTONE_BUCKET_LABELS: dict[str, str] = {
     "evidence": "Evidence",
     "draft": "Draft",
     "work": "Work",
+    "implement": "Implement",
+    "verify": "Verify",
 }
 
 
@@ -155,7 +205,7 @@ def build_milestones_from_plan_steps(
         if cap_id not in existing:
             existing.append(cap_id)
 
-    order = ("ingest", "evidence", "progress", "draft", "work", "deliver")
+    order = ("ingest", "evidence", "progress", "draft", "work", "implement", "verify", "deliver")
     out: list[dict] = []
     seen: set[str] = set()
     for bucket_id in order:
@@ -219,6 +269,8 @@ def milestone_hint_mode_key(
         "character_build",
         "learn_syllabus_build",
         "research",
+        "writing",
+        "code",
     ):
         return _capability_hint_key(
             mode_norm,
@@ -233,6 +285,23 @@ def milestone_hint_mode_key(
     return "research_offline" if offline else "research"
 
 
+def enrich_writing_milestones(
+    milestones: list[dict],
+    writing_brief: dict | None,
+) -> list[dict]:
+    from agent.functions.writing_brief import WritingBrief
+
+    brief = WritingBrief.from_plan_dict(writing_brief)
+    if not brief:
+        return milestones
+    summary = brief.milestone_summary()
+    for item in milestones:
+        if item.get("id") == "draft":
+            base = str(item.get("success_criteria") or "")
+            item["success_criteria"] = f"{base} Target: {summary}."
+    return milestones
+
+
 @dataclass
 class MilestoneState:
     ingest_done: bool = False
@@ -244,9 +313,12 @@ class MilestoneState:
     read_webpage_count: int = 0
     notes_saved: int = 0
     sections_written: int = 0
+    draft_sections_calls: int = 0
+    writing_brief: dict | None = None
     delegate_done: bool = False
     offline_research: bool = False
     offline_sources_available: bool = False
+    tests_drafted: bool = False
 
     def completed_count(self, mode: str, *, is_final_step: bool) -> int:
         checks = self._checks(mode, is_final_step=is_final_step)
@@ -258,14 +330,16 @@ class MilestoneState:
     def _checks(self, mode: str, *, is_final_step: bool) -> list[tuple[str, bool]]:
         mode_norm = (mode or "task").strip().lower()
         if mode_norm == "code":
+            # Do not treat "any edit" as verify — that false-completed 3/3 after
+            # one create_file and pushed the model back into recon thrash.
             base = [
                 ("evidence", self.evidence_count > 0 or self.ingest_done),
                 ("implement", self.file_edited),
             ]
-            if self.tests_green is not None:
-                base.append(("tests", self.tests_green))
-            else:
-                base.append(("verify", self.file_edited))
+            if self.tests_drafted or self.tests_green is not None:
+                base.append(
+                    ("tests", self.tests_drafted or bool(self.tests_green)),
+                )
             if is_final_step:
                 base.append(("deliver", self.deliverable_draft or self.file_edited))
             return base
@@ -294,9 +368,24 @@ class MilestoneState:
                 base.append(("progress", progress_ok))
             return base
         if mode_norm == "writing":
-            base = [
-                ("draft", self.sections_written >= 1 or self.deliverable_draft),
-            ]
+            from agent.functions.writing_brief import WritingBrief
+            from agent.functions.writing_scope import draft_scope_satisfied, load_draft_state
+
+            brief = WritingBrief.from_plan_dict(self.writing_brief)
+            draft_ok = False
+            if brief and brief.advance_when == "single_draft":
+                draft_ok = self.draft_sections_calls >= 1
+            elif brief and brief.advance_when == "manual":
+                draft_ok = False
+            elif brief:
+                draft_ok = draft_scope_satisfied(
+                    brief,
+                    load_draft_state(),
+                    draft_sections_calls=self.draft_sections_calls,
+                )
+            else:
+                draft_ok = self.draft_sections_calls >= 1 or self.deliverable_draft
+            base = [("draft", draft_ok)]
             if is_final_step:
                 base.append(("deliver", self.deliverable_draft))
             return base
@@ -313,7 +402,12 @@ class MilestoneState:
         done = self.completed_count(mode, is_final_step=is_final_step)
         total = self.total_count(mode, is_final_step=is_final_step)
         mode_key = (mode or "task").strip().lower()
-        capability = mode_key == "research"
+        capability = mode_key in (
+            "research",
+            "character_build",
+            "learn_syllabus_build",
+            "writing",
+        )
         if mode_key == "research" and self.offline_research:
             mode_key = "research_offline"
         hints_mode = milestone_hint_mode_key(
@@ -414,12 +508,17 @@ class MilestoneTracker:
                 self.state.tests_green = True
 
         if name in (
-            "write_section", "compile_final_document", "init_document",
-            "append_project_markdown", "write_project_markdown",
+            "write_section",
+            "compile_final_document",
+            "append_project_markdown",
+            "write_project_markdown",
         ):
             if ok:
                 self.state.sections_written += 1
                 self.state.deliverable_draft = True
+
+        if name == "init_document" and ok:
+            self.state.deliverable_draft = True
 
         if name == "delegate_mode" and ok:
             self.state.delegate_done = True
@@ -506,6 +605,81 @@ class MilestoneTracker:
             self.record_tool("finish_task", summary or "ok", mode=mode)
             self.note_final_report()
             return
+        if cap_id in (
+            "cap.writing.init_document@v1",
+        ) and ok:
+            self.state.deliverable_draft = True
+            return
+        if cap_id == "cap.writing.draft_sections@v1" and ok:
+            self.record_tool("write_section", summary or "ok", mode=mode)
+            self.state.draft_sections_calls += 1
+            return
+        if cap_id == "cap.writing.ingest_sources@v1" and ok:
+            self.record_tool("save_research_note", summary or "ok", mode=mode)
+            self.state.ingest_done = True
+            return
+        if cap_id == "cap.writing.read_outline@v1" and ok:
+            return
+        if cap_id in (
+            "cap.writing.compile_document@v1",
+            "cap.writing.finalize_deliverable@v1",
+        ) and ok:
+            self.record_tool("compile_final_document", summary or "ok", mode=mode)
+            self.record_tool("finish_task", summary or "ok", mode=mode)
+            self.note_final_report()
+            return
+        if cap_id == "cap.dev.recon@v1" and ok:
+            self.state.evidence_count += 1
+            self.state.ingest_done = True
+            return
+        if cap_id == "cap.dev.read_region@v1" and ok:
+            self.state.evidence_count += 1
+            self.state.ingest_done = True
+            return
+        if cap_id == "cap.dev.project_setup@v1" and ok:
+            self.state.ingest_done = True
+            return
+        if cap_id in (
+            "cap.dev.edit_apply@v1",
+            "cap.dev.create_file@v1",
+            "cap.dev.write_docs@v1",
+        ) and ok:
+            data = result.data if isinstance(result, CapabilityResult) else {}
+            fp = str(data.get("file_path") or data.get("path") or "")
+            if not fp:
+                return
+            from agent.core.implementation_plan import (
+                is_code_impl_source_path,
+                is_code_test_path,
+            )
+
+            if is_code_test_path(fp):
+                self.state.tests_drafted = True
+            elif is_code_impl_source_path(fp):
+                self.state.file_edited = True
+                self.state.deliverable_draft = True
+            return
+        if cap_id == "cap.dev.run_tests@v1" and ok:
+            low = summary.lower()
+            if "failed" in low and "0 failed" not in low:
+                self.state.tests_green = False
+            elif "passed" in low or "0 failed" in low:
+                self.state.tests_green = True
+            if isinstance(result, CapabilityResult) and result.data.get("tests_green") is True:
+                self.state.tests_green = True
+            elif isinstance(result, CapabilityResult) and result.data.get("tests_green") is False:
+                self.state.tests_green = False
+            return
+        if cap_id == "cap.dev.run_linter@v1" and ok:
+            if "no issues" in summary.lower() and self.state.tests_green is None:
+                self.state.tests_green = True
+            return
+        if cap_id == "cap.dev.sync_project@v1" and ok:
+            self.state.file_edited = True
+            self.state.deliverable_draft = True
+            self.note_final_report()
+            return
+
     def note_final_report(self) -> None:
         self._saw_final_report = True
         self.state.deliverable_draft = True
@@ -589,3 +763,57 @@ class MilestoneTracker:
             "completed": st.completed_count(mode, is_final_step=is_final_step),
             "total": st.total_count(mode, is_final_step=is_final_step),
         }
+
+
+def apply_ground_truth_to_milestone_state(
+    state: MilestoneState,
+    mode: str,
+    ground_truth: dict,
+    *,
+    cap_id: str = "",
+    result_ok: bool = False,
+) -> None:
+    """Sync milestone tracker from RunState ground_truth snapshot."""
+    mode_norm = (mode or "task").strip().lower()
+    if mode_norm == "code":
+        from agent.core.implementation_plan import is_code_impl_source_path
+
+        if ground_truth.get("setup_done"):
+            state.ingest_done = True
+            state.evidence_count = max(state.evidence_count, 1)
+        files = ground_truth.get("buffer_files") or []
+        test_files = [f for f in files if "test" in str(f).lower()]
+        if test_files:
+            state.tests_drafted = True
+        impl_files = [
+            f for f in files
+            if is_code_impl_source_path(str(f))
+        ]
+        if impl_files:
+            state.file_edited = True
+        tests = ground_truth.get("tests_pass")
+        if tests is not None:
+            state.tests_green = bool(tests)
+    elif mode_norm == "writing":
+        if ground_truth.get("section_count", 0) >= 1:
+            state.draft_sections_calls = max(state.draft_sections_calls, 1)
+        if ground_truth.get("word_count", 0) > 200:
+            state.deliverable_draft = True
+    elif mode_norm == "research":
+        n = int(ground_truth.get("notes_count") or 0)
+        if n >= 1:
+            state.notes_saved = max(state.notes_saved, n)
+            state.ingest_done = True
+        if ground_truth.get("has_deliverable"):
+            state.deliverable_draft = True
+    elif mode_norm == "learn_syllabus_build":
+        if ground_truth.get("has_syllabus"):
+            state.ingest_done = True
+            state.evidence_count = max(state.evidence_count, 1)
+        if ground_truth.get("module_count", 0) > 0:
+            state.deliverable_draft = True
+    elif mode_norm == "character_build":
+        if ground_truth.get("has_initialization"):
+            state.evidence_count = max(state.evidence_count, 1)
+        if ground_truth.get("finalized"):
+            state.deliverable_draft = True

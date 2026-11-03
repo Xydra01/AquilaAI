@@ -47,6 +47,30 @@ def get_active_syllabus_build() -> dict[str, Any] | None:
     return _active_build
 
 
+def course_id_from_syllabus_task(task_id: str) -> str:
+    tid = (task_id or "").strip()
+    prefix = "syllabus_build_"
+    if tid.startswith(prefix):
+        return tid[len(prefix) :]
+    return ""
+
+
+def ensure_active_syllabus_build(instance_id: str, course_id: str) -> None:
+    """Ensure build session exists (handles legacy dual-import module paths)."""
+    global _active_build
+    iid = (instance_id or "default").strip()
+    cid = (course_id or "").strip()
+    if not cid:
+        return
+    if (
+        _active_build
+        and _active_build.get("instance_id") == iid
+        and _active_build.get("course_id") == cid
+    ):
+        return
+    set_active_syllabus_build(iid, cid)
+
+
 def _build_root() -> Path | None:
     if not _active_build:
         return None

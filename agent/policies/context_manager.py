@@ -106,12 +106,30 @@ def on_step_advance(
     client,
     memory,
     profile: ContextProfile | None = None,
+    run_ctx: Any | None = None,
 ) -> str:
     """Apply tier policy when advancing ledger steps; returns updated workspace summary text."""
     profile = profile or get_context_profile()
-    step_summary = compress_step_transcript(conversation_history, client, task_name)
-    if advance_summary:
-        step_summary = f"{advance_summary}\n\n{step_summary}"
+    skip_compress = False
+    try:
+        import os
+        from agent.core.loop_settings import run_digest_compress_for_micro_plan
+
+        if os.getenv("AQUILA_HARNESS_FORCE_MICRO_PLAN", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            skip_compress = not run_digest_compress_for_micro_plan()
+    except ImportError:
+        pass
+    if skip_compress:
+        step_summary = (advance_summary or "Step advanced.")[:800]
+    else:
+        step_summary = compress_step_transcript(conversation_history, client, task_name)
+        if advance_summary:
+            step_summary = f"{advance_summary}\n\n{step_summary}"
 
     try:
         from tool_library.agent_tools import save_research_note
@@ -124,9 +142,20 @@ def on_step_advance(
 
     workspace_text = ""
     if profile.workspace_summary_max_chars > 0:
-        workspace_text = merge_workspace_summary(
-            instance_id, task_name, step_summary, profile, memory
-        )
+        if run_ctx is not None:
+            from agent.core.run_state import rollup_run_digest_to_workspace
+
+            workspace_text = rollup_run_digest_to_workspace(
+                run_ctx,
+                instance_id=instance_id,
+                step_summary=step_summary,
+                profile=profile,
+                memory=memory,
+            )
+        else:
+            workspace_text = merge_workspace_summary(
+                instance_id, task_name, step_summary, profile, memory
+            )
 
     append_conversation_archive(
         instance_id,
@@ -166,6 +195,7 @@ def build_loop_messages(
     conversation_history: list[dict],
     user_message: dict,
     profile: ContextProfile | None = None,
+    run_state_block: str = "",
 ) -> list[dict]:
     """Assemble messages for one loop turn with summary injection and in-step cap."""
     profile = profile or get_context_profile()
@@ -216,12 +246,17 @@ def build_loop_messages(
         return text[: i + len(start)] + body_new + text[j:], True
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
-    if rolling_summary and profile.workspace_summary_max_chars > 0:
-        cap = profile.workspace_summary_max_chars
-        text = rolling_summary[-cap:] if len(rolling_summary) > cap else rolling_summary
+    context_block = (run_state_block or "").strip() or rolling_summary
+    if context_block and (
+        profile.workspace_summary_max_chars > 0 or run_state_block
+    ):
+        cap = profile.workspace_summary_max_chars or profile.run_digest_max_chars or 8000
+        text = context_block[-cap:] if len(context_block) > cap else context_block
+        label = "RUN STATE" if run_state_block else "WORKSPACE SUMMARY (prior steps)"
+        end_label = "END RUN STATE" if run_state_block else "END WORKSPACE SUMMARY"
         messages.append({
             "role": "user",
-            "content": f"--- WORKSPACE SUMMARY (prior steps) ---\n{text}\n--- END WORKSPACE SUMMARY ---",
+            "content": f"--- {label} ---\n{text}\n--- {end_label} ---",
         })
     messages.extend(_strip_internal_keys(step_entry))
     hist = list(conversation_history)

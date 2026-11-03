@@ -52,7 +52,10 @@ class CodeIdePage(BaseModePage):
         self.new_project_btn.clicked.connect(self._new_project)
         self.save_buffer_btn = QPushButton("Save buffer")
         self.save_buffer_btn.clicked.connect(self._save_buffer)
-        self.sync_btn = QPushButton("Sync to disk")
+        self.sync_btn = QPushButton("Sync buffer")
+        self.sync_btn.setToolTip(
+            "Optional: flush GUI buffer to disk. Agent edits already write disk directly."
+        )
         self.sync_btn.clicked.connect(self._sync_disk)
         self.quick_edit_btn = QPushButton("Edit selection (chat)")
         self.quick_edit_btn.clicked.connect(self._quick_edit_selection)
@@ -98,7 +101,7 @@ class CodeIdePage(BaseModePage):
         right_layout.setContentsMargins(0, 0, 0, 0)
         self.agent_rail = AgentRail(
             main_window,
-            placeholder="Code task (TDD, implement, fix)...",
+            placeholder="Code task (use cap.dev.*: implement, TDD, docs)...",
             compact_buttons=True,
         )
         right_layout.addWidget(self.agent_rail, stretch=2)

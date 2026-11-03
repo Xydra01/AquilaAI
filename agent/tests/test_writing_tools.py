@@ -75,6 +75,50 @@ def test_compile_final_document(draft_workspace):
     
     assert not writing_tools.ACTIVE_DRAFT_FILE.exists()
 
+
+def test_write_section_strips_markdown_hash_from_header(draft_workspace):
+    writing_tools.init_document("Doc", "Synopsis")
+    writing_tools.write_section("# 1. Executive Summary", "Body paragraph.")
+    data = json.loads(writing_tools.ACTIVE_DRAFT_FILE.read_text(encoding="utf-8"))
+    assert data["sections"][0]["header"] == "1. Executive Summary"
+
+
+def test_write_section_strips_duplicate_leading_heading(draft_workspace):
+    writing_tools.init_document("Doc", "Synopsis")
+    writing_tools.write_section(
+        "1. Introduction & Setting — The Folded World",
+        "# Introduction & Setting — The Folded World\n\nIn the coastal city...",
+    )
+    data = json.loads(writing_tools.ACTIVE_DRAFT_FILE.read_text(encoding="utf-8"))
+    assert data["sections"][0]["header"] == "1. Introduction & Setting — The Folded World"
+    assert not data["sections"][0]["content"].lstrip().startswith("#")
+    assert data["sections"][0]["content"].startswith("In the coastal city")
+
+
+def test_compile_strips_duplicate_headings_even_if_already_stored(draft_workspace):
+    """Compile defense-in-depth if older draft buffers still have # in body."""
+    writing_tools.init_document("World Summary", "Synopsis")
+    # Bypass write_section normalization by writing state directly
+    state = {
+        "title": "World Summary",
+        "synopsis": "Synopsis",
+        "sections": [
+            {
+                "header": "1. Cosmology",
+                "content": "# Cosmology\n\nSpace is folded.",
+            }
+        ],
+        "word_count": 0,
+    }
+    writing_tools.ACTIVE_DRAFT_FILE.write_text(json.dumps(state), encoding="utf-8")
+    result = writing_tools.compile_final_document("world_summary")
+    assert "✅ SUCCESS" in result
+    content = (draft_workspace / "Agent-Drafts" / "world_summary.md").read_text(encoding="utf-8")
+    assert content.count("Cosmology") == 1
+    assert "## 1. Cosmology\n\nSpace is folded." in content
+    assert "# Cosmology" not in content
+
+
 def test_compile_no_init(draft_workspace):
     """TDD Goal: Ensure compiling fails safely if there is no active document."""
     result = writing_tools.compile_final_document("empty_doc")

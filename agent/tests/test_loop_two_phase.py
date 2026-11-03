@@ -47,12 +47,35 @@ def test_should_run_think_phase_respects_flag_and_retries(monkeypatch):
     client = MagicMock()
     client.model_name = "aquila:latest"
     engine = _make_engine(client)
+    # Reflect-on-failure (default for non-micro): skip until last act failed.
+    assert engine._should_run_think_phase(0) is False
+    engine._last_act_needs_reflect = True
     assert engine._should_run_think_phase(0) is True
-    assert engine._should_run_think_phase(1) is False
+    assert engine._should_run_think_phase(1) is True  # parse retry always reflects
     assert engine._should_run_think_phase(0, skip_think_phase=True) is False
+
+    monkeypatch.setenv("AQUILA_REFLECT_ON_FAILURE", "0")
+    engine._last_act_needs_reflect = False
+    assert engine._should_run_think_phase(0) is True
 
     monkeypatch.setenv("AQUILA_ACT_TWO_PHASE", "0")
     assert engine._should_run_think_phase(0) is False
+
+
+def test_micro_plan_code_skips_think_phase(monkeypatch):
+    monkeypatch.setenv("AQUILA_ACT_TWO_PHASE", "1")
+    monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
+    monkeypatch.setenv("AQUILA_THINK_SURFACES", "reflect")
+    monkeypatch.delenv("AQUILA_ACT_TWO_PHASE_MICRO", raising=False)
+    client = MagicMock()
+    client.model_name = "aquila:latest"
+    engine = _make_engine(client)
+    engine.mode = "code"
+    engine._micro_plan = True
+    assert engine._should_run_think_phase(0, step_kind="work") is False
+
+    monkeypatch.setenv("AQUILA_ACT_TWO_PHASE_MICRO", "1")
+    assert engine._should_run_think_phase(0, step_kind="work") is True
 
 
 def test_format_tool_preview_uses_schema_hint_order():
@@ -72,7 +95,7 @@ def test_format_tool_preview_uses_schema_hint_order():
     preview = engine._format_tool_preview_for_think(step_kind="work")
     assert "web_search" in preview
     assert "grep_repo" not in preview
-    assert "cannot call tools" in preview.lower()
+    assert "cannot call" in preview.lower()
 
 
 def test_summarize_think_prefers_native_trace():
@@ -96,6 +119,7 @@ def test_two_phase_calls_think_then_act(
     monkeypatch.setenv("AQUILA_ACT_TWO_PHASE", "1")
     monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
     monkeypatch.setenv("AQUILA_THINK_SURFACES", "reflect")
+    monkeypatch.setenv("AQUILA_REFLECT_ON_FAILURE", "0")
 
     calls: list[dict] = []
 
@@ -110,7 +134,7 @@ def test_two_phase_calls_think_then_act(
             }
         return {
             "message": {
-                "content": '{"reasoning":"go","tools":[]}',
+                "content": '{"reasoning":"go","capabilities":[]}',
             },
             "format_mode_used": "strict_schema",
         }
@@ -119,7 +143,7 @@ def test_two_phase_calls_think_then_act(
     client.chat.side_effect = _chat
     client.model_name = "aquila:latest"
 
-    mock_parse.return_value = {"reasoning": "go", "tools": []}
+    mock_parse.return_value = {"reasoning": "go", "capabilities": []}
 
     engine = _make_engine(client)
 
@@ -194,14 +218,14 @@ def test_two_phase_off_single_act_call(
     def _chat(_messages, **kwargs):
         calls.append(dict(kwargs))
         return {
-            "message": {"content": '{"reasoning":"go","tools":[]}'},
+            "message": {"content": '{"reasoning":"go","capabilities":[]}'},
             "format_mode_used": "strict_schema",
         }
 
     client = MagicMock()
     client.chat.side_effect = _chat
     client.model_name = "aquila:latest"
-    mock_parse.return_value = {"reasoning": "go", "tools": []}
+    mock_parse.return_value = {"reasoning": "go", "capabilities": []}
 
     engine = _make_engine(client)
     with patch.object(engine, "_build_step_entry_messages", return_value=[]):
@@ -212,6 +236,62 @@ def test_two_phase_off_single_act_call(
                 tmp_ledger,
                 cancel_check=lambda: len(calls) >= 1,
             )
+
+    assert len(calls) == 1
+    assert calls[0]["surface"] == "act"
+
+
+@patch("loop_engine.validate_tool_arguments", return_value=(True, ""))
+@patch("loop_engine.validate_tool_calls", return_value=(True, ""))
+@patch("loop_engine.parse_agent_response")
+def test_reflect_on_failure_single_act_on_success(
+    mock_parse,
+    _mock_validate,
+    _mock_args,
+    monkeypatch,
+    tmp_ledger,
+):
+    """Reflect-on-failure (default): successful act → one LLM call only."""
+    monkeypatch.setenv("AQUILA_ACT_TWO_PHASE", "1")
+    monkeypatch.setenv("AQUILA_ENABLE_THINK", "1")
+    monkeypatch.setenv("AQUILA_THINK_SURFACES", "reflect")
+    monkeypatch.delenv("AQUILA_REFLECT_ON_FAILURE", raising=False)
+
+    calls: list[dict] = []
+
+    def _chat(_messages, **kwargs):
+        calls.append(dict(kwargs))
+        return {
+            "message": {"content": '{"reasoning":"go","capabilities":[]}'},
+            "format_mode_used": "strict_schema",
+        }
+
+    client = MagicMock()
+    client.chat.side_effect = _chat
+    client.model_name = "aquila:latest"
+    mock_parse.return_value = {"reasoning": "go", "capabilities": []}
+
+    engine = _make_engine(client)
+    with patch.object(engine, "_build_step_entry_messages", return_value=[]):
+        with patch.object(engine, "_schema_for_step", return_value={"type": "object"}):
+            with patch.object(
+                engine,
+                "_execute_capability_batch",
+                return_value={
+                    "executed": 1,
+                    "last_output": "ok",
+                    "last_cap_ok": True,
+                    "last_cap_id": "cap.research.web_search@v1",
+                    "last_cap_data": {},
+                    "finish_ok": False,
+                },
+            ):
+                engine.run(
+                    "t",
+                    "topic",
+                    tmp_ledger,
+                    cancel_check=lambda: len(calls) >= 1,
+                )
 
     assert len(calls) == 1
     assert calls[0]["surface"] == "act"

@@ -310,6 +310,7 @@ class CapabilityResearchPolicy(ResearchPolicy):
         *,
         tools_succeeded: set[str] | None = None,
         web_search_done_this_turn: int = 0,
+        **_kwargs,
     ) -> str | None:
         cap_id = (cap_id or "").strip()
         if self.offline_research and cap_id in self._OFFLINE_FORBIDDEN_CAPS:
@@ -572,6 +573,518 @@ class CapabilityLearnPolicy(LearnSyllabusPolicy):
         return f"Completed capability {cap_id}."
 
 
+class CapabilityWritingPolicy(StepPolicy):
+    """Writing act-loop policy for capability invocations."""
+
+    _INIT_CAPS = frozenset({"cap.writing.init_document@v1"})
+    _DRAFT_CAPS = frozenset({
+        "cap.writing.draft_sections@v1",
+        "cap.writing.read_outline@v1",
+    })
+    _WORK_CAPS = _INIT_CAPS | _DRAFT_CAPS
+    _FINALIZE_CAPS = frozenset({
+        "cap.writing.compile_document@v1",
+        "cap.writing.finalize_deliverable@v1",
+    })
+
+    def __init__(
+        self,
+        *,
+        mode: str = "writing",
+        step_kind: str = "",
+        writing_brief: dict | None = None,
+    ) -> None:
+        super().__init__(mode=mode, step_kind=step_kind)
+        self.writing_brief = writing_brief
+
+    def _should_advance_after_draft(self) -> bool:
+        from agent.functions.writing_brief import WritingBrief
+        from agent.functions.writing_scope import draft_scope_satisfied, load_draft_state
+
+        brief = WritingBrief.from_plan_dict(self.writing_brief)
+        if brief is None or brief.advance_when == "single_draft":
+            return True
+        if brief.advance_when == "manual":
+            return False
+        return draft_scope_satisfied(brief, load_draft_state())
+
+    def forbidden_capabilities_on_step(self) -> frozenset[str]:
+        if self.step_kind in ("write", "work"):
+            return self._FINALIZE_CAPS
+        if self.step_kind == "finalize":
+            return self._WORK_CAPS
+        return frozenset()
+
+    def validate_capability_call(
+        self,
+        cap_id: str,
+        *,
+        tools_succeeded: set[str] | None = None,
+        **kwargs,
+    ) -> str | None:
+        cap_id = (cap_id or "").strip()
+        forbidden = self.forbidden_capabilities_on_step()
+        if cap_id in forbidden:
+            if cap_id in self._FINALIZE_CAPS:
+                return (
+                    "❌ OS BLOCK: compile/finalize belongs on the finalize step, "
+                    "not work/write."
+                )
+            return (
+                "❌ OS BLOCK: init/draft/read_outline is not allowed on finalize. "
+                "Call `cap.writing.finalize_deliverable@v1`."
+            )
+        succeeded = tools_succeeded or set()
+        if cap_id in self._INIT_CAPS and "cap.writing.init_document@v1" in succeeded:
+            return (
+                "❌ OS BLOCK: Document already initialized this step. "
+                "Call `cap.writing.draft_sections@v1` or mark_objective_complete."
+            )
+        if cap_id in self._INIT_CAPS:
+            try:
+                from agent.tool_library.writing_tools import ACTIVE_DRAFT_FILE
+
+                if ACTIVE_DRAFT_FILE.exists():
+                    return (
+                        "❌ OS BLOCK: Draft buffer already exists. "
+                        "Call `cap.writing.draft_sections@v1` instead of init."
+                    )
+            except Exception:
+                pass
+        if cap_id.startswith("cap.writing.") and cap_id not in (
+            "cap.writing.init_document@v1",
+            "cap.writing.draft_sections@v1",
+            "cap.writing.read_outline@v1",
+            "cap.writing.ingest_sources@v1",
+            "cap.writing.compile_document@v1",
+            "cap.writing.finalize_deliverable@v1",
+        ):
+            return (
+                f"❌ OS BLOCK: Unknown/forbidden writing capability `{cap_id}`. "
+                "Do not invent capability IDs."
+            )
+        return None
+
+    def should_auto_advance_after_capability(
+        self,
+        cap_id: str,
+        result_ok: bool,
+        *,
+        step_kind: str = "",
+    ) -> bool:
+        if not result_ok:
+            return False
+        kind = (step_kind or self.step_kind or "").strip().lower()
+        if cap_id in self._INIT_CAPS and kind in ("write", "work"):
+            # Init alone must not advance — draft_sections (or mark_objective_complete) ends the step.
+            return False
+        if cap_id == "cap.writing.draft_sections@v1" and kind in ("write", "work"):
+            return self._should_advance_after_draft()
+        if cap_id == "cap.writing.ingest_sources@v1" and kind == "read":
+            return True
+        if cap_id in self._FINALIZE_CAPS and kind == "finalize":
+            return True
+        return False
+
+    def advance_summary_for_capability(self, cap_id: str) -> str:
+        if cap_id in self._INIT_CAPS:
+            return "Initialized writing document."
+        if cap_id == "cap.writing.draft_sections@v1":
+            return "Drafted document section(s)."
+        if cap_id == "cap.writing.read_outline@v1":
+            return "Read document outline."
+        if cap_id == "cap.writing.ingest_sources@v1":
+            return "Ingested writing source material."
+        if cap_id == "cap.writing.compile_document@v1":
+            return "Compiled final document."
+        if cap_id == "cap.writing.finalize_deliverable@v1":
+            return "Finalized writing deliverable."
+        return f"Completed capability {cap_id}."
+
+
+class CapabilityCodePolicy(StepPolicy):
+    """Code act-loop policy for capability invocations."""
+
+    _SETUP = frozenset({"cap.dev.project_setup@v1"})
+    _RECON = frozenset({
+        "cap.dev.recon@v1",
+        "cap.dev.read_region@v1",
+    })
+    _EDIT = frozenset({
+        "cap.dev.edit_apply@v1",
+        "cap.dev.create_file@v1",
+        "cap.dev.write_docs@v1",
+    })
+    _TEST = frozenset({
+        "cap.dev.run_tests@v1",
+        "cap.dev.run_linter@v1",
+    })
+    _SYNC = frozenset({"cap.dev.sync_project@v1"})
+    _RAW = frozenset({"cap.dev.raw_tool@v1"})
+
+    def __init__(
+        self,
+        *,
+        mode: str = "code",
+        step_kind: str = "",
+        allow_raw_tool: bool | None = None,
+    ) -> None:
+        super().__init__(mode=mode, step_kind=step_kind)
+        if allow_raw_tool is None:
+            import os
+
+            allow_raw_tool = os.getenv("AQUILA_DEV_RAW_TOOL", "0").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+        self.allow_raw_tool = bool(allow_raw_tool)
+
+    def forbidden_capabilities_on_step(self) -> frozenset[str]:
+        kind = (self.step_kind or "").strip().lower()
+        if kind in ("explore", "read"):
+            return self._EDIT | self._SYNC | self._TEST
+        if kind in ("verify", "tdd_red", "tdd_green", "tdd_refactor"):
+            return self._SETUP
+        if kind == "finalize":
+            return self._SETUP | self._RECON | frozenset({
+                "cap.dev.edit_apply@v1",
+                "cap.dev.write_docs@v1",
+            })
+        return frozenset()
+
+    def validate_capability_call(
+        self,
+        cap_id: str,
+        *,
+        tools_succeeded: set[str] | None = None,
+        **kwargs,
+    ) -> str | None:
+        cap_id = (cap_id or "").strip()
+        if cap_id in self._RAW and not self.allow_raw_tool:
+            return (
+                "❌ OS BLOCK: `cap.dev.raw_tool@v1` is disabled. "
+                "Set AQUILA_DEV_RAW_TOOL=1 for debug, or use composite caps."
+            )
+        forbidden = self.forbidden_capabilities_on_step()
+        if cap_id in forbidden:
+            return (
+                f"❌ OS BLOCK: `{cap_id}` is not allowed on step_kind "
+                f"`{self.step_kind}`. Use the step allowlist."
+            )
+        succeeded = tools_succeeded or set()
+        kind = (self.step_kind or "").strip().lower()
+        if cap_id == "cap.dev.create_file@v1" and kind == "finalize":
+            fp = str(kwargs.get("file_path") or "").replace("\\", "/").lower()
+            if not fp.endswith("readme.md"):
+                return (
+                    "❌ OS BLOCK (finalize): Only `README.md` may be created on "
+                    "finalize. Use `file_path` = `README.md` with short docs in "
+                    "`arguments.content`, then `cap.dev.sync_project@v1`."
+                )
+        if cap_id == "cap.dev.create_file@v1" and kind in (
+            "work",
+            "code",
+            "tdd_red",
+            "tdd_green",
+            "micro",
+        ):
+            fp = str(kwargs.get("file_path") or "").strip()
+            if fp:
+                try:
+                    from agent.tool_library import code_canvas_tools as canvas
+
+                    if canvas.buffer_has_file(fp):
+                        return (
+                            f"❌ OS BLOCK: `{fp}` already exists in the buffer. "
+                            "Use `cap.dev.edit_apply@v1` to modify it or "
+                            "`cap.dev.run_tests@v1` if ready."
+                        )
+                except Exception:
+                    pass
+        if (
+            cap_id == "cap.dev.sync_project@v1"
+            and "cap.dev.sync_project@v1" in succeeded
+        ):
+            return (
+                "❌ OS BLOCK: `cap.dev.sync_project@v1` already succeeded this step. "
+                "Stop — the project is synced."
+            )
+        if cap_id == "cap.dev.project_setup@v1":
+            if "cap.dev.project_setup@v1" in succeeded:
+                return (
+                    "❌ OS BLOCK: Project already set up this step. "
+                    "Next: `cap.dev.create_file@v1` / `cap.dev.edit_apply@v1` "
+                    "(TDD), not project_setup again."
+                )
+            try:
+                from pathlib import Path
+
+                from agent.storage import resolve_under_data_root
+                from agent.tool_library.code_canvas_tools import get_active_project_scope
+
+                scope = get_active_project_scope()
+                if scope and scope.get("root"):
+                    root = Path(str(scope["root"]))
+                    if not root.is_absolute():
+                        root = resolve_under_data_root(str(scope["root"]))
+                    if root.exists():
+                        name = scope.get("project_name") or "project"
+                        return (
+                            f"❌ OS BLOCK: Code project '{name}' already active "
+                            f"(root exists). Skip setup; call "
+                            "`cap.dev.create_file@v1` or `cap.dev.edit_apply@v1`."
+                        )
+            except Exception:
+                pass
+        if (
+            cap_id == "cap.dev.recon@v1"
+            and "cap.dev.recon@v1" in succeeded
+            and kind in ("work", "code", "tdd_red", "tdd_green", "tdd_refactor", "")
+        ):
+            return (
+                "❌ OS BLOCK: Recon already completed this step. "
+                "Do not re-recon — call `cap.dev.create_file@v1` / "
+                "`cap.dev.edit_apply@v1` / `cap.dev.run_tests@v1` next."
+            )
+        if cap_id == "cap.dev.recon@v1" and kind in (
+            "work",
+            "code",
+            "tdd_red",
+            "tdd_green",
+            "tdd_refactor",
+        ):
+            try:
+                from agent.tool_library.code_canvas_tools import _load_state
+
+                state = _load_state() or {}
+                raw = state.get("files")
+                paths: list[str] = []
+                if isinstance(raw, dict):
+                    paths = [str(p) for p in raw.keys()]
+                elif isinstance(raw, list):
+                    for entry in raw:
+                        if isinstance(entry, dict) and entry.get("path"):
+                            paths.append(str(entry["path"]))
+                if not paths:
+                    return (
+                        "❌ OS BLOCK (greenfield): Skip recon on an empty project. "
+                        "Call `cap.dev.create_file@v1` with `file_path` and full "
+                        "`arguments.content` for the next deliverable."
+                    )
+            except Exception:
+                pass
+        if cap_id == "cap.plan.update_checklist@v1" and kind in ("work", "code"):
+            count = int(kwargs.get("update_checklist_step_count") or 0)
+            if count >= 2:
+                return (
+                    "❌ OS BLOCK: Checklist updates are automatic after create_file / "
+                    "run_tests. Use `cap.dev.create_file@v1` to write project files."
+                )
+            try:
+                from agent.tool_library.code_canvas_tools import _load_state
+
+                state = _load_state() or {}
+                raw = state.get("files")
+                paths: list[str] = []
+                if isinstance(raw, dict):
+                    paths = [str(p) for p in raw.keys()]
+                elif isinstance(raw, list):
+                    for entry in raw:
+                        if isinstance(entry, dict) and entry.get("path"):
+                            paths.append(str(entry["path"]))
+                if not paths:
+                    return (
+                        "❌ OS BLOCK: No files in buffer yet. Call "
+                        "`cap.dev.create_file@v1` first — checklist ticks automatically."
+                    )
+            except Exception:
+                pass
+        if cap_id == "cap.dev.edit_apply@v1" and kind in ("work", "code", "micro"):
+            try:
+                from agent.tool_library import code_canvas_tools as canvas
+
+                fp = str(kwargs.get("file_path") or "").strip()
+                if fp and not canvas.buffer_has_file(fp):
+                    return (
+                        f"❌ OS BLOCK: `{fp}` is not in the buffer. Use "
+                        "`cap.dev.create_file@v1` with full `arguments.content` first."
+                    )
+            except Exception:
+                pass
+        if cap_id == "cap.dev.edit_apply@v1" and kind == "tdd_red":
+            return (
+                "❌ OS BLOCK (tdd_red): Use `cap.dev.create_file@v1` only — "
+                "`file_path` = `tests/test_habit.py` and `arguments.content` = "
+                "full pytest source. edit_apply is not allowed on this step."
+            )
+        if cap_id == "cap.dev.edit_apply@v1" and kind == "tdd_green":
+            try:
+                from agent.core.implementation_plan import is_code_impl_source_path
+                from agent.tool_library.code_canvas_tools import _load_state
+
+                state = _load_state() or {}
+                raw = state.get("files")
+                paths: list[str] = []
+                if isinstance(raw, dict):
+                    paths = [str(p) for p in raw.keys()]
+                elif isinstance(raw, list):
+                    for entry in raw:
+                        if isinstance(entry, dict) and entry.get("path"):
+                            paths.append(str(entry["path"]))
+                if not any(is_code_impl_source_path(p) for p in paths):
+                    return (
+                        "❌ OS BLOCK (tdd_green): Create the implementation module "
+                        "with `cap.dev.create_file@v1` (`file_path` + full CLI source "
+                        "in `arguments.content`, e.g. `habit.py`) before edit_apply."
+                    )
+            except Exception:
+                pass
+        if cap_id == "cap.dev.read_region@v1" and kind in ("tdd_red", "tdd_green"):
+            try:
+                from agent.core.implementation_plan import (
+                    is_code_impl_source_path,
+                    is_code_test_path,
+                )
+                from agent.tool_library.code_canvas_tools import _load_state
+
+                state = _load_state() or {}
+                raw = state.get("files")
+                paths: list[str] = []
+                if isinstance(raw, dict):
+                    paths = [str(p) for p in raw.keys()]
+                elif isinstance(raw, list):
+                    for entry in raw:
+                        if isinstance(entry, dict) and entry.get("path"):
+                            paths.append(str(entry["path"]))
+                if kind == "tdd_red" and not any(is_code_test_path(p) for p in paths):
+                    return (
+                        "❌ OS BLOCK (tdd_red): Create failing tests first with "
+                        "`cap.dev.create_file@v1` (`tests/test_habit.py` + full pytest "
+                        "in `arguments.content`). read_region is not useful on an "
+                        "empty greenfield project."
+                    )
+                if kind == "tdd_green" and not any(
+                    is_code_impl_source_path(p) for p in paths
+                ):
+                    return (
+                        "❌ OS BLOCK (tdd_green): Implement the module with "
+                        "`cap.dev.create_file@v1` (impl `.py` + full CLI source in "
+                        "`arguments.content`) before read_region."
+                    )
+            except Exception:
+                pass
+        if cap_id == "cap.dev.read_region@v1" and kind in (
+            "tdd_red",
+            "tdd_green",
+            "work",
+            "code",
+        ):
+            count = int(kwargs.get("read_region_step_count") or 0)
+            if count >= 4:
+                return (
+                    f"❌ OS BLOCK: read_region called {count} times this step. "
+                    "Stop reading — write code with `cap.dev.create_file@v1` or "
+                    "`cap.dev.edit_apply@v1`."
+                )
+        if cap_id == "cap.dev.sync_project@v1" and kind == "finalize":
+            count = int(kwargs.get("sync_project_step_count") or 0)
+            if count >= 1:
+                return (
+                    "❌ OS BLOCK: sync_project already attempted this finalize step. "
+                    "Create missing files (e.g. README.md) with "
+                    "`cap.dev.create_file@v1`, then sync once."
+                )
+        if cap_id.startswith("cap.dev.") and cap_id not in (
+            "cap.dev.project_setup@v1",
+            "cap.dev.recon@v1",
+            "cap.dev.read_region@v1",
+            "cap.dev.edit_apply@v1",
+            "cap.dev.create_file@v1",
+            "cap.dev.run_tests@v1",
+            "cap.dev.run_linter@v1",
+            "cap.dev.sync_project@v1",
+            "cap.dev.write_docs@v1",
+            "cap.dev.light_coding_context@v1",
+            "cap.dev.raw_tool@v1",
+        ):
+            return (
+                f"❌ OS BLOCK: Unknown/forbidden code capability `{cap_id}`. "
+                "Do not invent capability IDs."
+            )
+        return None
+
+    def should_auto_advance_after_capability(
+        self,
+        cap_id: str,
+        result_ok: bool,
+        *,
+        step_kind: str = "",
+        result_summary: str = "",
+        result_data: dict | None = None,
+        milestone_tracker=None,
+    ) -> bool:
+        if not result_ok:
+            return False
+        kind = (step_kind or self.step_kind or "").strip().lower()
+        if cap_id == "cap.dev.sync_project@v1" and kind == "finalize":
+            return True
+        if cap_id == "cap.dev.recon@v1" and kind in ("explore", "read"):
+            return True
+        if cap_id == "cap.dev.run_tests@v1" and kind in (
+            "verify",
+            "tdd_green",
+            "tdd_refactor",
+            "work",
+            "code",
+        ):
+            if kind in ("work", "code") and milestone_tracker is not None:
+                if not getattr(milestone_tracker.state, "file_edited", False):
+                    return False
+            low = (result_summary or "").lower()
+            if "failed" in low and "0 failed" not in low:
+                return False
+            return "passed" in low or "0 failed" in low or "✅" in (result_summary or "")
+        if kind == "tdd_red" and cap_id == "cap.dev.create_file@v1":
+            fp = str((result_data or {}).get("file_path") or (result_data or {}).get("path") or "")
+            return bool(fp) and "test" in fp.lower()
+        if kind == "tdd_green" and cap_id == "cap.dev.create_file@v1":
+            from agent.core.implementation_plan import is_code_impl_source_path
+
+            fp = str((result_data or {}).get("file_path") or (result_data or {}).get("path") or "")
+            return is_code_impl_source_path(fp)
+        if kind == "work" and cap_id == "cap.dev.create_file@v1":
+            fp = str((result_data or {}).get("file_path") or (result_data or {}).get("path") or "")
+            return "readme" in fp.lower()
+        if kind in ("work", "code") and milestone_tracker is not None:
+            advance_fn = getattr(milestone_tracker, "should_suggest_advance", None)
+            if callable(advance_fn) and advance_fn("code", is_final_step=False):
+                return True
+        return False
+
+    def advance_summary_for_capability(self, cap_id: str) -> str:
+        if cap_id == "cap.dev.project_setup@v1":
+            return "Set up code project."
+        if cap_id == "cap.dev.recon@v1":
+            return "Completed code recon."
+        if cap_id == "cap.dev.read_region@v1":
+            return "Read file region."
+        if cap_id == "cap.dev.edit_apply@v1":
+            return "Applied code edit."
+        if cap_id == "cap.dev.create_file@v1":
+            return "Created buffer file."
+        if cap_id == "cap.dev.run_tests@v1":
+            return "Ran tests."
+        if cap_id == "cap.dev.run_linter@v1":
+            return "Ran linter."
+        if cap_id == "cap.dev.sync_project@v1":
+            return "Synced project to disk."
+        if cap_id == "cap.dev.write_docs@v1":
+            return "Wrote project documentation."
+        return f"Completed capability {cap_id}."
+
+
 def get_step_policy(
     mode: str,
     step_kind: str,
@@ -579,6 +1092,7 @@ def get_step_policy(
     persona_research_lore: bool = False,
     learn_syllabus_web: bool = False,
     offline_research: bool = False,
+    writing_brief: dict | None = None,
 ) -> StepPolicy:
     if mode == "character_build":
         return CapabilityPersonaPolicy(
@@ -598,4 +1112,12 @@ def get_step_policy(
             step_kind=step_kind,
             offline_research=offline_research,
         )
+    if mode == "writing":
+        return CapabilityWritingPolicy(
+            mode=mode,
+            step_kind=step_kind,
+            writing_brief=writing_brief,
+        )
+    if mode == "code":
+        return CapabilityCodePolicy(mode=mode, step_kind=step_kind)
     return StepPolicy(mode=mode, step_kind=step_kind)

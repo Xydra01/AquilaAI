@@ -77,6 +77,10 @@ def workspace_summary_path(instance_id: str) -> Path:
     return instance_dir(instance_id) / "workspace_summary.md"
 
 
+def writing_defaults_path(instance_id: str) -> Path:
+    return instance_dir(instance_id) / "writing_defaults.json"
+
+
 def chat_memory_path(instance_id: str) -> Path:
     return instance_dir(instance_id) / "chat_memory.md"
 
@@ -244,6 +248,25 @@ def save_workspace_summary(instance_id: str, text: str) -> None:
     ensure_instances_root()
     instance_dir(instance_id).mkdir(parents=True, exist_ok=True)
     workspace_summary_path(instance_id).write_text(text, encoding="utf-8")
+
+
+def load_writing_defaults(instance_id: str) -> dict[str, Any]:
+    path = writing_defaults_path(instance_id)
+    if not path.is_file():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return dict(data) if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_writing_defaults(instance_id: str, data: dict[str, Any]) -> None:
+    ensure_instances_root()
+    instance_dir(instance_id).mkdir(parents=True, exist_ok=True)
+    with open(writing_defaults_path(instance_id), "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 
 def append_conversation_archive(instance_id: str, record: dict[str, Any]) -> None:

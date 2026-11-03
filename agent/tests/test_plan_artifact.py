@@ -24,10 +24,30 @@ def test_enrich_plan_adds_approach_and_milestones(tmp_path, monkeypatch):
             "steps": [{"description": "work", "step_kind": "work", "max_iterations": 8}],
         }
     )
-    plan = enrich_plan_from_ledger(raw, user_request="Build a widget", mode="code")
+    plan = enrich_plan_from_ledger(raw, user_request="Build a widget", mode="task")
     assert plan.get("user_goal")
     assert plan.get("approach_summary")
     assert plan.get("milestones")
+
+
+def test_enrich_capability_milestones_deferred_for_code():
+    """Code milestones are built after attach in main, not static enrich."""
+    raw = json.dumps(
+        {
+            "status": "in_progress",
+            "current_step_index": 0,
+            "steps": [{"description": "work", "step_kind": "work", "max_iterations": 8}],
+        }
+    )
+    plan = enrich_plan_from_ledger(
+        raw,
+        user_request="Build a widget",
+        mode="code",
+        capability_research=True,
+    )
+    assert plan.get("user_goal")
+    assert plan.get("approach_summary")
+    assert not plan.get("milestones")
 
 
 def test_enrich_offline_research_milestones_use_offline_hints():
@@ -51,7 +71,7 @@ def test_enrich_offline_research_milestones_use_offline_hints():
     assert "ingest_offline" in criteria or "cap.research" in criteria
 
 
-def test_enrich_capability_research_milestones_deferred_for_character():
+def test_enrich_capability_milestones_deferred_for_character():
     """Learn/character milestones are built after attach in main, not static enrich."""
     raw = json.dumps(
         {
@@ -67,6 +87,70 @@ def test_enrich_capability_research_milestones_deferred_for_character():
         capability_research=True,
     )
     assert not plan.get("milestones")
+
+
+def test_enrich_capability_milestones_deferred_for_writing():
+    """Writing milestones are built after attach in main, not static enrich."""
+    raw = json.dumps(
+        {
+            "status": "in_progress",
+            "current_step_index": 0,
+            "steps": [{"description": "write", "step_kind": "write", "max_iterations": 8}],
+        }
+    )
+    plan = enrich_plan_from_ledger(
+        raw,
+        user_request="Draft essay",
+        mode="writing",
+    )
+    assert not plan.get("milestones")
+
+
+def test_build_milestones_from_writing_steps():
+    from agent.core.loop_objectives import build_milestones_from_plan_steps
+
+    steps = [
+        {"step_kind": "write", "capability_id": "cap.writing.draft_sections@v1"},
+        {"step_kind": "finalize", "capability_id": "cap.writing.finalize_deliverable@v1"},
+    ]
+    milestones = build_milestones_from_plan_steps(steps, "writing")
+    criteria = " ".join(m["success_criteria"] for m in milestones)
+    assert "cap.writing.draft_sections@v1" in criteria
+    assert "cap.writing.finalize_deliverable@v1" in criteria
+    assert "write_section" not in criteria
+    assert "finish_task" not in criteria
+
+
+def test_expand_dynamic_writing_plan_uses_brief(tmp_path):
+    from agent.core.plan_validator import expand_dynamic_writing_plan
+
+    brief = {
+        "scope": "from_sources",
+        "advance_when": "scope_met",
+        "has_attachments": True,
+        "length_mode": "sections",
+        "target_sections": 4,
+    }
+    plan, note = expand_dynamic_writing_plan(
+        {"steps": []},
+        "Summarize the book",
+        has_attachments=True,
+        writing_brief=brief,
+    )
+    assert len(plan["steps"]) == 3
+    assert plan.get("writing_brief") == brief
+    assert "with sources" in note
+
+
+def test_enrich_writing_milestones_includes_brief():
+    from agent.core.loop_objectives import enrich_writing_milestones
+
+    milestones = [{"id": "draft", "success_criteria": "Capabilities used: cap.writing.draft_sections@v1"}]
+    out = enrich_writing_milestones(
+        milestones,
+        {"scope": "standard", "tone": "formal", "target_sections": 4, "advance_when": "scope_met"},
+    )
+    assert "formal" in out[0]["success_criteria"]
 
 
 def test_build_milestones_from_learn_file_only_steps():
@@ -133,6 +217,20 @@ def test_plan_needs_review_respects_micro_auto(monkeypatch):
     assert plan_needs_review({"approval_status": "draft"}, micro_plan=True) is False
     assert plan_needs_review({"approval_status": "draft"}, micro_plan=False) is True
     assert plan_needs_review({"approval_status": "approved"}, micro_plan=False) is False
+
+
+def test_plan_needs_review_skips_habit_tracker_micro(monkeypatch):
+    monkeypatch.setenv("AQUILA_PLAN_REVIEW", "1")
+    monkeypatch.setenv("AQUILA_PLAN_AUTO_APPROVE_MICRO", "0")
+    goal = (
+        "Build a tiny CLI habit tracker: habit.py with add / done / list, "
+        "tests/test_habit.py, habits.json"
+    )
+    assert plan_needs_review(
+        {"approval_status": "draft", "micro_plan": True},
+        micro_plan=True,
+        user_request=goal,
+    ) is False
 
 
 def test_render_plan_markdown_includes_steps():

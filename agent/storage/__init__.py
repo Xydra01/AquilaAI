@@ -31,6 +31,9 @@ from .instance_registry import (
     load_chat_memory,
     save_chat_memory,
     chat_memory_path,
+    load_writing_defaults,
+    save_writing_defaults,
+    writing_defaults_path,
 )
 from .instance_runtime import (
     apply_instance_for_run,

@@ -30,6 +30,10 @@ def _configure_windows_utf8_stdio() -> None:
 
 def pytest_configure(config):
     _configure_windows_utf8_stdio()
+    config.addinivalue_line(
+        "markers",
+        "harness: live harness gate tests requiring Ollama (run manually)",
+    )
     try:
         from dotenv import load_dotenv
 
@@ -51,6 +55,8 @@ def pytest_configure(config):
 def sanitize_test_environment():
     """Prevent user shell or module-level load_dotenv from bleeding into test assertions."""
     os.environ.pop("AQUILA_DYNAMIC_LOOP", None)
+    os.environ.pop("AQUILA_ALWAYS_FULL_PLAN", None)
+    os.environ.pop("AQUILA_HARNESS_FORCE_MICRO_PLAN", None)
     os.environ.pop("OLLAMA_MODEL", None)
     os.environ.pop("AQUILA_TASK_EPISODE_MAX", None)
     os.environ.pop("AQUILA_REPEAT_PENALTY", None)

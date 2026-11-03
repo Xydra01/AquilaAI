@@ -86,6 +86,16 @@ import agent.policies.tool_catalog
 sys.modules['tool_catalog'] = agent.policies.tool_catalog
 sys.modules['agent.tool_catalog'] = agent.policies.tool_catalog
 
+# tool_library aliases (shared _active_build session state must be one module)
+import agent.tool_library
+sys.modules['tool_library'] = agent.tool_library
+import agent.tool_library.learn_tools
+sys.modules['tool_library.learn_tools'] = agent.tool_library.learn_tools
+sys.modules['agent.tool_library.learn_tools'] = agent.tool_library.learn_tools
+import agent.tool_library.writing_tools
+sys.modules['tool_library.writing_tools'] = agent.tool_library.writing_tools
+sys.modules['agent.tool_library.writing_tools'] = agent.tool_library.writing_tools
+
 # Export as attributes to support 'from agent import name'
 main = agent.core.main
 core = agent.core

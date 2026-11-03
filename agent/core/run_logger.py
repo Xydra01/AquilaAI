@@ -18,6 +18,8 @@ from .stdio_safe import human_output_stream
 _HUMAN_TOOL_CAP = 4000
 _HUMAN_SCRAPE_PREVIEW = 300
 _JSONL_PREVIEW = 500
+_DEFAULT_THINK_HUMAN_CAP = 8000
+_DEFAULT_THINK_JSONL_CAP = 32000
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -27,6 +29,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def _truncate(text: str, cap: int) -> tuple[str, bool, int]:
     if not text:
         return "", False, 0
@@ -34,6 +46,29 @@ def _truncate(text: str, cap: int) -> tuple[str, bool, int]:
     if n <= cap:
         return text, False, n
     return text[:cap] + f"\n...[truncated {n - cap} bytes]", True, n
+
+
+def thinking_log_fields(thinking: str) -> dict[str, Any]:
+    """Structured thinking fields for JSONL (full-ish body + short preview)."""
+    text = thinking or ""
+    if not text.strip():
+        return {}
+    cap = max(500, _env_int("AQUILA_LOG_THINK_JSONL_CAP", _DEFAULT_THINK_JSONL_CAP))
+    body, trunc, n = _truncate(text, cap)
+    sha = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:8]
+    fields: dict[str, Any] = {
+        "thinking_chars": n,
+        "thinking_sha8": sha,
+        "thinking_preview": text[:500],
+        "thinking": body,
+    }
+    if trunc:
+        fields["thinking_truncated"] = True
+    return fields
+
+
+# Back-compat alias
+_thinking_log_fields = thinking_log_fields
 
 
 def _ascii_safe_markup(text: str) -> str:
@@ -169,9 +204,49 @@ class RunLogger:
             qual = record.get("page_quality")
             extra = f" quality={qual}" if qual else ""
             self._emit_console(f"[dim]tool_end {name}{extra}[/dim]")
+        elif event_type == "thinking_trace":
+            chars = record.get("thinking_chars") or record.get("chars") or 0
+            surface = record.get("surface") or "?"
+            self._emit_console(f"[dim]thinking_trace {surface} chars={chars}[/dim]")
         elif event_type in ("os_warning", "scrape_budget_exhausted", "context_compress"):
             msg = record.get("message", event_type)
             self._emit_console(f"[yellow]{msg}[/yellow]")
+
+    def log_thinking(
+        self,
+        thinking: str,
+        *,
+        surface: str = "",
+        step_index: int | None = None,
+        episode: int | None = None,
+        iteration: int | None = None,
+    ) -> None:
+        """Persist native model thinking for post-mortem diagnosis."""
+        text = thinking or ""
+        if not text.strip():
+            return
+        fields = thinking_log_fields(text)
+        # Prefer the turn logger's THINKING block; this path is for chat/plan surfaces.
+        write_human = _env_bool("AQUILA_LOG_THINK_HUMAN", True) and surface not in (
+            "act",
+            "reflect",
+            "llm",
+        )
+        if self.log_filename and write_human:
+            human_cap = max(
+                500, _env_int("AQUILA_LOG_THINK_HUMAN_CAP", _DEFAULT_THINK_HUMAN_CAP)
+            )
+            human_body, _, _ = _truncate(text, human_cap)
+            with open(self.log_filename, "a", encoding="utf-8") as f:
+                f.write(f"\nTHINKING ({surface or 'unknown'}):\n{human_body}\n")
+        self.event(
+            "thinking_trace",
+            surface=surface or None,
+            step_index=step_index,
+            episode=episode,
+            iteration=iteration,
+            **fields,
+        )
 
     def log_agent_turn(
         self,
@@ -196,9 +271,23 @@ class RunLogger:
             f"Episode {episode} · {turn_type} turn {loop_tick} ---"
         )
         human_body, trunc, orig = _truncate(content or "", _HUMAN_TOOL_CAP * 2)
-        if self.log_filename and content:
+        think = thinking_preview or ""
+        if self.log_filename and (content or think):
             with open(self.log_filename, "a", encoding="utf-8") as f:
-                f.write(f"\n{header}\n{human_body}\n")
+                f.write(f"\n{header}\n")
+                if (
+                    think.strip()
+                    and think.strip() != (content or "").strip()
+                    and _env_bool("AQUILA_LOG_THINK_HUMAN", True)
+                ):
+                    human_cap = max(
+                        500,
+                        _env_int("AQUILA_LOG_THINK_HUMAN_CAP", _DEFAULT_THINK_HUMAN_CAP),
+                    )
+                    think_body, _, _ = _truncate(think, human_cap)
+                    f.write(f"THINKING:\n{think_body}\n\n")
+                if content:
+                    f.write(f"{human_body}\n")
         extra = dict(throughput_extra or {})
         for dup_key in (
             "ollama_base_url",
@@ -209,6 +298,7 @@ class RunLogger:
             "throughput_health",
         ):
             extra.pop(dup_key, None)
+        think_fields = thinking_log_fields(think)
         self.event(
             "llm_response",
             iteration=loop_tick,
@@ -220,11 +310,11 @@ class RunLogger:
             read_timeout_s=read_timeout_s,
             duration_ms=duration_ms,
             body=content,
-            thinking_preview=(thinking_preview or "")[:500] or None,
             ollama_base_url=ollama_base_url or extra.get("ollama_base_url"),
             ollama_engine=ollama_engine or extra.get("ollama_engine"),
             truncated_human=trunc,
             original_bytes=orig,
+            **think_fields,
             **{k: v for k, v in extra.items() if v is not None},
         )
 
@@ -281,4 +371,3 @@ _active_logger: RunLogger | None = None
 def get_active_run_logger() -> RunLogger | None:
     global _active_logger
     return _active_logger
-

@@ -236,10 +236,13 @@ class ResearchPage(BaseModePage):
             return
         try:
             from agent.core.task_artifacts import walkthrough_md_path
+            from agent.gui.markdown_utils import escape_markdown_for_qt
 
             path = walkthrough_md_path(self._worker.task_name, "research")
             if path.exists():
-                self.walkthrough_view.setMarkdown(path.read_text(encoding="utf-8"))
+                self.walkthrough_view.setMarkdown(
+                    escape_markdown_for_qt(path.read_text(encoding="utf-8"))
+                )
                 self.desk_tabs.setCurrentWidget(self.walkthrough_view)
         except Exception:
             pass
@@ -248,10 +251,13 @@ class ResearchPage(BaseModePage):
         """Render plan.md in the Plan tab when the artifact exists."""
         try:
             from agent.core.task_artifacts import plan_md_path
+            from agent.gui.markdown_utils import escape_markdown_for_qt
 
             path = plan_md_path(task_name, "research")
             if path.exists():
-                self.plan_view.setMarkdown(path.read_text(encoding="utf-8"))
+                self.plan_view.setMarkdown(
+                    escape_markdown_for_qt(path.read_text(encoding="utf-8"))
+                )
                 return True
         except Exception:
             pass
