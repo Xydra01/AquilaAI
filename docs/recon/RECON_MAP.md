@@ -39,6 +39,7 @@ C++ size for R20 (from the Aquila-cpp root; non-blank, non-`//` lines):
 ```bash
 for d in src apps tests; do printf "%s: " $d; rg -v -c '^\s*(//.*)?$' $d --glob '*.{cpp,hpp,cu}' | awk -F: '{s+=$2} END {print s}'; done
 # after M1 (incl. error_code): src 704, apps 41, tests 504
+# after M2: src 1161, apps 41, tests 1109
 ```
 
 ---
@@ -62,6 +63,8 @@ for d in src apps tests; do printf "%s: " $d; rg -v -c '^\s*(//.*)?$' $d --glob 
 | Existing llama.cpp | `tools/llama-cpp-turboquant` (fork `TheTom/llama-cpp-turboquant` @ `a62320c2c`, tracked as a gitlink with no `.gitmodules`), built with **MSVC cl.exe + nvcc, `GGML_CUDA=ON`** in `build-ninja/` | [measured: CMakeCache] |
 | Local llama.cpp patches | The fork checkout has **uncommitted edits** in `common/arg.cpp`, `src/llama-model-loader.cpp`, `src/llama-model.cpp`, `src/models/qwen35.cpp`. Contents not reviewed. If they fix Qwen 3.5 loading, upstream may need the same fix (see D4) | [measured] |
 | WSL | only `docker-desktop` distro (no Ubuntu) | [measured] |
+| Ollama server | **Stock 0.40.14** at `F:\Users\myfri\AppData\Local\Programs\Ollama` (upgraded 2026-11-03; installer SHA256 `e069c7cc…` = GitHub digest), serving `127.0.0.1:11434`, 18 models, CUDA on the RTX 4070. The app's auto-update is **off** (`auto_update_enabled = 0` in `AppData\Local\Ollama\db.sqlite`) and `agent-projects\tools\ollama-turboquant` was **removed from the user PATH** (backup: `Downloads\aquila-tmp\user-path-backup.txt`); see H16. The turboquant build (`pr15505-turboquant`) is old and buggy (user) and is not a test target | [measured] |
+| `aquila:latest` | Same weights blob as `qwen3.5:9b`, stock `qwen3.5` renderer/parser; Modelfile sets `temperature 0.2`, `top_k 20`, `top_p 0.95`, `num_ctx 32768`, `presence_penalty 1.5`. Because of H15 every Python request ran at 0.2 | [measured] `ollama show --modelfile` |
 
 **Implication:** "parity with Python" means parity with `759212a`. If the Python branch moves on, either re-pin here (and rerun the inventory) or check out `759212a` for parity work.
 
@@ -97,6 +100,14 @@ cmake --workflow --preset mingw-san
 ```
 
 CI: `.github/workflows/ci.yml` runs `windows-msvc` (msvc-release + msvc-asan, qtbase only), `windows-mingw-san`, `linux-san` on every push to `Aquila-cpp`.
+
+Live tests (need the stock Ollama server; never in CI). They refuse to run unless `/api/version` is a plain release number:
+
+```bash
+cmd //c "scripts\\msvc-dev.cmd cmake --preset msvc-release -B build/live -DAQUILA_LIVE_TESTS=ON -DAQUILA_BUILD_GUI=OFF"
+cmd //c "scripts\\msvc-dev.cmd cmake --build build/live --target aquila_live_tests"
+./build/live/tests/live/aquila_live_tests.exe     # AQUILA_LIVE_MODEL overrides aquila:latest
+```
 
 ---
 
@@ -355,6 +366,8 @@ Core files: `base.py`, `registry.py`, `adapters.py` (step_kind → default/allow
 | H12 | CUDA on Windows needs the MSVC host compiler. clang/llvm-mingw can't build the CUDA backend | [measured] llama build used cl.exe + nvcc |
 | H13 | TSan is not available on Windows (lower impact under R2 single-threaded) | section 2.2 "Other checks" |
 | H14 | The offline Python suite does not finish on this machine, so there's no complete green baseline yet. Run 1 (`-m "not live and not heretic and not qwopus"`, ai-agent-env) was killed after ~28 min at **15 GB working set**, with a QtWebEngine child. Run 2 (verbose) was stopped by choice at 49%: **450 passed, 13 failed**, and it was sitting on `tests/test_loop_web_scrape.py::test_loop_engine_calls_enrich_on_web_search` at 2.1 GB. The 13 failures are in test_agent_tools (2), test_capability_act_hints (2), test_character_build_ingest, test_config_catalog, test_implementation_plan, test_ledger_completion (2), test_light_research (2), test_loop_guards (2). Not diagnosed. They may come from the uncommitted work, the temp `AQUILA_DATA_ROOT`, or real bugs | [measured] 2026-11-02 |
+| H15 | **Python's temperature never applied.** `_build_native_chat_payload` puts `temperature` at the top level of `/api/chat` (`agent/core/main.py:808`); Ollama's `ChatRequest` has no such field (it lives in `Options`, `api/types.go:586`) and drops it. Every call (0.0-0.6 at 18 sites) ran at the model default, 0.2 for `aquila:latest`. C++ sends `options.temperature` (section 8.2). Proven live on stock 0.40.14: top-level 0.0 and 2.0 give byte-identical output equal to `options.temperature 0.2`; options 0.0 and 2.0 differ | [measured] 2026-11-03 |
+| H16 | **Two Ollama desktop-app bugs** (v0.40.14 source). (1) At startup it applies any staged update without a version check (`app/cmd/app/app.go:399-420`): it replaced a fresh 0.40.14 install with a staged 0.40.13. (2) It looks for its server as `ollama` (no `.exe`) in its own folder, so the check fails on Windows and it falls back to `exec.LookPath` (`app/server/server.go:54-84`): with the turboquant folder first on PATH, the stock app started the turboquant server. Worked around (section 1 "Ollama server"); any terminal started before the PATH change still has the old order | [measured] 2026-11-03 |
 
 ---
 
@@ -366,7 +379,7 @@ Order follows R5 (data structures → execution sandbox → orchestration loop),
 |---|---|---|
 | M0 | CMake + presets (5 lanes, section 1 "Building"), FetchContent deps pinned by SHA256, CI. Qt 6.11.3 MSVC SDK (+WebEngine) installed | Clean workflow-preset run on every lane; a tampered `URL_HASH` fails configure; deliberate heap-overflow / use-after-free / signed-overflow tests match the sanitizer's report text; leaks are caught by LSan (Linux CI) and the MSVC CRT debug heap (the original "leak test fails under ASan" isn't possible on Windows: no LSan); `aquila_gui --smoke` builds, links, runs; CUDA vector_add on the 4070 with a negative control. **Done 2026-11-02** |
 | M1 | Core value types: Message, `ActionSchema`, `ActionResult`, `ToolInteraction`, `AgentScratchpad` (R7 schema), recipe cartridge struct (R12), JSON round-trip | Golden JSON fixtures, byte-equal round-trip; recipe JSON from D:L433-477 parses and re-serializes. **Done 2026-11-03** (section 8.1): 17 golden fixtures byte-equal (6 generated by Python at `759212a`); the recipe and action-call blocks are read from the design doc at test time; strict-rejection and byte-deletion tests run on all sanitizer lanes and CI |
-| M2 | `IInferenceBackend` (KV ops in the interface from day one) + `OllamaHttpBackend` (parity scaffold; KV ops degrade to resending the full prompt) | Same request payload as Python for fixed inputs (recorded fixtures); live smoke "pong" |
+| M2 | `IInferenceBackend` (KV ops in the interface from day one) + `OllamaHttpBackend` (parity scaffold; KV ops degrade to resending the full prompt) | Same request payload as Python for fixed inputs (recorded fixtures); live smoke "pong". **Done 2026-11-03** (section 8.2): 7 payloads from Python's real `_build_native_chat_payload` match except exactly `/temperature → /options/temperature` (H15); fake-server tests for every error code, streaming reassembly, stall timeout, cancel, KV rollback; live pong (plain, schema, stream) and the temperature proof on stock 0.40.14. R20: 457 C++ lines vs 644 Python (`main.py:732-1430`), part of which is deferred rather than condensed |
 | M3 | `IAgentModule` + compile-time `ModuleRegistry` (R13) + **`CanvasBuffer` core** (5.2) + **WorkspaceModule** (canvas buffer model, D10) and **ExecutionModule** (log dedup) with the path firewall | Fixture repo: results checked against Code Canvas outputs (`code_canvas_tools.py`) where behavior overlaps; a bad edit is rejected and both buffer and disk are untouched; pending patch accept → sync writes exactly the diff; `export → restore` snapshot round-trip |
 | M4 | `AgentLoop` + `ContextCondenser` (3 segments, R6) + **OrchestratorModule** + `RuntimeTierConfig` (R16) + one code recipe cartridge with a `post_llm_validation_hook` + a **run record** for the session fields that are not LLM memory (`task_id`, `mode`, `instance_id`, `step_index`, `ground_truth`, last interaction; section 8.1, D12) | Harness scenario `code_smoke_file` passes 3/3 on C++ (Python baseline 3/3 [doc]); the loop refuses to exit while the hook fails (forced-failure test) |
 | M5 | `LlamaCppBackend` (upstream): KV checkpoint/rollback (`llama_memory_seq_rm`), GBNF for the R14 action call | Post-wipe prefill token count measured < full prompt; invalid JSON impossible in N trials |
@@ -392,6 +405,30 @@ Headers in `src/core/include/aquila/types/`. JSON is `nlohmann::ordered_json` (k
 | `RecipeCartridge` | `recipe_id` (non-empty), `goal_template`, `load_modules` (≥1 of `module`, `initial_state`, `expose_actions`), `pre_llm_hooks` (`module`, `action`, `args`), `scratchpad_checklist`, `post_llm_validation_hook`? (`module`, `action`, `must_succeed`, `on_failure_instruction`) | `RECIPE_REGISTRY` (recipe id → capability ids, `functions/recipes.py`); scoping spread over `tool_catalog.py` / `step_policies.py` / `capabilities/adapters.py` | **New** (R12, D:L433-477). One cartridge holds modules, exposed actions, hooks, and the exit gate. Hook modules must be in `load_modules`; hook arrays may be omitted on input; D9 fields (`include`, `llm_micro_pass`) are rejected until M7. Real test: re-expressing Python's 15 recipes at M7 |
 
 Re-verify: `python tests/fixtures/python/gen_python_fixtures.py` (needs the pinned Python checkout; regenerates `tests/fixtures/python/*.python.json` and `codes/error_codes.json`, which must leave `git status` clean), then any workflow preset. The unit test prints `golden: checked 17 fixtures (6 generated by Python)`, `error codes: 32 Python codes accepted`, the design-doc block line ranges, and the mutation counts.
+
+### 8.2 Inference backend (M2)
+
+`src/core/include/aquila/inference/`: `IInferenceBackend` (`append(Message)`, `mark_checkpoint`, `rollback_to`, `generate(params, on_token)`, `active_profile`, `supports_kv_reuse`), `OllamaHttpBackend`, and the pure wire functions in `ollama_wire.hpp`. Verdicts against Python's `OllamaClient` (`agent/core/main.py:273-1430`):
+
+| Feature | Python | C++ | Verdict (R19/R20) |
+|---|---|---|---|
+| Temperature | Top-level `temperature` (`main.py:808`), ignored by Ollama | `options.temperature` | **Fixed** (H15) |
+| Payload shape | `model, messages, temperature, stream, keep_alive?, options, format?, think?` | Same minus top-level temperature; `options` always present | **Same** otherwise; 7 Python cases match byte-for-byte after the fix |
+| Interface | Messages in, dict out | Message-based context + checkpoints; the doc's `append_to_kv_cache(string_view)` (D:L640) is replaced because text loses role boundaries (no `/api/chat`, no chat template) | **New** |
+| Output constraint | `format` dict, `"json_object"`→`"json"` (`main.py:781-789`) | `OutputConstraint{none, json, json_schema}`; GBNF is M5's translation | **Same** mapping, typed |
+| Options source | 11 `AQUILA_*` env vars read at call time + a "surface" (chat/act/plan) | Explicit `GenerationParams`; only `OLLAMA_BASE_URL/MODEL/NUM_CTX/KEEP_ALIVE` via `OllamaConfig::from_env()` | **New**; surface→params policy moves to `RuntimeTierConfig` (M4) |
+| Errors | Returned as model content, e.g. `"*(API Error: ...)*"` (`main.py:1152-1160, 1326, 1346, 1426-1430`) | `GenerationResult{ok, error_code, error_detail, ...}`; codes `unreachable, timeout, stream_stalled, stream_truncated, http_error, server_error, bad_response, cancelled, unsupported_url, invalid_request, transport_error` | **New** (callers can't confuse errors with output) |
+| Fallbacks | Silent strict schema → json → plain degrade, plus a think-off retry (`main.py:1184-1424`) | One attempt, typed error | **New**; any fallback becomes explicit M4 policy |
+| Connection | Probes Ollama at import (`client = OllamaClient()`, `main.py:1433`, H4) | No I/O until `probe()` or `generate()` | **New** |
+| Streaming | Token generator + stall kill switch + stop check (`main.py:971-1150`) | Token callback (return `false` = `cancelled`), stall timeout → `stream_stalled`, missing `done` → `stream_truncated` | **Same** behavior, typed outcomes |
+| Repetition guard, inline `<think>` strip/split | `main.py:990-997, 1120-1136` | Not ported | **Deferred** to M8 (GUI chat is the caller) |
+| Thinking-only backfill | `main.py:1277-1280` (turboquant workaround) | Not ported | **Dropped** unless the stock server shows empty `content`; live tests on 0.40.14 returned content in all cases |
+| Warmup, cold-start padding, model list/eject, kill wallclock mode | `main.py:309-731`, `986` | Not ported | **Deferred** to M8/M10 (model management); wallclock mode dropped |
+| TLS | `requests` supports `https://` | `unsupported_url` (cpp-httplib built without OpenSSL) | **Gap**, recorded |
+
+R20: 457 C++ lines (`inference/`) vs 644 Python lines in `main.py:732-1430`; part of the Python is deferred (above), not condensed. `main.py:273-731` (413 lines, model management) is not ported yet.
+
+Re-verify: the generator (8.1) also writes `tests/fixtures/python/payloads/*.json` from the real `OllamaClient` (pinned tree required, client pinned to a closed port). The unit test prints `payload parity: 7 Python cases; only /temperature -> /options/temperature differs` and `stream_stalled after ~1.0s`. Live tests: section 1 "Building".
 
 ---
 
@@ -432,3 +469,4 @@ No decisions are open right now.
 | 2026-11-02 | M0 build foundation. Section 1: toolchain facts (no clang-cl, no Windows LSan), Qt 6.11.3 install, deps table, build lanes. M0 proof row corrected (leak check moved to LSan on Linux + MSVC CRT debug heap) |
 | 2026-11-03 | M1 core value types (section 8.1). Also fixed an M0 regression: `* text=auto` made fresh Windows clones check the design doc out as CRLF (sha256 `c6be44af…` instead of `5df25a18…`); the doc is now `-text` in `.gitattributes` |
 | 2026-11-03 | Added rebuild goals R19 (improve; diverge from Python only with recorded evidence) and R20 (condense; LOC measured per milestone). Section 8.1 rewritten with a Python-counterpart verdict per type, and de-duplicated (the previous commit had inserted it twice). `ActionResult` gains `error_code` (D13); D12 (no `run_state.json` import); M4 gains the run record |
+| 2026-11-03 | M2 inference backend (section 8.2). Added H15 (Python's temperature never applied) and H16 (Ollama app bugs); section 1 records the stock Ollama 0.40.14 setup and the `aquila:latest` Modelfile |
