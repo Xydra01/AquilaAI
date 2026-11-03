@@ -47,13 +47,49 @@ AQUILA_DATA_ROOT=$(mktemp -d) AQUILA_SKIP_MIGRATE=1 ai-agent-env/Scripts/python.
 | Remote branches | `main`, `Aquila-3.0`…`Aquila-3.5` | [measured] |
 | Python env that works | `ai-agent-env/` (Python 3.12.11). Root `.venv/` (3.14.3) is **missing `mcp`** and cannot import `agent` | [measured] |
 | Python test config | `agent/pytest.ini`, markers `live`, `heretic`, `qwopus`, `gui`. Run from `agent/` | [code] |
-| C++ toolchain present | MSVC BuildTools 2022 14.44 (`F:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`), clang 22.1.5 (llvm-mingw UCRT), CMake 4.3.2, Ninja, CUDA 13.2 | [measured] |
+| C++ toolchain present | MSVC BuildTools 2022 14.44 (`F:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`, not on PATH; use `scripts/msvc-dev.cmd`), clang 22.1.5 (llvm-mingw UCRT 20260505), CMake 4.3.2, Ninja 1.13.2, CUDA 13.2. **No clang-cl** (VS has only clang-format/clang-tidy) | [measured 2026-11-02] |
+| Sanitizer runtimes | MSVC: ASan only (`clang_rt.asan_*`). llvm-mingw: ASan + UBSan. **No LeakSanitizer for any Windows target.** Leaks: CRT debug heap on MSVC Debug (non-ASan build), LSan on the Linux CI job | [measured] |
+| Qt SDK | Qt **6.11.3** `msvc2022_64` at `F:\Qt\6.11.3\msvc2022_64` + qtwebengine, qtwebchannel, qtpositioning, qttasktree, via `scripts/install-qt.ps1`. aqtinstall 3.3.0 (latest release) can't read the Qt >= 6.11 repo layout; pinned to master `5a49f2b` (fix: miurahr/aqtinstall#1000) | [measured] |
+| Qt style on 6.11.3 | `aquila_gui --smoke` on the real platform: `style=windows11`, keys `windows11,windowsvista,Windows,Fusion`. Offscreen platform falls back to `fusion` | [measured] |
 | GPU | RTX 4070, 12282 MiB | [measured] |
 | Existing llama.cpp | `tools/llama-cpp-turboquant` (fork `TheTom/llama-cpp-turboquant` @ `a62320c2c`, tracked as a gitlink with no `.gitmodules`), built with **MSVC cl.exe + nvcc, `GGML_CUDA=ON`** in `build-ninja/` | [measured: CMakeCache] |
 | Local llama.cpp patches | The fork checkout has **uncommitted edits** in `common/arg.cpp`, `src/llama-model-loader.cpp`, `src/llama-model.cpp`, `src/models/qwen35.cpp`. Contents not reviewed. If they fix Qwen 3.5 loading, upstream may need the same fix (see D4) | [measured] |
 | WSL | only `docker-desktop` distro (no Ubuntu) | [measured] |
 
 **Implication:** "parity with Python" means parity with `759212a`. If the Python branch moves on, either re-pin here (and rerun the inventory) or check out `759212a` for parity work.
+
+### C++ dependencies (pinned in `cmake/AquilaDeps.cmake` by URL + SHA256)
+
+| Library | Version | Archive |
+|---|---|---|
+| nlohmann/json | 3.12.0 | release asset `json.tar.xz` |
+| fmt | 12.2.0 | release asset `fmt-12.2.0.zip` (spdlog uses it via `SPDLOG_FMT_EXTERNAL`) |
+| spdlog | 1.17.0 | tag archive |
+| inja | 3.5.0 | tag archive (uses the fetched nlohmann/json, not its embedded copy) |
+| cpp-httplib | 0.64.0 | tag archive; OpenSSL/zlib/brotli/zstd off. Requires Windows 10 (`_WIN32_WINNT=0x0A00`) |
+| Catch2 | 3.16.1 | tag archive |
+
+### Building
+
+| Lane (preset) | Toolchain | What it proves |
+|---|---|---|
+| `msvc-release` | cl, Release, Qt | Release build + GUI smoke; `sanitizer.report` = `asan=0` |
+| `msvc-asan` | cl, Debug, `/fsanitize=address`, Qt | ASan heap-overflow / use-after-free; CRT leak report from a non-ASan build of the same source |
+| `msvc-release-cuda` | cl + nvcc, sm_89 (local only) | CUDA host-compiler path (H12); WebEngineWidgets CMake package present |
+| `mingw-san` | llvm-mingw clang, Debug, ASan + UBSan (no Qt) | ASan + UBSan signed overflow |
+| `linux-san` | clang (CI), Debug, ASan + UBSan + LSan (no Qt) | Everything above that is portable + LeakSanitizer |
+
+```bash
+# MSVC lanes (from bash; cmd.exe drops the doubled backslashes)
+export QT_ROOT_DIR='F:\Qt\6.11.3\msvc2022_64'
+cmd //c "scripts\\msvc-dev.cmd cmake --workflow --preset msvc-release"
+cmd //c "scripts\\msvc-dev.cmd cmake --workflow --preset msvc-asan"
+cmd //c "scripts\\msvc-dev.cmd cmake --workflow --preset msvc-release-cuda"
+# llvm-mingw lane (clang++ from llvm-mingw on PATH)
+cmake --workflow --preset mingw-san
+```
+
+CI: `.github/workflows/ci.yml` runs `windows-msvc` (msvc-release + msvc-asan, qtbase only), `windows-mingw-san`, `linux-san` on every push to `Aquila-cpp`.
 
 ---
 
@@ -110,7 +146,7 @@ The doc is a conversation that **evolves**. Earlier sections float ideas that la
 **Other checks against local source:**
 
 - llama.cpp ships `json_schema_to_grammar(nlohmann::ordered_json)` (`common/json-schema-to-grammar.h:9`), so R14 action schemas can be generated as JSON Schema and turned into GBNF. [measured]
-- R4 on this machine: TSan is not available for Windows targets. Under R2 (single-threaded) TSan matters much less; it's only needed if a UI/IO thread is added at the edge. MSVC has ASan but no UBSan. [proposal: verify at M0]
+- R4 on this machine: TSan is not available for Windows targets. Under R2 (single-threaded) TSan matters much less; it's only needed if a UI/IO thread is added at the edge. MSVC has ASan but no UBSan, and no Windows toolchain has LeakSanitizer. [measured at M0: see section 1 "Sanitizer runtimes"]
 - R2 vs today's Python: the agent runs on a Qt worker thread with a cross-process generation lock (`agent/core/generation_lock.py`). [proposal: single-threaded core; any GUI/remote surface talks to it from outside the core]
 - R15 vs decision D2 (Ollama first): Ollama exposes no KV control, so an Ollama backend **cannot** satisfy R6/R15 KV pinning. The Ollama phase is a parity scaffold. `IInferenceBackend` must be designed for KV ops from day one, with the Ollama implementation degrading those ops to resending the full prompt.
 
@@ -319,7 +355,7 @@ Order follows R5 (data structures → execution sandbox → orchestration loop),
 
 | Milestone | Scope | Proof of done |
 |---|---|---|
-| M0 | CMake + presets (MSVC+CUDA release, clang ASan/UBSan debug), FetchContent deps, CI. **Install the Qt 6.11 MSVC SDK** (+WebEngine); not present today | Clean configure+build on both presets; a deliberate leak test fails under ASan; a minimal Qt Widgets window builds and links |
+| M0 | CMake + presets (5 lanes, section 1 "Building"), FetchContent deps pinned by SHA256, CI. Qt 6.11.3 MSVC SDK (+WebEngine) installed | Clean workflow-preset run on every lane; a tampered `URL_HASH` fails configure; deliberate heap-overflow / use-after-free / signed-overflow tests match the sanitizer's report text; leaks are caught by LSan (Linux CI) and the MSVC CRT debug heap (the original "leak test fails under ASan" isn't possible on Windows: no LSan); `aquila_gui --smoke` builds, links, runs; CUDA vector_add on the 4070 with a negative control. **Done 2026-11-02** |
 | M1 | Core value types: Message, `ActionSchema`, `ActionResult`, `ToolInteraction`, `AgentScratchpad` (R7 schema), recipe cartridge struct (R12), JSON round-trip | Golden JSON fixtures, byte-equal round-trip; recipe JSON from D:L433-477 parses and re-serializes |
 | M2 | `IInferenceBackend` (KV ops in the interface from day one) + `OllamaHttpBackend` (parity scaffold; KV ops degrade to resending the full prompt) | Same request payload as Python for fixed inputs (recorded fixtures); live smoke "pong" |
 | M3 | `IAgentModule` + compile-time `ModuleRegistry` (R13) + **`CanvasBuffer` core** (5.2) + **WorkspaceModule** (canvas buffer model, D10) and **ExecutionModule** (log dedup) with the path firewall | Fixture repo: results checked against Code Canvas outputs (`code_canvas_tools.py`) where behavior overlaps; a bad edit is rejected and both buffer and disk are untouched; pending patch accept → sync writes exactly the diff; `export → restore` snapshot round-trip |
@@ -365,3 +401,4 @@ No decisions are open right now.
 | 2026-11-02 | Re-read design doc (now `docs/design/aquila-cpp-design.md`). Section 2 split into governing R1-R18 vs superseded S1-S7 (primitives → coarse modules, primitive-piping recipes → cartridges, 1-3 threads → single-threaded). Crosswalk, dispositions, and milestones re-aligned to modules. Added 5.1 module source map and D8-D11 |
 | 2026-11-02 | D3 decided (Qt 6 Widgets C++), D11 decided (7 modules + CanvasBuffer core); no open decisions |
 | 2026-11-02 | User answers: D5/D6/D8/D9/D10 decided, D7 pushed. Added `GUI_EVALUATION.md` (D3 recommendation: Qt 6 Widgets C++), section 5.2 module proposals (D11), Lacerta scope note, M8-M10 for GUI/canvas/builder/remote/MCP; vision + data processing out |
+| 2026-11-02 | M0 build foundation. Section 1: toolchain facts (no clang-cl, no Windows LSan), Qt 6.11.3 install, deps table, build lanes. M0 proof row corrected (leak check moved to LSan on Linux + MSVC CRT debug heap) |

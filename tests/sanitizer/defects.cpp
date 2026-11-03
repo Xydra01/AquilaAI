@@ -46,10 +46,14 @@ int signed_overflow() {
     return 0;
 }
 
+// LSan scans stacks conservatively, and a stale copy of a dropped pointer can survive
+// in dead stack memory reused by exit(). Reusing one slot for 8 blocks guarantees at
+// least 7 are unreachable.
 int leak() {
-    void* volatile p = std::malloc(64);
-    std::memset(p, 0, 64);
-    p = nullptr;
+    for (int i = 0; i < 8; ++i) {
+        void* volatile p = std::malloc(64);
+        std::memset(p, i, 64);
+    }
     return 0;
 }
 
