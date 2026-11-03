@@ -5,3 +5,5 @@
 *.sh text eol=lf
 # Golden fixtures are compared byte-for-byte.
 *.json text eol=lf
+# Byte-identical copy of the user's design brief (sha256 recorded in RECON_MAP).
+docs/design/aquila-cpp-design.md -text
