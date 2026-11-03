@@ -1,0 +1,22 @@
+# Build trees
+build/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# IDE
+.vs/
+.vscode/
+.idea/
+.cursor/
+
+# Model weights
+*.gguf
+*.bin
+
+# Python (recon tooling)
+__pycache__/
+*.pyc
+
+# Local secrets
+.env
