@@ -1,0 +1,10 @@
+{
+  "case": "single_medium",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are Aquila, a coding agent."
+    }
+  ],
+  "expected_tokens": 7
+}

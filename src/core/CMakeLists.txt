@@ -22,7 +22,12 @@ add_library(aquila_core STATIC
     exec/process_posix.cpp
     exec/diagnostics.cpp
     modules/execution_module.cpp
-    modules/builtin.cpp)
+    modules/builtin.cpp
+    agent/runtime_tier.cpp
+    agent/run_record.cpp
+    agent/context_condenser.cpp
+    agent/orchestrator_module.cpp
+    agent/agent_loop.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)

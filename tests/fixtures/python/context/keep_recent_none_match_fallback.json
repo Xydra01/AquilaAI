@@ -1,0 +1,44 @@
+{
+  "case": "none_match_fallback",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "thinking 1"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 2"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 3"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 4"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 5"
+    }
+  ],
+  "keep": 2,
+  "expected": [
+    {
+      "role": "assistant",
+      "content": "thinking 2"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 3"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 4"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 5"
+    }
+  ]
+}

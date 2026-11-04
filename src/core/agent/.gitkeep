@@ -1,0 +1,4 @@
+# Placeholder so the empty M4 agent source directory is tracked by git.
+# M4 sources (runtime_tier.cpp, run_record.cpp, context_condenser.cpp,
+# orchestrator_module.cpp, agent_loop.cpp) land here and are added to
+# aquila_core in src/core/CMakeLists.txt.

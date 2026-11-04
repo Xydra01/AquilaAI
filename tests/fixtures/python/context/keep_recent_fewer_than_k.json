@@ -1,0 +1,28 @@
+{
+  "case": "fewer_than_k",
+  "history": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 1"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 2"
+    }
+  ],
+  "keep": 5,
+  "expected": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 2"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-add_executable(aquila_live_tests ollama_live_test.cpp)
+add_executable(aquila_live_tests ollama_live_test.cpp agent_loop_live_test.cpp)
 target_link_libraries(aquila_live_tests PRIVATE aquila::core httplib::httplib Catch2::Catch2WithMain)
 aquila_set_warnings(aquila_live_tests)
 

@@ -79,6 +79,7 @@ for d in src apps tests; do printf "%s: " $d; rg -v -c '^\s*(//.*)?$' $d --glob 
 | inja | 3.5.0 | tag archive (uses the fetched nlohmann/json, not its embedded copy) |
 | cpp-httplib | 0.64.0 | tag archive; OpenSSL/zlib/brotli/zstd off. Requires Windows 10 (`_WIN32_WINNT=0x0A00`) |
 | Catch2 | 3.16.1 | tag archive |
+| RapidCheck | commit `2c3c436` (2026-10-05; no upstream releases) | commit archive; built by `cmake/AquilaRapidCheck.cmake` with `RC_ENABLE_CATCH` left OFF (its `ext/catch` submodule is absent from the archive) and the `extras/catch` header exposed via an own `rapidcheck_catch` INTERFACE target with SYSTEM includes so its templates stay out of `/W4 /WX` and `-Werror`. Linked into `aquila_unit_tests` only. [measured: builds clean on mingw-san (clang ASan+UBSan -Werror) and msvc-release] |
 | tree-sitter (core) | 0.27.1 | tag archive; `lib/src/lib.c` amalgamation built by `cmake/AquilaTreeSitter.cmake` (upstream build scripts unused) |
 | tree-sitter-c / -cpp / -python | 0.24.2 / 0.23.4 / 0.25.0 | tag archives; grammar ABI 15 / 14 / 15 (core accepts 13-15). The C++ `parser.c` is 25 MB: about 90-120 s per cold lane build. UBSan's `-fsanitize=function` is off for these C targets only (upstream scanner prototype mismatch) |
 

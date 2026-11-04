@@ -1,0 +1,15 @@
+{
+  "case": "keep_zero",
+  "history": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 2"
+    }
+  ],
+  "keep": 0,
+  "expected": []
+}

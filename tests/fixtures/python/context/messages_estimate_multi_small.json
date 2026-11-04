@@ -1,0 +1,18 @@
+{
+  "case": "multi_small",
+  "messages": [
+    {
+      "role": "system",
+      "content": "sys"
+    },
+    {
+      "role": "user",
+      "content": "do it"
+    },
+    {
+      "role": "assistant",
+      "content": "ok"
+    }
+  ],
+  "expected_tokens": 2
+}

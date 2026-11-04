@@ -1,0 +1,10 @@
+{
+  "case": "single_short",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi"
+    }
+  ],
+  "expected_tokens": 1
+}

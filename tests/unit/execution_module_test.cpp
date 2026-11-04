@@ -162,7 +162,8 @@ TEST_CASE("registry: the design doc recipe (D:L433-477) validates against the bu
     test::TempDir tmp;
     tmp.write("src/keep.txt", "x\n");  // the recipe's root_dir is ./src
     const auto reg = ModuleRegistry::builtin();
-    CHECK(reg.ids() == std::vector<std::string>{"ExecutionModule", "WorkspaceModule"});
+    CHECK(reg.ids() ==
+          std::vector<std::string>{"ExecutionModule", "OrchestratorModule", "WorkspaceModule"});
     CHECK_NOTHROW(reg.validate_recipe(recipe, {tmp.path(), 4500}));
 
     auto typo = recipe;

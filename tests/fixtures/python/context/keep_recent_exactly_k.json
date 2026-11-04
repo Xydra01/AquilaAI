@@ -1,0 +1,40 @@
+{
+  "case": "exactly_k",
+  "history": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 1"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 2"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 2"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 3"
+    }
+  ],
+  "keep": 3,
+  "expected": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 2"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 3"
+    }
+  ]
+}

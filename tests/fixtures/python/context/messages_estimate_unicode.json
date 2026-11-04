@@ -1,0 +1,10 @@
+{
+  "case": "unicode",
+  "messages": [
+    {
+      "role": "user",
+      "content": "naïve ✓ café ✓"
+    }
+  ],
+  "expected_tokens": 3
+}

@@ -1,0 +1,10 @@
+{
+  "case": "single_exact4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "abcd"
+    }
+  ],
+  "expected_tokens": 1
+}

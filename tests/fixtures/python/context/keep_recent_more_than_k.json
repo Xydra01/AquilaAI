@@ -1,0 +1,40 @@
+{
+  "case": "more_than_k",
+  "history": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 1"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 2"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 3"
+    },
+    {
+      "role": "assistant",
+      "content": "thinking 2"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 4"
+    }
+  ],
+  "keep": 2,
+  "expected": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 3"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 4"
+    }
+  ]
+}

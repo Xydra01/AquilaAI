@@ -59,7 +59,15 @@ void ModuleRegistry::validate_recipe(const RecipeCartridge& recipe, const Module
 
     const auto check_hook = [&](const std::string& module, const std::string& action, const Json* args,
                                 const std::string& base) {
-        const auto* schema = find_action(actions.at(module), action);
+        // A hook may only reference a module the recipe actually loaded (Req 5.4).
+        // Surface a missing module as a SchemaError at the hook's JSON path rather
+        // than letting the map lookup below throw std::out_of_range.
+        const auto module_it = actions.find(module);
+        if (module_it == actions.end()) {
+            throw SchemaError(json_io::child_path(base, "module"),
+                              "hook module '" + module + "' is not in load_modules");
+        }
+        const auto* schema = find_action(module_it->second, action);
         if (schema == nullptr) {
             throw SchemaError(json_io::child_path(base, "action"), module + " has no action '" + action + "'");
         }

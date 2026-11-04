@@ -1,0 +1,5 @@
+{
+  "case": "empty_list",
+  "messages": [],
+  "expected_tokens": 1
+}

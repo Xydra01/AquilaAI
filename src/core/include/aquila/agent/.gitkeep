@@ -1,0 +1,3 @@
+# Placeholder so the empty M4 agent header directory is tracked by git.
+# M4 headers (runtime_tier.hpp, run_record.hpp, context_condenser.hpp,
+# orchestrator_module.hpp, agent_loop.hpp, recipes.hpp) land here.

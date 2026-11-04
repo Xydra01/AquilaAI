@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Any
 
 PINNED_SHA = "759212af3ae379f0c514e105dc97dd557cdaa0c0"
-SOURCES = ("agent/parser/ollama_messages.py", "agent/core/run_state.py")
+SOURCES = ("agent/parser/ollama_messages.py", "agent/core/run_state.py",
+           "agent/policies/context_manager.py")
 OUT_DIR = Path(__file__).resolve().parent
 
 
@@ -70,6 +71,92 @@ def load_checklist_item_state(py_ref: Path):
     sys.modules[ref_module.__name__] = ref_module
     exec(compile(module, "run_state.py:ChecklistItemState", "exec"), ref_module.__dict__)
     return ref_module.ChecklistItemState
+
+
+def load_context_manager_funcs(py_ref: Path):
+    """AST-extract the two pure context-manager functions without importing the
+    `agent` package. context_manager.py imports agent.storage / .context_budget at
+    module load, which would probe Ollama (H4); but estimate_messages_tokens and
+    _keep_recent_turns have no agent imports (they use only builtins), so exec just
+    those two function defs in an isolated namespace, mirroring
+    load_checklist_item_state()."""
+    source = (py_ref / "agent/policies/context_manager.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    wanted = {"estimate_messages_tokens", "_keep_recent_turns"}
+    defs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    if {n.name for n in defs} != wanted:
+        sys.exit(f"could not locate {wanted} in context_manager.py @ {PINNED_SHA[:9]}")
+    module = ast.Module(body=[ast.ImportFrom(module="__future__",
+                                             names=[ast.alias("annotations")], level=0),
+                              *defs], type_ignores=[])
+    ast.fix_missing_locations(module)
+    ns: dict[str, Any] = {}
+    exec(compile(module, "context_manager.py:funcs", "exec"), ns)
+    return ns["estimate_messages_tokens"], ns["_keep_recent_turns"]
+
+
+# estimate_messages_tokens: each case is a list of OpenAI-style messages. The C++
+# Message type carries plain-string content, so cover string-content messages that
+# map cleanly to Message{role, content}; the point is the char/4 estimate agreeing.
+ESTIMATE_CASES = [
+    ("empty_list", []),
+    ("single_empty", [{"role": "user", "content": ""}]),
+    ("single_short", [{"role": "user", "content": "hi"}]),
+    ("single_exact4", [{"role": "user", "content": "abcd"}]),
+    ("single_medium", [{"role": "system", "content": "You are Aquila, a coding agent."}]),
+    ("multi_small", [{"role": "system", "content": "sys"},
+                     {"role": "user", "content": "do it"},
+                     {"role": "assistant", "content": "ok"}]),
+    ("multi_mixed_len", [{"role": "system", "content": "You are a careful assistant."},
+                         {"role": "user", "content": "Create a file named harness_smoke.py"},
+                         {"role": "assistant", "content": "Tool Outputs: wrote file"},
+                         {"role": "user", "content": "now run the smoke test please"}]),
+    ("unicode", [{"role": "user", "content": "naïve ✓ café ✓"}]),
+    ("longish", [{"role": "user", "content": "x" * 400},
+                 {"role": "assistant", "content": "y" * 123}]),
+]
+
+# _keep_recent_turns: a "tool-output turn" is a user message whose string content
+# contains "Tool Outputs:". Cover the branches: fewer than K matches, exactly K,
+# more than K, zero matches (history[-keep*2:] / list(history) fallback), keep=0.
+def _tool(n: int) -> dict:
+    return {"role": "user", "content": f"Tool Outputs: result {n}"}
+
+
+def _chat(n: int) -> dict:
+    return {"role": "assistant", "content": f"thinking {n}"}
+
+
+KEEP_RECENT_CASES = [
+    ("empty_history", [], 3),
+    ("keep_zero", [_tool(1), _tool(2)], 0),
+    ("fewer_than_k", [_tool(1), _chat(1), _tool(2)], 5),
+    ("exactly_k", [_tool(1), _chat(1), _tool(2), _chat(2), _tool(3)], 3),
+    ("more_than_k", [_tool(1), _chat(1), _tool(2), _tool(3), _chat(2), _tool(4)], 2),
+    ("none_match_short", [_chat(1), _chat(2)], 2),
+    ("none_match_fallback", [_chat(1), _chat(2), _chat(3), _chat(4), _chat(5)], 2),
+    ("single_tool", [{"role": "user", "content": "hello"}, _tool(1)], 4),
+]
+
+
+def gen_context_oracle(py_ref: Path) -> None:
+    """Oracle cases from the real context_manager token estimate and tail-keep."""
+    estimate_messages_tokens, _keep_recent_turns = load_context_manager_funcs(py_ref)
+    out_dir = OUT_DIR / "context"
+    out_dir.mkdir(exist_ok=True)
+
+    for name, messages in ESTIMATE_CASES:
+        write_json(out_dir / f"messages_estimate_{name}.json",
+                   {"case": name, "messages": messages,
+                    "expected_tokens": estimate_messages_tokens(messages)})
+
+    for name, history, keep in KEEP_RECENT_CASES:
+        write_json(out_dir / f"keep_recent_{name}.json",
+                   {"case": name, "history": history, "keep": keep,
+                    "expected": _keep_recent_turns(history, keep)})
+
+    print(f"wrote context/messages_estimate_*.json: {len(ESTIMATE_CASES)} cases, "
+          f"context/keep_recent_*.json: {len(KEEP_RECENT_CASES)} cases")
 
 
 def pinned_sources(py_ref: Path) -> dict[str, str]:
@@ -405,6 +492,7 @@ def main() -> None:
         f.write(json.dumps(codes, indent=2) + "\n")
     print(f"wrote codes/error_codes.json: {len(codes)} codes from {len(sources)} files")
 
+    gen_context_oracle(py_ref)
     gen_payload_fixtures(py_ref)
     gen_workspace_oracle(py_ref)
 

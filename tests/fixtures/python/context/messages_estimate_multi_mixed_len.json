@@ -1,0 +1,22 @@
+{
+  "case": "multi_mixed_len",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a careful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Create a file named harness_smoke.py"
+    },
+    {
+      "role": "assistant",
+      "content": "Tool Outputs: wrote file"
+    },
+    {
+      "role": "user",
+      "content": "now run the smoke test please"
+    }
+  ],
+  "expected_tokens": 29
+}

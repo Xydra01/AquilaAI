@@ -1,0 +1,10 @@
+{
+  "case": "single_empty",
+  "messages": [
+    {
+      "role": "user",
+      "content": ""
+    }
+  ],
+  "expected_tokens": 1
+}

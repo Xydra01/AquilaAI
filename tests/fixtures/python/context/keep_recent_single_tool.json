@@ -1,0 +1,20 @@
+{
+  "case": "single_tool",
+  "history": [
+    {
+      "role": "user",
+      "content": "hello"
+    },
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    }
+  ],
+  "keep": 4,
+  "expected": [
+    {
+      "role": "user",
+      "content": "Tool Outputs: result 1"
+    }
+  ]
+}

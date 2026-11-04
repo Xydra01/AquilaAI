@@ -29,6 +29,7 @@ include(AquilaWarnings)
 include(AquilaTestEnv)
 include(AquilaDeps)
 include(AquilaTreeSitter)
+include(AquilaRapidCheck)
 
 if(AQUILA_ENABLE_CUDA)
     enable_language(CUDA)

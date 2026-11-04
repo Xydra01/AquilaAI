@@ -1,0 +1,6 @@
+{
+  "case": "empty_history",
+  "history": [],
+  "keep": 3,
+  "expected": []
+}
