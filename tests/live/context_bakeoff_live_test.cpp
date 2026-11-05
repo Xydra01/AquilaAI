@@ -73,8 +73,18 @@ Json action_call_schema() {
         s["type"] = "string";
         props[k] = std::move(s);
     }
-    props["args"] = Json::object();
-    props["args"]["type"] = "object";
+    {
+        // args is a BOUNDED object: values limited to string|integer|boolean
+        // scalars (no nested objects/arrays) so the GBNF forces the object to close
+        // instead of recursing forever (the no-EOS cause). The oracles only read
+        // flat string/number/bool args.
+        Json args = Json::object();
+        args["type"] = "object";
+        Json addl = Json::object();
+        addl["type"] = Json::array({"string", "integer", "boolean"});
+        args["additionalProperties"] = std::move(addl);
+        props["args"] = std::move(args);
+    }
     schema["properties"] = std::move(props);
     schema["required"] = Json::array({"thought", "module", "action", "args"});
     schema["additionalProperties"] = false;
@@ -83,8 +93,11 @@ Json action_call_schema() {
 
 GenerationParams schema_params() {
     GenerationParams p;
-    p.temperature = 0.0;  // greedy / deterministic so the comparison is fair
-    p.max_tokens = std::uint32_t{256};
+    p.temperature = 0.3;  // low-temp agent sampling; pure greedy collapses on 4B
+    p.repeat_penalty = 1.15;  // proven Python AQUILA_REPEAT_PENALTY
+    p.repeat_last_n = std::uint32_t{64};
+    p.seed = std::int64_t{1234};  // fixed seed: reproducible across strategies
+    p.max_tokens = std::uint32_t{2048};  // match Python AQUILA_ACT_NUM_PREDICT regime; 256 truncated before the action closed
     if (const char* ng = std::getenv("AQUILA_BAKEOFF_NOGRAMMAR"); !(ng && *ng)) {
         p.constraint = OutputConstraint::json_schema(action_call_schema());
     }
@@ -92,9 +105,9 @@ GenerationParams schema_params() {
     return p;
 }
 
-std::unique_ptr<ContextStrategy> make_strategy(const std::string& which) {
+std::unique_ptr<ContextStrategy> make_strategy(const std::string& which, std::uint64_t eocc_threshold) {
     if (which == "kv_rollback") return std::make_unique<KvRollbackStrategy>(4);
-    if (which == "eocc")        return std::make_unique<EoCCStrategy>(16000, 4);
+    if (which == "eocc")        return std::make_unique<EoCCStrategy>(eocc_threshold, 4);
     return std::make_unique<SacStrategy>();
 }
 
@@ -145,7 +158,10 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
     cfg.n_gpu_layers = bakeoff_gpu_layers();
     cfg.profile = cfg.n_gpu_layers > 0 ? ComputeProfile::gpu_high_vram
                                        : ComputeProfile::cpu_moe_fast;
-    cfg.n_ctx = 16384;  // the EoCC threshold regime (16K)
+    cfg.n_ctx = 16384;  // the EoCC threshold regime (16K); fits 4B CPU
+    if (const char* nc = std::getenv("AQUILA_BAKEOFF_NCTX"); nc && *nc) {
+        cfg.n_ctx = static_cast<std::uint32_t>(std::atoi(nc));  // 9B GPU is VRAM-bound
+    }
 
     std::vector<std::string> strategy_names = {"kv_rollback", "eocc", "sac"};
     if (const char* only = std::getenv("AQUILA_BAKEOFF_ONLY"); only && *only) strategy_names = {std::string(only)};
@@ -173,7 +189,8 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
         s_json["tasks"] = Json::array();
 
         for (const bakeoff::Task& task : tasks) {
-            std::unique_ptr<ContextStrategy> strat = make_strategy(sname);
+            const std::uint64_t eocc_threshold = (cfg.n_ctx * 3) / 4;  // compact before overflow
+            std::unique_ptr<ContextStrategy> strat = make_strategy(sname, eocc_threshold);
             Json t_json = Json::object();
             t_json["name"] = task.name;
             ++score.tasks;
