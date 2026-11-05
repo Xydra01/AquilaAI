@@ -307,11 +307,11 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
     bool grammar_null = false;
     SamplerPtr sampler = build_sampler(params, grammar_null);
     if (grammar_null) {
-        return GenerationResult{
-            /*ok=*/false,
-            /*error_code=*/"invalid_request",
-            /*error_detail=*/"grammar could not be parsed from the output constraint",
-        };
+        GenerationResult gr;
+        gr.ok = false;
+        gr.error_code = "invalid_request";
+        gr.error_detail = "grammar could not be parsed from the output constraint";
+        return gr;
     }
 
     const llama_vocab* vocab = session_.vocab();

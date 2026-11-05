@@ -74,20 +74,22 @@ set(GGML_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 # DLLs on PATH for the tests. Static keeps the test exes self-contained.
 set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
 
-# GPU only on MSVC (H12). sm_89 = RTX 4070. CPU-only everywhere else.
-# Default is CUDA-on for MSVC (GPU lanes unchanged). A developer may pass
-# -DGGML_CUDA=OFF to get a fast CPU-only dev build (a full CUDA build of
-# llama.cpp takes 60+ min); in that case honor the explicit OFF instead of
-# forcing it back ON. Only force the MSVC default when GGML_CUDA was not set.
-if(MSVC)
-    if(NOT DEFINED GGML_CUDA)
+# GPU is OPT-IN, not a blanket MSVC default (H12). CUDA requires the MSVC host
+# compiler AND the CUDA toolkit; CI's plain msvc-release runner has neither, so
+# forcing CUDA on for every MSVC build broke CI (ggml-cuda CMakeLists errors with no
+# toolkit). CUDA is enabled only when the build asks for it via AQUILA_ENABLE_CUDA
+# (the msvc-release-cuda preset sets it), and only on MSVC. An explicit -DGGML_CUDA
+# always wins (lets a dev force CPU-only or CUDA directly). sm_89 = RTX 4070.
+option(AQUILA_ENABLE_CUDA "Build llama.cpp with the CUDA backend (MSVC only)" OFF)
+if(NOT DEFINED GGML_CUDA)
+    if(MSVC AND AQUILA_ENABLE_CUDA)
         set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    else()
+        set(GGML_CUDA OFF CACHE BOOL "" FORCE)
     endif()
-    if(GGML_CUDA AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "" FORCE)
-    endif()
-else()
-    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+endif()
+if(GGML_CUDA AND NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "" FORCE)
 endif()
 
 FetchContent_Declare(llamacpp
