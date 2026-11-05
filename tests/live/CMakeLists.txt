@@ -4,7 +4,9 @@ add_executable(aquila_live_tests
     llama_backend_live_test.cpp
     # M5 task 11.3/11.4 (Req 9 / D14): the context-strategy bake-off harness. Guarded
     # by `#if AQUILA_HAS_LLAMACPP`; skips when the bake-off model is absent.
-    context_bakeoff_live_test.cpp)
+    context_bakeoff_live_test.cpp
+    # M5 task 6.1 (Req 8.4): Ollama<->llama.cpp parity cross-check (same Llama 3.2 family).
+    parity_live_test.cpp)
 target_link_libraries(aquila_live_tests PRIVATE
     aquila::core httplib::httplib Catch2::Catch2WithMain aquila_llamacpp)
 aquila_set_warnings(aquila_live_tests)
@@ -28,3 +30,7 @@ aquila_test_env(live.ollama)
 add_test(NAME live.bakeoff COMMAND aquila_live_tests "[context_bakeoff]" --reporter console)
 set_tests_properties(live.bakeoff PROPERTIES LABELS live)
 aquila_test_env(live.bakeoff)
+
+add_test(NAME live.parity COMMAND aquila_live_tests "[parity]" --reporter console)
+set_tests_properties(live.parity PROPERTIES LABELS live)
+aquila_test_env(live.parity)

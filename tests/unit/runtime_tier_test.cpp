@@ -75,3 +75,14 @@ TEST_CASE("universal flags are present and all false on the scaffold") {
         CHECK_FALSE(cfg.flags.ngram);
     }
 }
+
+// M5 / D14 (RECON_MAP 8.5): the llama.cpp backend reports its OWN flags. gbnf is
+// true; kv_rollback stays FALSE on purpose -- the bake-off proved mid-sequence KV
+// rollback is unsupported on Qwen 3.5 M-RoPE (F1) and the wrong mechanism on every
+// family (1/6), so the flag is not overclaimed; only full-reset rollback is used.
+TEST_CASE("llama backend flags: gbnf true, kv_rollback honestly false (D14)") {
+    const auto f = UniversalFlags::for_llama_backend();
+    CHECK(f.gbnf);
+    CHECK_FALSE(f.kv_rollback);
+    CHECK_FALSE(f.ngram);
+}

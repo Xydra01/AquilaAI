@@ -21,11 +21,31 @@ struct TierLimits {
 
 // Flags present on every tier regardless of hardware (Req 4.3). On the Ollama
 // scaffold (M2) KV rollback and GBNF are unsupported, so they report `false`;
-// M5's llama.cpp backend flips them without a config change.
+// M5's llama.cpp backend reports its own via for_llama_backend() (honest per D14).
 struct UniversalFlags {
-    bool kv_rollback = false;  // real KV checkpoint/rollback (M5)
+    bool kv_rollback = false;  // mid-sequence KV wipe usable as a context mechanism (M5)
     bool gbnf = false;         // GBNF-constrained generation (M5)
     bool ngram = false;        // n-gram prompt-lookup speculation (R17, M5)
+
+    // The flag reality for the M5 llama.cpp backend, recorded honestly after the
+    // D14 bake-off (RECON_MAP 8.5):
+    //   gbnf        = TRUE  -- the backend enforces the action schema by GBNF.
+    //   kv_rollback = FALSE -- M5 flips this to its HONEST value, not simply true.
+    //       The bake-off showed mid-sequence KV rollback is both unsupported on the
+    //       Qwen 3.5 M-RoPE path (F1) AND the wrong context mechanism on every family
+    //       incl. plain-RoPE (kv_rollback strategy scored 1/6 everywhere; it discards
+    //       the tail that holds task state). Only full-reset rollback is used, which
+    //       the value-managed strategies (EoCC/SAC) rely on. So the capability the
+    //       flag names -- a cheap mid-sequence wipe that preserves context -- is NOT
+    //       available, and the flag stays false rather than overclaiming.
+    //   ngram       = FALSE -- R17 prompt-lookup speculation deferred past M5.
+    [[nodiscard]] static UniversalFlags for_llama_backend() noexcept {
+        UniversalFlags f{};
+        f.gbnf = true;
+        f.kv_rollback = false;  // see the note above: honest, not aspirational
+        f.ngram = false;
+        return f;
+    }
 };
 
 // Maps a ComputeProfile to its limits and the universal flags (R16).
