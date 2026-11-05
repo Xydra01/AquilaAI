@@ -23,3 +23,11 @@ __pycache__/
 
 # Local secrets
 .env
+# M5 bake-off transient working artifacts (canonical verdicts are *_verdict.json)
+/bakeoff-results/d14_bakeoff.json
+/bakeoff-results/d14_bakeoff_llama3b_cpu.json
+/bakeoff-results/d14_bakeoff_llama8b_gpu.json
+/bakeoff-results/d14_bakeoff_llama8b_gpu.json
+# diagnostic logs from live-test debugging
+/diag*.log
+/bakeoff-debug.log
