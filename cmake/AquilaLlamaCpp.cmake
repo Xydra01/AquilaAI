@@ -187,4 +187,39 @@ if(AQUILA_LIVE_TESTS)
             "${aquila_qwen4b_gguf_SOURCE_DIR}/Qwen3.5-4B-Q4_K_M.gguf"
             CACHE INTERNAL "Path to the bake-off Qwen 3.5 4B GGUF (fetched)")
     endif()
+
+# --- Base model pair (D15, R18): Llama 3.2 3B (CPU) + Llama 3.1 8B (GPU) --------
+# Ratified from the section-8.5 F3 model-family bake-off: Llama 3.2 3B does GBNF
+# actions cleanly where Qwen 3.5 4B degenerates (F2). Plain-RoPE (arch llama), so no
+# M-RoPE rollback hazard. bartowski Q4_K_M, pinned by SHA256. Local copies on D: are
+# preferred when present; exposed as AQUILA_BASE_GGUF_3B_PATH / _8B_PATH.
+if(AQUILA_LIVE_TESTS)
+    set(_aq_llama3b "D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+    if(EXISTS "${_aq_llama3b}")
+        set(AQUILA_BASE_GGUF_3B_PATH "${_aq_llama3b}" CACHE INTERNAL "Llama 3.2 3B base model (local)")
+    else()
+        FetchContent_Declare(aquila_llama3b_gguf
+            URL https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+            URL_HASH SHA256=6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff
+            DOWNLOAD_NO_EXTRACT TRUE)
+        FetchContent_MakeAvailable(aquila_llama3b_gguf)
+        set(AQUILA_BASE_GGUF_3B_PATH "${aquila_llama3b_gguf_SOURCE_DIR}/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+            CACHE INTERNAL "Llama 3.2 3B base model (fetched)")
+    endif()
+
+    set(_aq_llama8b "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+    if(EXISTS "${_aq_llama8b}")
+        set(AQUILA_BASE_GGUF_8B_PATH "${_aq_llama8b}" CACHE INTERNAL "Llama 3.1 8B base model (local)")
+    else()
+        FetchContent_Declare(aquila_llama8b_gguf
+            URL https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+            URL_HASH SHA256=7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c
+            DOWNLOAD_NO_EXTRACT TRUE)
+        FetchContent_MakeAvailable(aquila_llama8b_gguf)
+        set(AQUILA_BASE_GGUF_8B_PATH "${aquila_llama8b_gguf_SOURCE_DIR}/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+            CACHE INTERNAL "Llama 3.1 8B base model (fetched)")
+    endif()
+    message(STATUS "Aquila base models (D15): 3B=${AQUILA_BASE_GGUF_3B_PATH} 8B=${AQUILA_BASE_GGUF_8B_PATH}")
+endif()
+
 endif()

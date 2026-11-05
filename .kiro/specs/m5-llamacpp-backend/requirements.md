@@ -39,8 +39,14 @@ Proof of done, from the same row:
   `generate_structured(gbnf, max_tokens, ngram)`, `ComputeProfile`.
 - **R16** CPU-first `RuntimeTierConfig`; `gpu_layers` (0 / 999) is already a tier
   knob (M4). M5 honors it when creating the context.
-- **R18** Model: Qwen 3.5 family. A standalone `Qwen3.5-9B-Q4_K_M.gguf` (5.47 GB)
-  exists at `F:\Users\myfri\agent-projects\` for the live/GPU path.
+- **R18 (UPDATED by D15, 2026-11-05)** Base model: **Llama family** -- Llama 3.2 3B
+  Q4_K_M (CPU tier) + Llama 3.1 8B Q4_K_M (GPU tier), plain-RoPE (arch `llama`),
+  pinned by SHA256 in `cmake/AquilaLlamaCpp.cmake`. Chosen over Qwen 3.5 after the
+  section-8.5 F3 model-family bake-off: Qwen 3.5 4B cannot produce a GBNF-constrained
+  action (F2 degeneration), while Llama 3.2 3B completes 6/6. Qwen 3.5 9B remains a
+  usable alternate at the GPU tier (`Qwen3.5-9B-Q4_K_M.gguf` at
+  `F:\Users\myfri\agent-projects\`), but is not the default. The M-RoPE KV-rollback
+  hazard (F1) does not apply to the plain-RoPE Llama base.
 - **R19** Improve, don't transliterate. Diverge from Python only to fix a concrete
   problem, cited by file:line.
 - **R20** Condense. C++ LOC measured against the Python it replaces.
