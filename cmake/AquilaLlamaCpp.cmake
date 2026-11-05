@@ -161,3 +161,30 @@ FetchContent_MakeAvailable(aquila_tiny_gguf)
 # The downloaded file keeps its URL basename under the fetch content dir.
 set(AQUILA_TINY_GGUF_PATH "${aquila_tiny_gguf_SOURCE_DIR}/stories15M-q4_0.gguf"
     CACHE INTERNAL "Path to the tiny test GGUF fetched for the unit tests")
+
+# --- Qwen 3.5 4B Q4_K_M, the bake-off deciding model (M5 task 11, Req 9 / D14) ---
+# ~2.75 GB, so it is OPT-IN: fetched only when AQUILA_LIVE_TESTS is ON (the bake-off
+# is a live test, out of CI). Pinned by URL + SHA256 like every other model/dep for
+# reproducibility. A local copy next to the 9B is preferred when present (same as
+# the 9B's default path), so a developer who already has it does not re-download.
+# Exposed as AQUILA_BAKEOFF_GGUF_4B_PATH for tests/live/CMakeLists.txt.
+#   unsloth/Qwen3.5-4B-GGUF, arch qwen35 (same recurrent/M-RoPE family as the 9B),
+#   Apache-2.0. This is the CPU-first deciding lane; the 9B (GPU) only confirms.
+if(AQUILA_LIVE_TESTS)
+    set(_aq_local_4b "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf")
+    if(EXISTS "${_aq_local_4b}")
+        set(AQUILA_BAKEOFF_GGUF_4B_PATH "${_aq_local_4b}"
+            CACHE INTERNAL "Path to the bake-off Qwen 3.5 4B GGUF (local copy)")
+        message(STATUS "Aquila bake-off: using local Qwen 3.5 4B at ${_aq_local_4b}")
+    else()
+        set(_aq_4b_sha256 bf37767fa8d89ec3ba0ad3d614301f2f6fcb8b49360bc562502955543deb001d)
+        FetchContent_Declare(aquila_qwen4b_gguf
+            URL https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf
+            URL_HASH SHA256=${_aq_4b_sha256}
+            DOWNLOAD_NO_EXTRACT TRUE)
+        FetchContent_MakeAvailable(aquila_qwen4b_gguf)
+        set(AQUILA_BAKEOFF_GGUF_4B_PATH
+            "${aquila_qwen4b_gguf_SOURCE_DIR}/Qwen3.5-4B-Q4_K_M.gguf"
+            CACHE INTERNAL "Path to the bake-off Qwen 3.5 4B GGUF (fetched)")
+    endif()
+endif()

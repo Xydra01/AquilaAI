@@ -40,6 +40,13 @@ add_library(aquila_core STATIC
     agent/runtime_tier.cpp
     agent/run_record.cpp
     agent/context_condenser.cpp
+    # M5 (task 11.2, Req 9 / D14): the three context-management strategies behind
+    # the kept ContextStrategy interface. These drive IInferenceBackend only (no
+    # direct llama.cpp), so they build on every lane -- the bake-off that RUNS them
+    # is the opt-in live test; the WINNER seeds M6's ContextCondenser.
+    context/kv_rollback_strategy.cpp
+    context/eocc_strategy.cpp
+    context/sac_strategy.cpp
     agent/orchestrator_module.cpp
     agent/agent_loop.cpp)
 add_library(aquila::core ALIAS aquila_core)
