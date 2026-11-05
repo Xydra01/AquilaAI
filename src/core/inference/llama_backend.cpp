@@ -271,15 +271,41 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
     // samples from the RIGHT position (fixes the Property 1 "rollback is exact"
     // finding). A no-op when logits are already fresh (no rollback since the last
     // decode) or the context is empty.
+    // Lay down the assistant-turn opener BEFORE sampling. Without it the model is
+    // asked to continue right after the last message's <|im_end|>, which on smaller
+    // Qwen 3.5 models yields control/empty-piece tokens (no visible JSON) instead of
+    // an action. We decode the model's own assistant generation-prompt via the chat
+    // template (add_ass=true over an empty turn); these tokens live inside the
+    // generate scope, so the KvRestoreGuard removes them on return (KV unchanged).
+    {
+        const char* tmpl = llama_model_chat_template(llama_get_model(session_.ctx()), nullptr);
+        std::string opener;
+        if (tmpl != nullptr) {
+            std::vector<char> obuf(256);
+            int32_t on = llama_chat_apply_template(tmpl, nullptr, 0, /*add_ass=*/true,
+                                                   obuf.data(), static_cast<int32_t>(obuf.size()));
+            if (on > static_cast<int32_t>(obuf.size())) {
+                obuf.resize(static_cast<std::size_t>(on));
+                on = llama_chat_apply_template(tmpl, nullptr, 0, /*add_ass=*/true,
+                                               obuf.data(), static_cast<int32_t>(obuf.size()));
+            }
+            if (on > 0) opener.assign(obuf.data(), static_cast<std::size_t>(on));
+        }
+        if (opener.empty()) opener = "<|im_start|>assistant\n";
+        try {
+            session_.decode_text(opener);
+        } catch (const LlamaError&) {
+            // Opener undecodable: fall through; the loop still runs from current logits.
+        }
+    }
+
     session_.ensure_logits_fresh();
 
     // Step 2: build the sampler chain. A set-but-unparseable grammar short-circuits
     // to invalid_request without decoding anything (the guard still restores the KV,
     // which is a no-op here since nothing was decoded).
-    std::fprintf(stderr, "[trace] before build_sampler\n"); std::fflush(stderr);
     bool grammar_null = false;
     SamplerPtr sampler = build_sampler(params, grammar_null);
-    std::fprintf(stderr, "[trace] after build_sampler (null=%d)\n", int(grammar_null)); std::fflush(stderr);
     if (grammar_null) {
         return GenerationResult{
             /*ok=*/false,
@@ -309,7 +335,6 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
 
     std::uint64_t completion_tokens = 0;
     auto last_progress = clock::now();
-    std::fprintf(stderr, "[trace] entering token loop\n"); std::fflush(stderr);
 
     for (;;) {
         // No-progress timeout (Req 6.3): if too long elapses without completing a
@@ -327,9 +352,7 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
         // Sample the next token from the last token's logits. llama_sampler_sample
         // applies the chain AND accepts the token internally (so the grammar sampler
         // advances its state on the accepted token -- no explicit accept needed).
-        if (completion_tokens == 0) { std::fprintf(stderr, "[trace] before first sample\n"); std::fflush(stderr); }
         const llama_token tok = llama_sampler_sample(sampler.get(), ctx, kLastLogits);
-        if (completion_tokens == 0) { std::fprintf(stderr, "[trace] after first sample tok=%d\n", int(tok)); std::fflush(stderr); }
 
         // EOS (end of generation): natural stop, BEFORE converting to text (we never
         // stream the EOS piece) and BEFORE decoding it into the KV.
