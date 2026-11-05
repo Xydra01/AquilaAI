@@ -293,7 +293,9 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
     // --- write the results artifact (Req 9.3/9.6) --------------------------
     std::error_code ec;
     std::filesystem::create_directories("bakeoff-results", ec);
-    const std::string out = "bakeoff-results/d14_bakeoff.json";
+    std::string tag;
+    if (const char* tg = std::getenv("AQUILA_BAKEOFF_TAG"); tg && *tg) tag = std::string("_") + tg;
+    const std::string out = "bakeoff-results/d14_bakeoff" + tag + ".json";
     if (std::ofstream f{out}; f) {
         f << artifact.dump(2) << '\n';
         std::printf("results written: %s\n", out.c_str());
