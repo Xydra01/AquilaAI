@@ -476,12 +476,68 @@ Re-verify: all 21 correctness properties run as RapidCheck tests over `ReplayBac
 
 ---
 
+
+### 8.5 LlamaCppBackend, context-strategy bake-off, and the M-RoPE finding (M5)
+
+Per-feature verdict vs Python's `OllamaClient` and the R15 interface:
+
+| Feature | Python | C++ (M5) | Verdict |
+|---|---|---|---|
+| Inference transport | Ollama HTTP per turn (`main.py`) | llama.cpp C API linked in-process (upstream b12116) | **New.** First real R15 direct backend; no HTTP per turn |
+| KV checkpoint/rollback | n/a (Ollama resends full prompt) | `mark_checkpoint`/`rollback_to` -> `llama_memory_seq_rm` | **Real, with a model-class caveat (below)** |
+| Structured output | `format` JSON mode + heal/alias (H9) | GBNF from `json_schema_to_grammar` + grammar sampler | **Improved.** Malformed JSON impossible by construction on the 9B (Proof 1: 54/54) |
+| `UniversalFlags.kv_rollback` / `gbnf` | report false on the Ollama scaffold | flipped **true** for this backend | as M4 intended; no config-shape change |
+
+**FINDING F1 (M-RoPE, GPU-proof).** Qwen 3.5 is recurrent/hybrid + M-RoPE. A mid-sequence
+`llama_memory_seq_rm(mem,0,P,-1)` (0<P<end) does NOT rewind recurrent/positional state; the
+next decode fails the inconsistent-position check (`X<Y` required) and the backend surfaces a
+typed `decode_failed` (never a crash). Full reset (`rollback_to(0)`) is supported; mid-sequence
+partial rollback is not. Proven in `tests/live/llama_backend_live_test.cpp`. This invalidated the
+R6 KV-wipe condenser as the Qwen 3.5 context mechanism and triggered D14.
+
+**FINDING F2 (4B GBNF degeneration).** The 4B Qwen3.5-Q4_K_M under the action-call GBNF opens a
+valid object (`{ "thought":"`) then locks onto a zero-width token (vocab id 248319, empty
+piece) and repeats it to the token cap -- tokens advance, no text. Diagnosed via per-token dump.
+`generate()` now (a) lays down the assistant-turn opener before sampling (missing opener was why
+smaller models emitted control/empty tokens) and (b) has a degenerate-output guard that stops
+after 16 consecutive zero-width pieces with `error_code=degenerate_output`. The 9B does not hit
+this; the 4B cannot complete a grammar-constrained action through this backend (open-model-under-
+grammar risk, cf. NVIDIA arXiv:2611.05306 Appendix D). So the bake-off was decided on the 9B.
+
+**D14 BAKE-OFF RESULT (Req 9) -- context-management strategy, decided by measurement, not argument.**
+Three strategies behind the kept `ContextStrategy` interface (`src/core/context/`), scored over a
+6-task multi-turn tool-use suite that plants a fact early and forces recall after an 8-turn detour
+(`tests/live/bakeoff_tasks.hpp` + `context_bakeoff_live_test.cpp`), decision rule pre-committed
+(accuracy > fewest tokens > lower latency; crash disqualifies). Run on Qwen3.5-9B-Q4_K_M, n_ctx 8192,
+GPU (artifact `bakeoff-results/d14_bakeoff_9b_verdict.json`):
+
+| Strategy | Completed | Crashed | Tokens | Secs |
+|---|---|---|---|---|
+| kv_rollback (control) | **1/6** | no | 1099 | 35.8 |
+| eocc | **6/6** | no | 3059 | 39.2 |
+| sac | **6/6** | no | 3089 | 42.9 |
+
+**WINNER: EoCC** (End-of-Context Compaction) -- tied with SAC at 6/6, won on fewer tokens.
+The *why* is decisive: kv_rollback's mid-sequence wipe corrupts the Qwen 3.5 context so the model
+**fabricates** the planted facts (e.g. answers `config.json` for a file it was told was
+`harness_report_7f3a.md`, `issue-123` for `AQ-20481`, `feature/fix-issue-123` for
+`feature/bakeoff-metrics`) -- the KV approach is not merely unsupported, it is actively harmful on
+this model. EoCC and SAC never do a mid-sequence wipe (full reset + rebuild), preserve every
+planted fact, and complete 6/6. **D14 resolved: value-managed context (EoCC), not KV rollback.**
+The winning `ContextStrategy` is M6's ContextCondenser starting point; `kv_rollback` stays behind
+`UniversalFlags.kv_rollback` restricted to plain-RoPE / full-reset.
+
+**R20 (M5).** Additive native backend (Python delegated inference to Ollama, so there is no Python
+LOC to shrink here); the condensation it *enables* -- the parser/heal paths a grammar makes
+unnecessary (H9) -- is credited when those are retired. Line counts recorded at commit time.
+
 ## 9. Open decisions (need the user)
 
 Decided (2026-11-02, by user):
 
 - **D1 Branch model: DECIDED.** Python changes committed and pushed on `Aquila-3.5` (`759212a`). `Aquila-cpp` is an **orphan** branch in a separate worktree (`F:\Users\myfri\Aquila-cpp`).
 - **D2 Inference: DECIDED.** Ollama over HTTP first (M2-M4, parity), then direct llama.cpp with KV control (M5).
+- **D14 Context management: DECIDED by bake-off (section 8.5).** Value-managed EoCC, not mid-sequence KV rollback (Qwen 3.5 M-RoPE makes the wipe corrupt context). KV rollback kept behind a flag for plain-RoPE only.
 - **D4 llama.cpp source: DECIDED.** Upstream `ggml-org/llama.cpp`. Open follow-up: check whether the local fork's uncommitted Qwen 3.5 edits (section 1) are needed upstream.
 
 - **D5 Extensibility: DECIDED.** `manifest.json` plugin scripts (reframed as script modules, section 2.2). MCP client/host is still rebuilt as an *integration surface* under D6; it's not the plugin mechanism.
@@ -516,3 +572,4 @@ No decisions are open right now.
 | 2026-11-03 | M2 inference backend (section 8.2). Added H15 (Python's temperature never applied) and H16 (Ollama app bugs); section 1 records the stock Ollama 0.40.14 setup and the `aquila:latest` Modelfile |
 | 2026-11-03 | M3 modules and workspace (section 8.3); tree-sitter added to the deps table. R20 recorded honestly: M3 C++ is larger than the Python it replaces (reasons in the M3 row) |
 | 2026-11-04 | M4 agent loop, condenser, orchestrator, tiers, run record (section 8.4). 21 correctness properties as RapidCheck tests, Python oracle parity, live 3/3 + forced-failure; all five lanes + CI green at `d4bf9e5`. R20 recorded: M4 is essentially flat (862 C++ vs 854 Python, +0.9%) — condenser/tiers/run-record smaller and the heal/alias layer deleted, offset by capabilities Python lacked. Added the token-estimate byte-vs-code-point divergence as an honest M5 note; after-M4 C++ size line (`src 4841, tests 4451`) |
+| 2026-11-05 | M5 LlamaCppBackend + context-strategy bake-off (section 8.5). Direct llama.cpp (upstream b12116), GBNF action calls (9B Proof 1: 54/54 valid). FINDING F1: Qwen 3.5 M-RoPE cannot do mid-sequence KV rollback (typed decode_failed, not a crash). FINDING F2: 4B degenerates on GBNF (zero-width-token loop; assistant-opener + degenerate-output guard added). D14 decided by bake-off on the 9B: EoCC wins 6/6 (SAC 6/6, kv_rollback 1/6 -- the KV wipe fabricates planted facts). Value-managed context seeds M6; kv_rollback gated to plain-RoPE |

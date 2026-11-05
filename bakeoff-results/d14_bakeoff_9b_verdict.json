@@ -1,0 +1,254 @@
+{
+  "model": "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+  "gpu_layers": 999,
+  "n_ctx": 8192,
+  "strategies": [
+    {
+      "name": "kv_rollback",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"The user wants me to create a file with the name they specified earlier. I need to use the exact filename from their previous message: 'config.json'.\", \"module\": \"filesystem\", \"action\": \"create_file\", \"args\": {\"path\": \"config.json\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 185,
+          "resets": 2,
+          "compactions": 0,
+          "typed_failures": 2,
+          "seconds": 6.2156707
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"The user wants to close the issue. I need to use the args.id from earlier in the conversation, which is 'issue-123'.\", \"module\": \"github_issues_api\", \"action\": \"close_issue\", \"args\": {\"id\": \"issue-123\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 186,
+          "resets": 2,
+          "compactions": 0,
+          "typed_failures": 2,
+          "seconds": 6.5400158
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants me to configure the runner by setting max_retries. I need to find what value was established for this in our conversation.\", \"module\": \"runner\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 182,
+          "resets": 2,
+          "compactions": 0,
+          "typed_failures": 2,
+          "seconds": 5.485767
+        },
+        {
+          "name": "remember_path",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"The user wants me to read a config file they mentioned. I need to use the read_file action with args.path set to that path.\", \"module\": \"read_file\", \"action\": \"emit_action\", \"args\": {\"path\": \"/app/config/app.json\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 180,
+          "resets": 2,
+          "compactions": 0,
+          "typed_failures": 2,
+          "seconds": 5.728096
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"User wants to disable the feature. I need to emit a toggle_flag action with args.flag set to 'featureFlag' and args.enabled false, as established in previous turns.\", \"module\": \"tool\", \"action\": \"emit_action\", \"args\": {\"flag\": \"featureFlag\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 191,
+          "resets": 2,
+          "compactions": 0,
+          "typed_failures": 2,
+          "seconds": 6.6326541
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"Opening the pull request with head and base from earlier context.\", \"module\": \"pull_request\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/fix-issue-123\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 175,
+          "resets": 2,
+          "compactions": 0,
+          "typed_failures": 2,
+          "seconds": 5.2298533
+        }
+      ],
+      "completed": 1,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 1099,
+      "seconds_total": 35.8320569
+    },
+    {
+      "name": "eocc",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"User wants me to create a file with the exact path 'harness_report_7f3a.md' that they specified earlier. I need to use the create_file action with args.path set to this filename.\", \"module\": \"create_file\", \"action\": \"emit_action\", \"args\": {\"path\": \"harness_report_7f3a.md\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 519,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 7.7906883
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants to close issue AQ-20481. I will emit the close_issue action with args.id set to 'AQ-20481' as established earlier.\", \"module\": \"issue_tracker\", \"action\": \"close_issue\", \"args\": {\"id\": \"AQ-20481\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 515,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 7.0974898
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user has established a hard rule that max_retries must be exactly 3. I need to emit the set_config action with args.max_retries set to this value.\", \"module\": \"runner\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 508,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 6.0633781
+        },
+        {
+          "name": "remember_path",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants me to read the config file at src/core/agent/tier_defaults.yaml using a read_file action.\", \"module\": \"read_file\", \"action\": \"execute_action\", \"args\": {\"path\": \"src/core/agent/tier_defaults.yaml\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 495,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 5.5749784
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants to disable the feature flag kv_rollback_experimental. I will emit a toggle_flag action with args.flag set to 'kv_rollback_experimental' and args.enabled false.\", \"module\": \"feature_flags\", \"action\": \"toggle_flag\", \"args\": {\"flag\": \"kv_rollback_experimental\", \"enabled\": fa",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 510,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 7.1317496
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Opening the pull request with head=feature/bakeoff-metrics and base=main as established earlier.\", \"module\": \"git\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/bakeoff-metrics\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 512,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 5.4991226
+        }
+      ],
+      "completed": 6,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 3059,
+      "seconds_total": 39.157406800000004
+    },
+    {
+      "name": "sac",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants me to create a file with the filename 'harness_report_7f3a.md' that was established earlier in this conversation. I need to emit exactly one JSON action object.\", \"module\": \"create_file\", \"action\": \"emit_action\", \"args\": {\"path\": \"harness_report_7f3a.md\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 515,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 7.367899
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants to close issue AQ-20481, which was established as the only relevant issue in this session. I need to emit a single JSON action object with exactly one field: 'close_issue', containing an 'args' key that includes the id set to AQ-20481.\", \"module\": \"issue\", \"action\": \"emit",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 538,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 9.6567061
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user has established a hard rule that max_retries must be exactly 3. I need to emit the set_config action with args.max_retries set to this value.\", \"module\": \"runner\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 507,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 5.9391168
+        },
+        {
+          "name": "remember_path",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants me to read the config file at src/core/agent/tier_defaults.yaml as they specified. I need to emit a single JSON action object with the path set to that location.\", \"module\": \"read_file\", \"action\": \"emit_action\", \"args\": {\"path\": \"src/core/agent/tier_defaults.yaml\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 509,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 7.0960181
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"The user wants to disable the feature flag kv_rollback_experimental. I will emit a toggle_flag action with args.flag set to 'kv_rollback_experimental' and args.enabled false.\", \"module\": \"feature_flags\", \"action\": \"toggle_flag\", \"args\": {\"flag\": \"kv_rollback_experimental\", \"enabled\": fa",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 509,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 7.2227755
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Opening the pull request with head=feature/bakeoff-metrics and base=main as established earlier.\", \"module\": \"git\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/bakeoff-metrics\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 511,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 5.5850273
+        }
+      ],
+      "completed": 6,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 3089,
+      "seconds_total": 42.867542799999995
+    }
+  ],
+  "winner": "eocc"
+}
