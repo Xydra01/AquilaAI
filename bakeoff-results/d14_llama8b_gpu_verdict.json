@@ -1,0 +1,254 @@
+{
+  "model": "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+  "gpu_layers": 999,
+  "n_ctx": 8192,
+  "strategies": [
+    {
+      "name": "kv_rollback",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"create_file\", \"module\": \"tool_result\", \"action\": \"emit_action\", \"args\": {\"path\": \"/home/user/project/file.txt\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 161,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.8422162
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"issue\", \"module\": \"project_management\", \"action\": \"close_issue\", \"args\": {\"id\": \"ISSUE-123\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 156,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.6040943
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"runner\", \"module\": \"config\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 157,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.3757268
+        },
+        {
+          "name": "remember_path",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"config\", \"module\": \"read_file\", \"action\": \"execute\", \"args\": {\"path\": \"/home/user/config.json\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 154,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.4311831
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"feature flag\", \"module\": \"toggle_flag\", \"action\": \"emit\", \"args\": {\"flag\": \"my_feature\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 160,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.6144776
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"pull_request\", \"module\": \"git\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/new-feature\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 161,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.7059901
+        }
+      ],
+      "completed": 1,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 949,
+      "seconds_total": 9.5736881
+    },
+    {
+      "name": "eocc",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"create_file\", \"module\": \"filesystem\", \"action\": \"create_file\", \"args\": {\"path\": \"harness_report_7f3a.md\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 479,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.7528523
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"AQ-20481\", \"module\": \"issue_tracker\", \"action\": \"close_issue\", \"args\": {\"id\": \"AQ-20481\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 476,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.727019
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Configure the runner\", \"module\": \"runner\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 478,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.4300568
+        },
+        {
+          "name": "remember_path",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"config\", \"module\": \"read_file\", \"action\": \"read\", \"args\": {\"path\": \"src/core/agent/tier_defaults.yaml\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 473,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.6141498
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"toggle_flag\", \"module\": \"feature_flags\", \"action\": \"disable\", \"args\": {\"flag\": \"kv_rollback_experimental\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 475,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.7162331
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Open the pull request\", \"module\": \"pull_request\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/bakeoff-metrics\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 498,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.9966937
+        }
+      ],
+      "completed": 6,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 2879,
+      "seconds_total": 10.2370047
+    },
+    {
+      "name": "sac",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"create_file\", \"module\": \"filesystem\", \"action\": \"write\", \"args\": {\"path\": \"harness_report_7f3a.md\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 469,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.6545082
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"AQ-20481\", \"module\": \"issue_tracker\", \"action\": \"close_issue\", \"args\": {\"id\": \"AQ-20481\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 466,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.5572619
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Configure the runner\", \"module\": \"runner\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 468,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.3818132
+        },
+        {
+          "name": "remember_path",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"config\", \"module\": \"read_file\", \"action\": \"read\", \"args\": {\"path\": \"src/core/agent/tier_defaults.yaml\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 463,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.7185214
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"toggle_flag\", \"module\": \"feature_flags\", \"action\": \"set_enabled\", \"args\": {\"flag\": \"kv_rollback_experimental\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 466,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.8312809
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"open_pr\", \"module\": \"git\", \"action\": \"open_pull_request\", \"args\": {\"head\": \"feature/bakeoff-metrics\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 486,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 1.9524847
+        }
+      ],
+      "completed": 6,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 2818,
+      "seconds_total": 10.0958703
+    }
+  ],
+  "winner": "sac"
+}

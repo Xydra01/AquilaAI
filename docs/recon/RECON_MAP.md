@@ -531,6 +531,36 @@ The winning `ContextStrategy` is M6's ContextCondenser starting point; `kv_rollb
 LOC to shrink here); the condensation it *enables* -- the parser/heal paths a grammar makes
 unnecessary (H9) -- is credited when those are retired. Line counts recorded at commit time.
 
+
+**FINDING F3 (model-family bake-off, 2026-11-05).** The D14 suite was re-run across model
+families to answer whether the base model should change (the Qwen 3.5 M-RoPE + 4B-degeneration
+problems are family-specific). Llama (plain-RoPE, arch `llama`) pinned from bartowski Q4_K_M:
+Llama-3.2-3B-Instruct (CPU) and Meta-Llama-3.1-8B-Instruct (GPU), stored on D:.
+
+| Model | Lane | kv_rollback | eocc | sac | GBNF actions |
+|---|---|---|---|---|---|
+| Qwen3.5-4B | CPU | - | - | - | **NO - zero-width degeneration (F2), 0/6** |
+| Qwen3.5-9B | GPU | 1/6 | 6/6 | 6/6 | yes |
+| Llama-3.2-3B | CPU | 1/6 | 6/6 | 6/6 | **yes (clean)** |
+| Llama-3.1-8B | GPU | 1/6 | 6/6 | 6/6 | yes |
+
+Conclusions:
+- **CPU tier: Llama 3.2 3B >> Qwen 3.5 4B.** The 4B cannot produce a grammar-constrained action
+  at all (F2); the 3B Llama completes 6/6 with EoCC/SAC. For a CPU-first agent (R16) this is a
+  strong argument to make Llama the base family at the small size (proposed D15; R18 revisit).
+- **D14 reconfirmed and generalized.** EoCC and SAC go 6/6 on every capable model; kv_rollback
+  goes 1/6 on ALL of them -- including plain-RoPE Llama. So the KV-wipe approach is not merely
+  unsupported on Qwen M-RoPE; it is the wrong mechanism for this recall pattern on every family
+  (the mid-sequence wipe discards the tail that holds the planted fact). Value-managed context
+  wins independent of model.
+- SAC narrowly beats EoCC on both Llama models (fewer tokens, both 6/6); EoCC won on Qwen-9B.
+  They are effectively tied; M6 can pick either as the ContextCondenser basis (SAC = fresh
+  context per action; EoCC = grow-then-compact). GPU 8B ran the whole matrix in ~10s/strategy.
+
+Artifacts: `bakeoff-results/d14_llama3b_cpu_verdict.json`, `d14_llama8b_gpu_verdict.json`,
+`d14_bakeoff_9b_verdict.json`. Llama GGUFs pinned by SHA256 (bartowski):
+Llama-3.2-3B-Instruct-Q4_K_M `6c1a2b41...728ff`; Meta-Llama-3.1-8B-Instruct-Q4_K_M `7b064f58...557c`.
+
 ## 9. Open decisions (need the user)
 
 Decided (2026-11-02, by user):
@@ -538,6 +568,7 @@ Decided (2026-11-02, by user):
 - **D1 Branch model: DECIDED.** Python changes committed and pushed on `Aquila-3.5` (`759212a`). `Aquila-cpp` is an **orphan** branch in a separate worktree (`F:\Users\myfri\Aquila-cpp`).
 - **D2 Inference: DECIDED.** Ollama over HTTP first (M2-M4, parity), then direct llama.cpp with KV control (M5).
 - **D14 Context management: DECIDED by bake-off (section 8.5).** Value-managed EoCC, not mid-sequence KV rollback (Qwen 3.5 M-RoPE makes the wipe corrupt context). KV rollback kept behind a flag for plain-RoPE only.
+- **D15 Base model family: PROPOSED (needs user ratify), evidence in section 8.5 F3.** CPU-tier bake-off shows Qwen 3.5 4B cannot do GBNF actions (degenerates) while Llama 3.2 3B completes 6/6. Proposal: Llama 3.2 3B (CPU) + Llama 3.1 8B (GPU) as the base pair, revisiting R18 (currently pins Qwen 3.5). Qwen 3.5 9B stays usable at the GPU tier if preferred. Awaiting user decision.
 - **D4 llama.cpp source: DECIDED.** Upstream `ggml-org/llama.cpp`. Open follow-up: check whether the local fork's uncommitted Qwen 3.5 edits (section 1) are needed upstream.
 
 - **D5 Extensibility: DECIDED.** `manifest.json` plugin scripts (reframed as script modules, section 2.2). MCP client/host is still rebuilt as an *integration surface* under D6; it's not the plugin mechanism.

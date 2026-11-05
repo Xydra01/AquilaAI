@@ -1,0 +1,254 @@
+{
+  "model": "D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+  "gpu_layers": 0,
+  "n_ctx": 16384,
+  "strategies": [
+    {
+      "name": "kv_rollback",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"Creating a new file with the given path\", \"module\": \"file_creation\", \"action\": \"create_file\", \"args\": {\"path\": \"/home/user/new_file.txt\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 167,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.1486955
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"Closing the issue\", \"module\": \"issue_closeer\", \"action\": \"close_issue\", \"args\": {\"id\": 7}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 156,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 11.6095504
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Configure the runner\", \"module\": \"runner_configurator\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 161,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 11.744834
+        },
+        {
+          "name": "remember_path",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"Reading the specified configuration file\", \"module\": \"config_reader\", \"action\": \"read_file\", \"args\": {\"path\": \"/Users/username/Documents/config.json\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 161,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 11.8497117
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"Disabling the module\", \"module\": \"toggle_flag\", \"action\": \"emit_action\", \"args\": {\"flag\": \"disable_flag\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 163,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 11.8683776
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "wrong_answer",
+          "content_sample": "{\"thought\": \"Opening the pull request\", \"module\": \"pull_request\", \"action\": \"open_pr\", \"args\": {\"head\": \"main\", \"base\": \"feature/new-feature\"}}",
+          "done_reason": "stop",
+          "completed": false,
+          "tokens_decoded": 164,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.1300938
+        }
+      ],
+      "completed": 1,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 972,
+      "seconds_total": 71.351263
+    },
+    {
+      "name": "eocc",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Creating the file\", \"module\": \"file_creator\", \"action\": \"create_file\", \"args\": {\"path\": \"harness_report_7f3a.md\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 481,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.7127844
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Closing issue AQ-20481\", \"module\": \"issue_tracker\", \"action\": \"close_issue\", \"args\": {\"id\": \"AQ-20481\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 478,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.504191
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Configure the runner\", \"module\": \"runner_config\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 479,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.5708235
+        },
+        {
+          "name": "remember_path",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Reading config file\", \"module\": \"src/core/agent/tier_defaults.yaml\", \"action\": \"read_file\", \"args\": {\"path\": \"src/core/agent/tier_defaults.yaml\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 482,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 13.8050797
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Disabling feature flag kv_rollback_experimental\", \"module\": \"flag_manager\", \"action\": \"toggle_flag\", \"args\": {\"flag\": \"kv_rollback_experimental\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 483,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 13.2846152
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Opening pull request\", \"module\": \"pull_request\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/bakeoff-metrics\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 497,
+          "resets": 0,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.8798928
+        }
+      ],
+      "completed": 6,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 2900,
+      "seconds_total": 77.75738659999999
+    },
+    {
+      "name": "sac",
+      "tasks": [
+        {
+          "name": "remember_filename",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Create the target file\", \"module\": \"create_file\", \"action\": \"emit_create_file\", \"args\": {\"path\": \"/home/user/harness_report_7f3a.md\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 476,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.1723589
+        },
+        {
+          "name": "remember_issue_id",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Close the issue\", \"module\": \"issue_manager\", \"action\": \"close_issue\", \"args\": {\"id\": \"AQ-20481\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 465,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 11.0165788
+        },
+        {
+          "name": "remember_numeric_constraint",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Configure the runner\", \"module\": \"runner_config\", \"action\": \"set_config\", \"args\": {\"max_retries\": 3}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 469,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 10.7528648
+        },
+        {
+          "name": "remember_path",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Reading config file\", \"module\": \"src/core/agent/tier_defaults.yaml\", \"action\": \"read_file\", \"args\": {\"path\": \"src/core/agent/tier_defaults.yaml\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 472,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.1670492
+        },
+        {
+          "name": "remember_flag",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"disable feature flag\", \"module\": \"toggle_flag\", \"action\": \"emit_action\", \"args\": {\"flag\": \"kv_rollback_experimental\", \"enabled\": false}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 467,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 11.5303486
+        },
+        {
+          "name": "remember_branch_pair",
+          "outcome": "completed",
+          "content_sample": "{\"thought\": \"Opening the pull request with the correct heads and bases.\", \"module\": \"pull_request\", \"action\": \"open_pr\", \"args\": {\"head\": \"feature/bakeoff-metrics\", \"base\": \"main\"}}",
+          "done_reason": "stop",
+          "completed": true,
+          "tokens_decoded": 494,
+          "resets": 1,
+          "compactions": 0,
+          "typed_failures": 0,
+          "seconds": 12.6767249
+        }
+      ],
+      "completed": 6,
+      "tasks_total": 6,
+      "crashed": false,
+      "tokens_total": 2843,
+      "seconds_total": 70.3159252
+    }
+  ],
+  "winner": "sac"
+}
