@@ -104,8 +104,8 @@ session with a small model (or at the pure-function level) so they stay determin
     - Add a test (guarded; live where both backends need the model) comparing `LlamaCppBackend` and `OllamaHttpBackend` on the same prompt + action-call schema: both yield schema-valid `ActionCall`s and both are deterministic at a fixed seed; record any tokenizer/template/sampler divergence as an explained finding (R19)
     - _Requirements: 8.4_
 
-- [ ] 7. Add the opt-in GPU/live proofs (excluded from CI)
-  - [ ] 7.1 Implement the live proofs: GBNF validity (PASS) and the honest KV/M-RoPE finding
+- [x] 7. Add the opt-in GPU/live proofs (excluded from CI)
+  - [x] 7.1 Implement the live proofs: GBNF validity (PASS) and the honest KV/M-RoPE finding
     - `tests/live/llama_backend_live_test.cpp` (`tests/live/CMakeLists.txt`, `-DAQUILA_LIVE_TESTS=ON`, excluded from CI) against `Qwen3.5-9B-Q4_K_M.gguf` on the RTX 4070
     - **Proof 1 (GBNF validity) — PASSED:** N >= 50 schema-constrained generations, every output `parse<ActionCall>`-valid (0 invalid). Recorded: 60 trials, 54 EOS-completed, 54/54 valid, 0 invalid. Keep as the "invalid JSON impossible in N trials" proof-of-done
     - **Proof 2 (prefix reuse) — REFRAME to the finding:** assert that a mid-sequence `rollback_to(P)` on Qwen 3.5 surfaces the M-RoPE inconsistent-position condition as a typed `GenerationResult` failure (NOT a crash), and that a full reset (`rollback_to(0)`) + re-decode succeeds. Do NOT assert an unsupported partial-rollback token saving on Qwen 3.5; point the measured prefix-reuse savings claim at the CPU Property 8 (plain-RoPE small model), recording both the CPU numbers and the Qwen 3.5 typed-failure
@@ -124,23 +124,23 @@ session with a small model (or at the pure-function level) so they stay determin
     - Add RECON_MAP 8.5 (per-feature verdicts vs Python's `OllamaClient` and the R15 interface); record `UniversalFlags.kv_rollback`/`gbnf` flipped true for this backend and the R17 CPU-engine items deferred; record the upstream-vs-fork Qwen 3.5 load finding (task 1) and resolution; confirm the S7 KV API note against the upstream header actually built; add llama.cpp to the dependencies table and the R20 line-count accounting (additive native backend; downstream parser/heal condensation credited when retired)
     - _Requirements: 8.5, 8.6, 1.4, 7.3_
 
-- [ ] 11. Context-strategy bake-off (decide D14 / resolve the M-RoPE finding)
-  - [ ] 11.1 Pin the Qwen 3.5 4B model and define the `ContextStrategy` interface
+- [x] 11. Context-strategy bake-off (decide D14 / resolve the M-RoPE finding)
+  - [x] 11.1 Pin the Qwen 3.5 4B model and define the `ContextStrategy` interface
     - Add `Qwen3.5-4B-Q4_K_M.gguf` pinned by URL + SHA256 (compute the hash from the archive as the 9B/tiny models were pinned); wire it for the opt-in live/bake-off lane like `AQUILA_TINY_GGUF`
     - Create `src/core/include/aquila/context/context_strategy.hpp`: the kept `ContextStrategy` interface (`set_prefix`/`add_turn`/`next_action`/`stats`/`name`) + `StrategyStats` (tokens decoded, compactions, resets), compiled into `aquila_core` behind `AQUILA_LLAMACPP`
     - _Requirements: 9.1, 9.4_
-  - [ ] 11.2 Implement the three strategies behind the interface
+  - [x] 11.2 Implement the three strategies behind the interface
     - `KvRollbackStrategy` (control): pin prefix, append turns, mid-sequence `rollback_to` wipe; surface the Qwen 3.5 M-RoPE condition as a typed failure (Req 3.6), valid on plain-RoPE
     - `EoCCStrategy`: grow to a 16K threshold, then condense the message list + rebuild, relying on llama.cpp auto prefix-cache (full reset, no partial rollback)
     - `SacStrategy`: fresh context per action fed an aggressively summarized state each turn
     - Sources under `src/core/context/*.cpp`, added to `aquila_core` under the guard; all reuse the M5 `LlamaCppBackend` unchanged (Req 9.7)
     - _Requirements: 9.1, 9.7_
-  - [ ] 11.3 Build the task suite and the scoring harness with the decision rule
+  - [x] 11.3 Build the task suite and the scoring harness with the decision rule
     - `tests/live/bakeoff_tasks.hpp`: 5-10 multi-turn tool-use scenarios that force long context (a fact set early must be recalled after many intervening tool calls) + a deterministic oracle per task
     - `tests/live/context_bakeoff_live_test.cpp` (`-DAQUILA_LIVE_TESTS=ON`, out of CI): run each strategy over the suite, record per task completion/tokens/latency/outcome-class/fidelity to a results artifact (JSON under a results dir)
     - Encode the decision rule in the harness so the winner is computed, not eyeballed: crash disqualifies; max completion rate wins; ties broken by fewest tokens then lowest latency
     - _Requirements: 9.2, 9.3, 9.5_
-  - [ ] 11.4 Run the bake-off and record the decision
+  - [x] 11.4 Run the bake-off and record the decision
     - Run on **Qwen 3.5 4B Q4_K_M (CPU)** — the deciding lane; apply the rule to pick the winner
     - Run on **Qwen 3.5 9B Q4_K_M (GPU, RTX 4070)** as a non-gating confirmation lane when the GPU is free; record whether it agrees
     - Record in RECON_MAP: the winning strategy, the measured numbers behind the decision, the disqualified/rejected strategies with why, the M-RoPE finding resolution, and the explicit hand-off (the winning `ContextStrategy` is M6's ContextCondenser starting point). Flag the open-model verbosity-collapse risk (paper Appendix D) for M6 tuning
