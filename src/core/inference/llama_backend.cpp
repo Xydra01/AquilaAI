@@ -334,6 +334,7 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
         capped ? static_cast<std::uint64_t>(*params.max_tokens) : 0;
 
     std::uint64_t completion_tokens = 0;
+    std::uint64_t empty_piece_run = 0;  // zero-width-token degenerate-loop guard
     auto last_progress = clock::now();
 
     for (;;) {
@@ -381,6 +382,20 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
         const std::string piece = token_to_piece(vocab, tok);
         if (!piece.empty()) {
             content += piece;
+        }
+        // Degenerate-loop guard: some GBNF string rules admit a zero-width token
+        // (a byte-fallback / control token) that greedy sampling repeats forever --
+        // tokens advance but no text appears. Stop on a long empty run with a typed
+        // outcome instead of burning the whole budget (M5 finding, small Qwen 3.5).
+        if (piece.empty()) {
+            if (++empty_piece_run >= 16) {
+                result.ok = false;
+                result.error_code = "degenerate_output";
+                result.error_detail = "model emitted a run of zero-width tokens (stuck)";
+                break;
+            }
+        } else {
+            empty_piece_run = 0;
         }
         last_progress = clock::now();
 
