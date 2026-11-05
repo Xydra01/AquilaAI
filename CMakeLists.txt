@@ -30,6 +30,7 @@ include(AquilaTestEnv)
 include(AquilaDeps)
 include(AquilaTreeSitter)
 include(AquilaRapidCheck)
+include(AquilaLlamaCpp)
 
 if(AQUILA_ENABLE_CUDA)
     enable_language(CUDA)

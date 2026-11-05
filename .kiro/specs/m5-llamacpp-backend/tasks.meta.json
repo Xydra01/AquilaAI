@@ -1,0 +1,246 @@
+{
+  "pbtResults": {
+    "2.3 Write property tests for checkpoint/rollback over a small-model session": {
+      "status": "failed",
+      "failingExample": "Property 1 (Rollback is exact — deterministic generate equals), Falsifiable after 2 tests and 2 shrinks:\n  prefix (std::string) = \" \"\n  extra  (std::string) = \"d\"\nAssertion: RC_ASSERT(after_rollback.content == fresh_gen.content) at tests/unit/llama_session_test.cpp:171\nExpands to: \"Suddenled, a big,\" == \"\\\"I want to go to the park\"\n\nThe position arm of Property 1 passes (position() is restored exactly to the checkpoint, and Properties 2 & 3 pass), so the KV *position* rollback is exact. What fails is the deterministic-continuation arm: a greedy generate AFTER rollback_to(checkpoint) does not match a greedy generate from a fresh session that only decoded the prefix.\n\nRoot-cause (real implementation finding, test left intact): LlamaSession::rollback_to wipes KV cells [checkpoint,end) via llama_memory_seq_rm and resets pos_, but it does NOT refresh the context's cached logits. LlamaCppBackend::generate then samples its FIRST token from llama_sampler_sample(ctx, /*idx=*/-1), i.e. the logits of the LAST decoded token — which after a rollback are the logits that followed the now-wiped `extra` tokens, not the logits following the prefix at position checkpoint-1. So the post-rollback continuation is seeded from stale logits and diverges from the fresh prefix-only continuation. generate()'s own comment assumes idx==-1 \"samples from the right position\", which is true after an append but false immediately after a rollback_to. Fix belongs in the implementation (re-establish logits at the resume position after rollback — e.g. re-decode the last pre-checkpoint token, or have generate detect a rollback and re-prime), not in the test.",
+      "lastRunTimestamp": 1793836264466
+    }
+  },
+  "executionHistory": {
+    "1. Pin upstream llama.cpp, add the cross-lane build strategy, and verify Qwen 3.5 loads": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778865896
+      },
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778871617
+      },
+      {
+        "executionId": "a47a6226-9392-4f21-bd79-b1035048bc3c",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793829802349
+      },
+      {
+        "executionId": "a47a6226-9392-4f21-bd79-b1035048bc3c",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793830887415
+      }
+    ],
+    "2.1 Implement the RAII wrappers and session construction": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778865978
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793831194000
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793832004863
+      }
+    ],
+    "2.2 Implement tokenize/decode, position, and rollback": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866025
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793832010074
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793833981573
+      }
+    ],
+    "3.1 Implement `gbnf_for` and `make_grammar_sampler`": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866072
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793832010880
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793833977568
+      }
+    ],
+    "4.1 Implement construction, `append`, `mark_checkpoint`, `rollback_to`, and profile": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866117
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793833990829
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793834360288
+      }
+    ],
+    "4.2 Implement `generate` with the sampler chain and streaming": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866164
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793834365843
+      },
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793834740350
+      }
+    ],
+    "5. Checkpoint - Ensure all tests pass for the session, grammar, and backend": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866215
+      },
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793839520304
+      }
+    ],
+    "7.1 Implement the N-trials GBNF validity and prefix-reuse measurement live tests": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866259
+      }
+    ],
+    "8. Checkpoint - Ensure all tests pass for parity and the live proofs": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866305
+      }
+    ],
+    "9.1 Verify build lanes and sanitizers clean on a fresh clone": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866350
+      }
+    ],
+    "9.2 Record RECON_MAP section 8.5, flags, R20, and the S7/Qwen findings": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866396
+      }
+    ],
+    "10. Final checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "8753c57e-514f-4e44-969e-ada23e889990",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793778866445
+      }
+    ],
+    "3. Implement the `GrammarFactory` (schema -> GBNF)": [
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793833977640
+      }
+    ],
+    "2. Implement RAII handle wrappers and `LlamaSession`": [
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793833981647
+      }
+    ],
+    "4. Implement `LlamaCppBackend`": [
+      {
+        "executionId": "959f966e-1d05-418a-8892-25d98d65a720",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793834740461
+      }
+    ],
+    "2.3 Write property tests for checkpoint/rollback over a small-model session": [
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793835589030
+      },
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793836723316
+      }
+    ],
+    "2.4 Write the RAII / no-leak lifecycle and context-overflow unit tests": [
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793835590451
+      },
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793836725002
+      }
+    ],
+    "3.2 Write unit tests for the grammar factory": [
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793836732957
+      },
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793839514493
+      }
+    ],
+    "4.3 Write property tests for generate, grammar validity, cancellation, and prefix reuse": [
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793836734320
+      },
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793839515856
+      }
+    ],
+    "4.4 Write the streaming/EOS/error-vocabulary unit tests": [
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793836735379
+      },
+      {
+        "executionId": "19974041-8399-4232-85e4-024312b96726",
+        "chatSessionId": "sess_e7f3a8d0-a1e8-4800-a6a9-f8d0a34f6492",
+        "timestamp": 1793839516630
+      }
+    ]
+  }
+}
