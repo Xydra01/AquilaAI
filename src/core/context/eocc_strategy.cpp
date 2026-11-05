@@ -41,7 +41,7 @@ void EoCCStrategy::rebuild(IInferenceBackend& backend) {
         backend.append(m);
     }
     if (!summary_.empty()) {
-        backend.append(Message{Role::system, "Summary of earlier progress:\n" + summary_});
+        backend.append(Message{Role::system, "Summary of earlier progress:\n" + summary_, {}});
     }
     for (const Message& m : turns_) {
         backend.append(m);

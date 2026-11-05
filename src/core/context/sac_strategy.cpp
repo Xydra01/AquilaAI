@@ -15,7 +15,7 @@ void SacStrategy::rebuild_minimal(IInferenceBackend& backend) {
         backend.append(m);
     }
     if (!summary_.empty()) {
-        backend.append(Message{Role::system, "State so far:\n" + summary_});
+        backend.append(Message{Role::system, "State so far:\n" + summary_, {}});
     }
     if (have_turn_) {
         backend.append(current_turn_);
