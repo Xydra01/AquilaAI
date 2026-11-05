@@ -1,4 +1,4 @@
-﻿// LlamaSession implementation (M5 task 2.1).
+// LlamaSession implementation (M5 task 2.1).
 //
 // The ENTIRE translation unit is wrapped in `#if AQUILA_HAS_LLAMACPP` so it
 // compiles to an empty object file on the stub lanes (mingw-san / msvc-asan),
@@ -20,6 +20,8 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -119,7 +121,9 @@ int decode_span(llama_context* ctx, const llama_token* tokens, std::size_t n,
     const std::int32_t last = n_tok - 1;
     b.logits[last] = 1;  // request logits for the final token only
 
+    std::fprintf(stderr, "[trace] decode_span n=%d base_pos=%zu before llama_decode\n", int(n_tok), base_pos); std::fflush(stderr);
     const std::int32_t rc = llama_decode(ctx, b);
+    std::fprintf(stderr, "[trace] decode_span rc=%d\n", int(rc)); std::fflush(stderr);
     if (rc != 0) {
         // rc > 0 is a non-fatal warning (e.g. could not find a KV slot), rc < 0 is
         // a hard failure; either way the append did not land cleanly, so surface a

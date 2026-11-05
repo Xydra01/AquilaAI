@@ -85,7 +85,9 @@ GenerationParams schema_params() {
     GenerationParams p;
     p.temperature = 0.0;  // greedy / deterministic so the comparison is fair
     p.max_tokens = std::uint32_t{256};
-    p.constraint = OutputConstraint::json_schema(action_call_schema());
+    if (const char* ng = std::getenv("AQUILA_BAKEOFF_NOGRAMMAR"); !(ng && *ng)) {
+        p.constraint = OutputConstraint::json_schema(action_call_schema());
+    }
     p.timeout_s = 180.0;
     return p;
 }
@@ -145,8 +147,12 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
                                        : ComputeProfile::cpu_moe_fast;
     cfg.n_ctx = 16384;  // the EoCC threshold regime (16K)
 
-    const std::vector<std::string> strategy_names = {"kv_rollback", "eocc", "sac"};
-    const std::vector<bakeoff::Task> tasks = bakeoff::suite(/*n_detour=*/8);
+    std::vector<std::string> strategy_names = {"kv_rollback", "eocc", "sac"};
+    if (const char* only = std::getenv("AQUILA_BAKEOFF_ONLY"); only && *only) strategy_names = {std::string(only)};
+    std::size_t n_detour = 8;
+    if (const char* nd = std::getenv("AQUILA_BAKEOFF_DETOUR"); nd && *nd) n_detour = static_cast<std::size_t>(std::atoi(nd));
+    std::vector<bakeoff::Task> tasks = bakeoff::suite(n_detour);
+    if (const char* lim = std::getenv("AQUILA_BAKEOFF_LIMIT"); lim && *lim) { std::size_t k = static_cast<std::size_t>(std::atoi(lim)); if (k < tasks.size()) tasks.resize(k); }
 
     Json artifact = Json::object();
     artifact["model"] = bakeoff_model();
@@ -173,6 +179,7 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
             ++score.tasks;
 
             const auto t0 = std::chrono::steady_clock::now();
+            std::string last_content; std::string last_done_reason;
             bool completed = false;
             bool crashed = false;
             std::string outcome;
@@ -183,6 +190,7 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
                 }
                 strat->add_turn(backend, Message{Role::user, task.final_prompt});
                 const GenerationResult r = strat->next_action(backend, schema_params(), nullptr);
+                last_content = r.content; last_done_reason = r.done_reason;
                 if (r.ok && r.done_reason == "stop") {
                     try {
                         const ActionCall call = parse<ActionCall>(r.content);
@@ -193,6 +201,10 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
                     }
                 } else {
                     outcome = r.ok ? "truncated" : ("typed_failure:" + r.error_code);
+                    if (const char* d = std::getenv("AQUILA_BAKEOFF_DEBUG"); d && *d) {
+                        std::printf("    DEBUG[%s] content[%zu]: %.300s\n",
+                                    r.error_code.c_str(), r.content.size(), r.content.c_str());
+                    }
                 }
             } catch (const std::exception& e) {
                 // A typed LlamaError is a std::exception too; the strategies CATCH the
@@ -213,6 +225,8 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
             if (crashed) score.crashed = true;
 
             t_json["outcome"] = outcome;
+            t_json["content_sample"] = last_content.substr(0, 300);
+            t_json["done_reason"] = last_done_reason;
             t_json["completed"] = completed;
             t_json["tokens_decoded"] = st.tokens_decoded;
             t_json["resets"] = st.resets;
@@ -225,6 +239,7 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
                         sname.c_str(), task.name.c_str(), outcome.c_str(), secs,
                         static_cast<unsigned long long>(st.tokens_decoded),
                         static_cast<unsigned long long>(st.resets));
+            std::fflush(stdout);
         }
 
         s_json["completed"] = score.completed;

@@ -1,4 +1,4 @@
-﻿// LlamaCppBackend implementation (M5 task 4.1).
+// LlamaCppBackend implementation (M5 task 4.1).
 //
 // The ENTIRE translation unit is wrapped in `#if AQUILA_HAS_LLAMACPP` so it compiles
 // to an empty object file on the stub lanes (mingw-san / msvc-asan), exactly like
@@ -38,6 +38,7 @@
 #if AQUILA_HAS_LLAMACPP
 
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -275,8 +276,10 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
     // Step 2: build the sampler chain. A set-but-unparseable grammar short-circuits
     // to invalid_request without decoding anything (the guard still restores the KV,
     // which is a no-op here since nothing was decoded).
+    std::fprintf(stderr, "[trace] before build_sampler\n"); std::fflush(stderr);
     bool grammar_null = false;
     SamplerPtr sampler = build_sampler(params, grammar_null);
+    std::fprintf(stderr, "[trace] after build_sampler (null=%d)\n", int(grammar_null)); std::fflush(stderr);
     if (grammar_null) {
         return GenerationResult{
             /*ok=*/false,
@@ -306,6 +309,7 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
 
     std::uint64_t completion_tokens = 0;
     auto last_progress = clock::now();
+    std::fprintf(stderr, "[trace] entering token loop\n"); std::fflush(stderr);
 
     for (;;) {
         // No-progress timeout (Req 6.3): if too long elapses without completing a
@@ -323,7 +327,9 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
         // Sample the next token from the last token's logits. llama_sampler_sample
         // applies the chain AND accepts the token internally (so the grammar sampler
         // advances its state on the accepted token -- no explicit accept needed).
+        if (completion_tokens == 0) { std::fprintf(stderr, "[trace] before first sample\n"); std::fflush(stderr); }
         const llama_token tok = llama_sampler_sample(sampler.get(), ctx, kLastLogits);
+        if (completion_tokens == 0) { std::fprintf(stderr, "[trace] after first sample tok=%d\n", int(tok)); std::fflush(stderr); }
 
         // EOS (end of generation): natural stop, BEFORE converting to text (we never
         // stream the EOS piece) and BEFORE decoding it into the KV.
