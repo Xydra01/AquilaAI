@@ -71,6 +71,58 @@ inline constexpr std::string_view kCodeSmokeFileRecipeJson = R"AQ({
 }
 )AQ";
 
+// src/core/agent/recipes/knowledge_smoke.recipe.json, verbatim.
+inline constexpr std::string_view kKnowledgeSmokeRecipeJson = R"AQ({
+  "recipe_id": "knowledge_smoke",
+  "goal_template": "Retrieve documentation, store verified facts into permanent memory, and complete the objective: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "get_all_facts",
+        "search_local_docs",
+        "store_fact"
+      ]
+    },
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Search local documents for knowledge",
+    "Record verified facts using KnowledgeModule.store_fact",
+    "Complete recipe"
+  ],
+  "post_llm_validation_hook": {
+    "module": "KnowledgeModule",
+    "action": "get_all_facts",
+    "must_succeed": true,
+    "on_failure_instruction": "Knowledge store validation failed."
+  }
+}
+)AQ";
+
 }  // namespace detail
 
 // The "code_smoke_file" exit-gate smoke recipe (R12, Req 7.1/7.2/7.5): load the
@@ -86,6 +138,12 @@ inline constexpr std::string_view kCodeSmokeFileRecipeJson = R"AQ({
 // HookCall may invoke an action the LLM cannot (Req 5.5).
 [[nodiscard]] inline RecipeCartridge code_smoke_file_recipe() {
     return parse<RecipeCartridge>(detail::kCodeSmokeFileRecipeJson);
+}
+
+// The "knowledge_smoke" recipe cartridge exercising KnowledgeModule, WorkspaceModule,
+// and OrchestratorModule.
+[[nodiscard]] inline RecipeCartridge knowledge_smoke_recipe() {
+    return parse<RecipeCartridge>(detail::kKnowledgeSmokeRecipeJson);
 }
 
 }  // namespace aquila

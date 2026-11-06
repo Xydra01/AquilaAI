@@ -31,6 +31,7 @@ include(AquilaDeps)
 include(AquilaTreeSitter)
 include(AquilaRapidCheck)
 include(AquilaLlamaCpp)
+include(AquilaSqlite)
 
 if(AQUILA_ENABLE_CUDA)
     enable_language(CUDA)

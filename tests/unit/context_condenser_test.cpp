@@ -146,7 +146,7 @@ TEST_CASE("Property 6: segment ordering", "[rapidcheck][context_condenser]") {
         const auto interactions = *rc::gen::container<std::vector<ToolInteraction>>(
             gen_interaction(ascii_string_of_length(8)));
 
-        ContextCondenser condenser(limits);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         condenser.set_pinned_prefix(system_prompt, recipe_schema);
         condenser.set_anchored(pad, snapshots);
         for (const auto& it : interactions) {
@@ -200,7 +200,7 @@ TEST_CASE("Property 7: rolling tail holds the last K interactions",
         const auto interactions = *rc::gen::container<std::vector<ToolInteraction>>(
             gen_interaction(ascii_string_of_length(8)));
 
-        ContextCondenser condenser(limits);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         condenser.set_pinned_prefix("sys", "schema");
         condenser.set_anchored(AgentScratchpad{}, {});
         for (const auto& it : interactions) {
@@ -255,7 +255,7 @@ TEST_CASE("Property 8: oversized outputs truncate with a recoverable spill",
         it.result.success = true;         // keep the ActionResult invariant simple
         it.result.error_code.clear();
 
-        ContextCondenser condenser(limits);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         condenser.set_pinned_prefix("sys", "schema");
         condenser.set_anchored(AgentScratchpad{}, {});
         condenser.record_tool_cycle(it);
@@ -313,7 +313,7 @@ TEST_CASE("Property 9: wipe preserves prefix, refreshes anchor, clears tail",
         const auto interactions = *rc::gen::container<std::vector<ToolInteraction>>(
             gen_interaction(ascii_string_of_length(8)));
 
-        ContextCondenser condenser(limits);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         condenser.set_pinned_prefix(system_prompt, recipe_schema);
         condenser.set_anchored(pad_a, snaps_a);
         for (const auto& it : interactions) {
@@ -369,7 +369,7 @@ TEST_CASE("Property 10: condense threshold is a monotone boundary",
         const auto interactions = *rc::gen::container<std::vector<ToolInteraction>>(
             gen_interaction(ascii_string_of_length(16)));
 
-        ContextCondenser condenser(limits);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         condenser.set_pinned_prefix(system_prompt, recipe_schema);
         condenser.set_anchored(*gen_scratchpad(), *gen_snapshots());
         for (const auto& it : interactions) {
@@ -407,7 +407,7 @@ TEST_CASE("Property 14: behavior follows tier limits, not hardcoded constants",
             count, gen_interaction(ascii_string_of_length(8)));
 
         const auto tail_pairs = [&](const TierLimits& limits) {
-            ContextCondenser condenser(limits);
+            ContextCondenser condenser(limits, CondenserStrategy::eocc);
             condenser.set_pinned_prefix("sys", "schema");
             condenser.set_anchored(AgentScratchpad{}, {});
             for (const auto& it : interactions) {
@@ -450,5 +450,124 @@ TEST_CASE("Property 14: behavior follows tier limits, not hardcoded constants",
         // Each tier's decision agrees with ITS OWN threshold against that footprint.
         RC_ASSERT(cpu_condenser.should_condense() == (cpu_tokens >= cpu.condense_threshold));
         RC_ASSERT(gpu_condenser.should_condense() == (gpu_tokens >= gpu.condense_threshold));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// SAC Strategy Tests (M5 bake-off Option A / Llama winner)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SAC strategy: single turn tail with running summary accumulation",
+          "[context_condenser][sac]") {
+    TierLimits limits;
+    limits.rolling_tools = 4;
+    ContextCondenser condenser(limits, CondenserStrategy::sac);
+
+    condenser.set_pinned_prefix("sys_prompt", "recipe_schema");
+    condenser.set_anchored(AgentScratchpad{}, {});
+
+    ToolInteraction it1;
+    it1.module = "WorkspaceModule";
+    it1.action = "list_dir";
+    it1.args = Json::object({{"path", "."}});
+    it1.result.success = true;
+    it1.result.llm_facing_output = "file1.txt\nfile2.txt";
+
+    condenser.record_tool_cycle(it1);
+
+    // Turn 1: single turn in tail, running summary empty
+    CHECK(condenser.running_summary().empty());
+    auto msgs = condenser.build_messages();
+    // Prefix (2) + Anchor (1) + Tail (2) = 5 messages
+    REQUIRE(msgs.size() == 5);
+    CHECK(msgs[3].role == Role::user);
+    CHECK(msgs[4].role == Role::tool);
+    CHECK(msgs[4].content == "file1.txt\nfile2.txt");
+
+    // Turn 2: it1 should fold into running summary, it2 becomes the only tail turn
+    ToolInteraction it2;
+    it2.module = "ExecutionModule";
+    it2.action = "run_shell";
+    it2.args = Json::object({{"command", "ninja"}});
+    it2.result.success = true;
+    it2.result.llm_facing_output = "Build complete";
+
+    condenser.record_tool_cycle(it2);
+
+    CHECK_FALSE(condenser.running_summary().empty());
+    CHECK(condenser.running_summary().find("[WorkspaceModule.list_dir]") != std::string::npos);
+    CHECK(condenser.running_summary().find("file1.txt") != std::string::npos);
+
+    msgs = condenser.build_messages();
+    // Prefix (2) + Anchor (1) + Summary (1) + Tail (2) = 6 messages
+    REQUIRE(msgs.size() == 6);
+    CHECK(msgs[0].role == Role::system);
+    CHECK(msgs[1].role == Role::system);
+    CHECK(msgs[2].role == Role::system); // anchored
+    CHECK(msgs[3].role == Role::system); // summary
+    CHECK(msgs[3].content.rfind("State so far:\n", 0) == 0);
+    CHECK(msgs[4].role == Role::user);   // it2
+    CHECK(msgs[5].role == Role::tool);   // it2 output
+    CHECK(msgs[5].content == "Build complete");
+
+    // Turn 3: it2 folds into running summary, it3 becomes the only tail turn
+    ToolInteraction it3;
+    it3.module = "KnowledgeModule";
+    it3.action = "store_fact";
+    it3.args = Json::object({{"topic", "t"}, {"fact", "f"}});
+    it3.result.success = true;
+    it3.result.llm_facing_output = "Stored";
+
+    condenser.record_tool_cycle(it3);
+    CHECK(condenser.running_summary().find("[ExecutionModule.run_shell]") != std::string::npos);
+
+    msgs = condenser.build_messages();
+    REQUIRE(msgs.size() == 6);
+    CHECK(msgs[5].content == "Stored");
+
+    // Wipe clears the running summary and the tail
+    condenser.condense();
+    CHECK(condenser.running_summary().empty());
+    msgs = condenser.build_messages();
+    REQUIRE(msgs.size() == 3); // prefix (2) + anchor (1)
+}
+
+TEST_CASE("Property: SAC tail invariant (always at most 1 tool cycle)",
+          "[rapidcheck][context_condenser][sac]") {
+    rc::prop("SAC keeps at most 1 interaction in tail regardless of interaction count", [] {
+        TierLimits limits;
+        limits.rolling_tools = *rc::gen::inRange<std::size_t>(1, 10);
+        limits.tool_output_chars = 1000;
+
+        ContextCondenser condenser(limits, CondenserStrategy::sac);
+        condenser.set_pinned_prefix("sys", "schema");
+        condenser.set_anchored(AgentScratchpad{}, {});
+
+        const std::size_t n = *rc::gen::inRange<std::size_t>(0, 15);
+        for (std::size_t i = 0; i < n; ++i) {
+            ToolInteraction it;
+            it.module = "Mod" + std::to_string(i);
+            it.action = "Act" + std::to_string(i);
+            it.result.success = true;
+            it.result.llm_facing_output = "out" + std::to_string(i);
+            condenser.record_tool_cycle(it);
+        }
+
+        const auto msgs = condenser.build_messages();
+        std::size_t tool_count = 0;
+        for (const auto& m : msgs) {
+            if (m.role == Role::tool) ++tool_count;
+        }
+
+        if (n == 0) {
+            RC_ASSERT(tool_count == 0);
+            RC_ASSERT(condenser.running_summary().empty());
+        } else {
+            // SAC strictly caps tail tool interactions to 1
+            RC_ASSERT(tool_count == 1);
+            if (n > 1) {
+                RC_ASSERT(!condenser.running_summary().empty());
+            }
+        }
     });
 }

@@ -42,6 +42,8 @@ for d in src apps tests; do printf "%s: " $d; rg -v -c '^\s*(//.*)?$' $d --glob 
 # after M2: src 1161, apps 41, tests 1109
 # after M3: src 3979, apps 41, tests 2716
 # after M4: src 4841, apps 41, tests 4451
+# after M5: src 5729, apps 41, tests 5711
+# after M6: src 8402, apps 41, tests 6649
 ```
 
 ---
@@ -564,6 +566,24 @@ Artifacts: `bakeoff-results/d14_llama3b_cpu_verdict.json`, `d14_llama8b_gpu_verd
 `d14_bakeoff_9b_verdict.json`. Llama GGUFs pinned by SHA256 (bartowski):
 Llama-3.2-3B-Instruct-Q4_K_M `6c1a2b41...728ff`; Meta-Llama-3.1-8B-Instruct-Q4_K_M `7b064f58...557c`.
 
+### 8.6 Milestone M6: KnowledgeModule, SQLite3, Vector Store, Embeddings, Page Cache, and SAC Upgrade
+
+Milestone M6 builds `KnowledgeModule`, the third coarse-grained module defined in R11 (`docs/design/aquila-cpp-design.md:422`), providing SQLite-backed structured fact storage, deterministic offline embeddings, native in-process vector similarity search, a high-performance C++ HTML text extractor, a persistent zero-I/O web page cache, and a hybrid local document search engine (dense vector + SQLite FTS5 lexical BM25).
+
+**Key Deliverables & Verification:**
+- **SQLite Core Amalgamation:** Official SQLite 3.49.0.1 amalgamation pinned by URL+SHA256 in `cmake/AquilaSqlite.cmake` (`aquila_sqlite3` target) with FTS5, RTREE, and serialized thread safety enabled. Compiler warnings (`/W4 /WX`, `-Werror`) cleanly scoped off upstream code.
+- **SQLite RAII Wrappers:** `SqliteDb`, `SqliteStmt`, and `SqliteTx` in `src/core/storage/sqlite_db.cpp`. Verified against RapidCheck Property 1 (no resource leaks), Property 2 (transaction atomicity and automatic rollback on exception), and Property 3 (full type round-trip for 64-bit ints, floats, strings, and blobs).
+- **Fact Storage:** `FactStore` (`src/core/storage/fact_store.cpp`) reading/writing facts, graph relations (`fact_relations`), scratchpads, and workspace summaries. Parity verified against real user database `F:\Users\myfri\agent-projects\Agent-Memory\fact_graph.db`.
+- **Deterministic HashingEmbedder:** RFC 7693 Blake2b-64 + `HashingEmbedder` (`src/core/knowledge/embedding.cpp`) producing 384-dimensional normalized pseudo-embeddings. Verified against Python oracle fixtures (`agent/storage/embeddings.py:HashingEmbeddingFunction`) with cosine similarity $\ge 0.999999$ and RapidCheck Property 4 (unit norm, NaN/Inf immunity).
+- **In-Process Vector Store & Chroma Ingest:** `VectorIndex` (`src/core/knowledge/vector_index.cpp`) with SQLite storage and cosine similarity search. Includes automated migration importer for legacy Chroma DBs (`vector_db/chroma.sqlite3`). Verified against RapidCheck Property 5 (exact self-nearest neighbor).
+- **Web Extraction & Page Cache:** Fuzz-safe `HtmlCleaner` (`src/core/knowledge/html_cleaner.cpp`) stripping script/style/nav/ad tags with clean whitespace normalization and entity decoding (Property 6). `WebFetcher` via `cpp-httplib` with redirect following and size caps. `PageCache` (`src/core/knowledge/page_cache.cpp`) with SHA-256 URL canonicalization and persistent zero-I/O cache hits.
+- **Local Document Chunker & Hybrid Search:** Structural Markdown chunking (`src/core/knowledge/document_chunker.cpp`) with header breadcrumbs and hybrid retrieval combining dense vector dot products and SQLite FTS5 BM25 search via Reciprocal Rank Fusion (RRF).
+- **KnowledgeModule:** Registered in `ModuleRegistry::builtin()` (`src/core/modules/builtin.cpp`), exposing `search_local_docs`, `fetch_and_clean_url`, `store_fact`, `recall_experiences`, and `get_all_facts` with full snapshot export/restore.
+- **ContextCondenser SAC Strategy Upgrade:** Following Finding F3 bake-off and user confirmation ("Option A stick with what worked"), `CondenserStrategy::sac` (Single-Action-per-Context) is established as the default strategy across `ContextCondenser`, `LoopConfig`, and `AgentLoop`. Under SAC, each tool cycle folds the previous interaction into a running summary (`[module.action] output`) while keeping strictly at most 1 turn in the rolling tail.
+- **Recipe Cartridge:** `knowledge_smoke` cartridge (`src/core/agent/recipes/knowledge_smoke.recipe.json`) exercising KnowledgeModule, WorkspaceModule, and OrchestratorModule in `tests/unit/knowledge_recipe_test.cpp`.
+- **Multi-Preset Verification:** 187/187 test cases (6895 assertions) passing on `msvc-release`; 170/170 test cases (6833 assertions) passing on `mingw-san` under Clang ASan + UBSan with zero warnings, zero leaks, and zero crashes.
+- **R20 Accounting:** Added 2673 LOC in `src/` (from 5729 to 8402), replacing ~5715 Python LOC across `agent/storage` (3984 LOC) and `agent/research` (1731 LOC) — a >50% code compression while eliminating all external server/daemon dependencies (Chroma, embedding servers, Python soup/lxml).
+
 ## 9. Open decisions (need the user)
 
 Decided (2026-11-02, by user):
@@ -608,3 +628,4 @@ No decisions are open right now.
 | 2026-11-04 | M4 agent loop, condenser, orchestrator, tiers, run record (section 8.4). 21 correctness properties as RapidCheck tests, Python oracle parity, live 3/3 + forced-failure; all five lanes + CI green at `d4bf9e5`. R20 recorded: M4 is essentially flat (862 C++ vs 854 Python, +0.9%) — condenser/tiers/run-record smaller and the heal/alias layer deleted, offset by capabilities Python lacked. Added the token-estimate byte-vs-code-point divergence as an honest M5 note; after-M4 C++ size line (`src 4841, tests 4451`) |
 | 2026-11-05 | M5 LlamaCppBackend + context-strategy bake-off (section 8.5). Direct llama.cpp (upstream b12116), GBNF action calls (9B Proof 1: 54/54 valid). FINDING F1: Qwen 3.5 M-RoPE cannot do mid-sequence KV rollback (typed decode_failed, not a crash). FINDING F2: 4B degenerates on GBNF (zero-width-token loop; assistant-opener + degenerate-output guard added). D14 decided by bake-off on the 9B: EoCC wins 6/6 (SAC 6/6, kv_rollback 1/6 -- the KV wipe fabricates planted facts). Value-managed context seeds M6; kv_rollback gated to plain-RoPE |
 | 2026-11-05 | Model-family bake-off (section 8.5 F3): Llama 3.2 3B (CPU) + Llama 3.1 8B (GPU), bartowski Q4_K_M, pinned by SHA256, stored on D:. Qwen 3.5 4B cannot do GBNF actions (0/6, degenerates); Llama 3.2 3B does (6/6). D14 reconfirmed across families (kv_rollback 1/6 everywhere incl. plain-RoPE). **D15 DECIDED: Llama base pair; R18 updated**; Qwen 3.5 9B kept as alternate GPU option |
+| 2026-11-06 | M6 KnowledgeModule, SQLite3, Vector Store, Embeddings, Page Cache, and SAC Context Condenser (section 8.6). SQLite amalgamation pinned in CMake; RAII wrappers; FactStore parity with real fact_graph.db; Blake2b-64 HashingEmbedder bit-parity with Python; in-process VectorIndex with Chroma ingest; fuzz-safe HtmlCleaner + WebFetcher; persistent PageCache; structural DocumentChunker + hybrid dense/FTS5 BM25 search; KnowledgeModule builtin. ContextCondenser upgraded to SAC strategy (Finding F3 winner, Option A). All 187 MSVC and 170 MinGW unit tests pass warning- and sanitizer-clean; R20 accounting: +2673 C++ LOC vs ~5715 Python LOC (>50% compression, zero external daemon dependencies). |

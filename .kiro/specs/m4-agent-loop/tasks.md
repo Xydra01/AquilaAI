@@ -103,7 +103,7 @@ and a temp workspace so CI stays network-free and deterministic.
     - **Property 14: Behavior follows tier limits, not hardcoded constants** — two tiers differing in `rolling_tools`/`condense_threshold` change the tail cap and `should_condense()` boundary accordingly
     - **Validates: Requirements 4.4**
 
-- [ ] 5. Checkpoint - Ensure all tests pass for the foundational value types and condenser
+- [x] 5. Checkpoint - Ensure all tests pass for the foundational value types and condenser
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 6. Implement OrchestratorModule (owns the scratchpad, completion gate intents)
@@ -210,7 +210,7 @@ and a temp workspace so CI stays network-free and deterministic.
     - In `agent_loop_test.cpp`, assert the loop runs synchronously on one thread with all turn state owned by the frame or condenser (no async/coroutines)
     - _Requirements: 1.1_
 
-- [ ] 9. Checkpoint - Ensure all tests pass for the loop, modules, and condenser
+- [x] 9. Checkpoint - Ensure all tests pass for the loop, modules, and condenser
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 10. Implement the code_smoke_file recipe cartridge
@@ -248,16 +248,16 @@ and a temp workspace so CI stays network-free and deterministic.
     - Add the forced-failure live run (fault-injection build that omits `HARNESS_OK`) asserting the loop reaches the turn limit with a non-success terminal
     - _Requirements: 7.2, 7.3, 7.4, 8.4_
 
-- [ ] 13. Verify all five build lanes, sanitizers, and complete R20 / RECON_MAP accounting
-  - [ ] 13.1 Verify build lanes and sanitizers clean
+- [x] 13. Verify all five build lanes, sanitizers, and complete R20 / RECON_MAP accounting
+  - [x] 13.1 Verify build lanes and sanitizers clean
     - Build and run the unit suite on all five lanes (`msvc-release`, `msvc-asan`, `msvc-release-cuda`, `mingw-san`, `linux-san`) and the three CI jobs on a fresh clone, confirming ASan/UBSan/LSan report nothing and all new sources/tests compile into `aquila_core` and `aquila_unit_tests`
     - _Requirements: 8.1, 8.5_
 
-  - [ ] 13.2 Record the R20 line-count accounting and RECON_MAP 8.4 verdicts
+  - [x] 13.2 Record the R20 line-count accounting and RECON_MAP 8.4 verdicts
     - Measure the C++ LOC added by the five components versus the Python they replace (`code_agent.py` ~230, `context_manager.py` ~260, `run_state.py` session portion, `context_budget.py` tiers) and add a RECON_MAP section 8.4 with per-feature verdicts against Python; if C++ is not smaller, state why (R20)
     - _Requirements: 8.6_
 
-- [ ] 14. Final checkpoint - Ensure all tests pass
+- [x] 14. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

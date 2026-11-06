@@ -48,7 +48,18 @@ add_library(aquila_core STATIC
     context/eocc_strategy.cpp
     context/sac_strategy.cpp
     agent/orchestrator_module.cpp
-    agent/agent_loop.cpp)
+    agent/agent_loop.cpp
+    storage/sqlite_db.cpp
+    storage/fact_store.cpp
+    knowledge/blake2b.cpp
+    knowledge/embedding.cpp
+    knowledge/vector_index.cpp
+    knowledge/html_cleaner.cpp
+    knowledge/web_fetcher.cpp
+    knowledge/sha256.cpp
+    knowledge/page_cache.cpp
+    knowledge/document_chunker.cpp
+    knowledge/knowledge_module.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)
@@ -56,6 +67,7 @@ target_compile_definitions(aquila_core PRIVATE AQUILA_VERSION="${PROJECT_VERSION
 target_link_libraries(aquila_core
     PUBLIC
         nlohmann_json::nlohmann_json
+        aquila_sqlite3
     PRIVATE
         fmt::fmt
         spdlog::spdlog

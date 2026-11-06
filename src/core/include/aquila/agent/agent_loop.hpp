@@ -51,6 +51,7 @@ struct LoopConfig {
     std::string mode;
     std::string instance_id;
     Json ground_truth = Json::object();
+    CondenserStrategy context_strategy = CondenserStrategy::sac;
 };
 
 // Single-threaded, deterministic driver (Req 1, Req 5, R14). No async, no

@@ -93,7 +93,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // Seed the condenser from the active tier (Req 2.1): the pinned prefix carries
     // the system prompt and the rendered action-call schema that constrains every
     // reply, so it is the natural recipe schema text to pin.
-    ContextCondenser condenser(limits);
+    ContextCondenser condenser(limits, config.context_strategy);
     condenser.set_pinned_prefix(config.system_prompt,
                                 json_io::canonical_dump(action_call_schema()));
 

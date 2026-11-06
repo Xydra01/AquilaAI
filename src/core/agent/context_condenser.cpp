@@ -4,7 +4,8 @@
 
 namespace aquila {
 
-ContextCondenser::ContextCondenser(TierLimits limits) : limits_(limits) {}
+ContextCondenser::ContextCondenser(TierLimits limits, CondenserStrategy strategy)
+    : limits_(limits), strategy_(strategy) {}
 
 void ContextCondenser::set_pinned_prefix(std::string system_prompt, std::string recipe_schema) {
     system_prompt_ = std::move(system_prompt);
@@ -48,6 +49,11 @@ std::vector<Message> ContextCondenser::build_messages() const {
 
     // 2. Anchored block [P+1..S]: one system message with the scratchpad + snapshots.
     messages.push_back(anchored_);
+
+    // Under SAC mode, if earlier turns were folded, emit the running summary.
+    if (strategy_ == CondenserStrategy::sac && !running_summary_.empty()) {
+        messages.push_back(Message{Role::system, "State so far:\n" + running_summary_, {}});
+    }
 
     // 3. Rolling tail [S+1..end]: each recorded interaction becomes a user/tool
     //    message pair, emitted in recorded order (oldest first).
@@ -116,6 +122,23 @@ void ContextCondenser::record_tool_cycle(const ToolInteraction& interaction) {
     std::string ref;
     stored.result.llm_facing_output =
         head_tail_truncate(interaction.result.llm_facing_output, ref);
+
+    if (strategy_ == CondenserStrategy::sac) {
+        // SAC: Single-Action-per-Context.
+        // The previous interaction (if any) folds into the running summary before
+        // the new interaction replaces it in the tail.
+        if (!tail_.empty()) {
+            const ToolInteraction& prev = tail_.front();
+            if (!running_summary_.empty()) {
+                running_summary_ += "\n";
+            }
+            running_summary_ += "[" + prev.module + "." + prev.action + "] " +
+                                prev.result.llm_facing_output;
+            tail_.clear();
+        }
+        tail_.push_back(std::move(stored));
+        return;
+    }
 
     // Ring buffer, cap K = limits_.rolling_tools (Req 2.2): drop the oldest entries
     // so that after push_back the tail holds exactly the last min(M, K) in order and
@@ -190,10 +213,11 @@ void ContextCondenser::condense() {
     // Wipe policy (Req 2.4): the pinned prefix (system_prompt_ / recipe_schema_) is
     // never touched; the anchored block is refreshed from the most recent
     // set_anchored() inputs via the shared renderer so it equals that rendering; the
-    // rolling tail and any pending guidance are cleared.
+    // rolling tail, pending guidance, and running summary are cleared.
     render_anchored();
     tail_.clear();
     guidance_.clear();
+    running_summary_.clear();
 }
 
 }  // namespace aquila

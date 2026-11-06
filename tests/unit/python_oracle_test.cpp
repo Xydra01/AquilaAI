@@ -256,7 +256,7 @@ TEST_CASE("oracle: condenser ring buffer keeps the same last-K set as Python _ke
         TierLimits limits = RuntimeTierConfig::default_config().limits;
         limits.rolling_tools = static_cast<std::size_t>(std::max<std::int64_t>(keep, 0));
         limits.tool_output_chars = 1'000'000;
-        ContextCondenser condenser(limits);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         for (const auto& content : matching) {
             ToolInteraction it;
             it.module = "OrchestratorModule";

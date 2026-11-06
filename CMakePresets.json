@@ -22,6 +22,14 @@
       "hidden": true,
       "inherits": "windows-base",
       "description": "Run from an MSVC developer environment (scripts/msvc-dev.cmd).",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      },
       "cacheVariables": {
         "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl",

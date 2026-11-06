@@ -20,14 +20,26 @@ struct SpillEntry {
     std::string full_text;
 };
 
+// Context compaction strategy (M5 bake-off / D14).
+enum class CondenserStrategy {
+    eocc,   // End-of-Context Compaction: accumulates turns in rolling tail up to rolling_tools
+    sac     // Single-Action-per-Context: fresh minimal context per action, prior turns folded into running summary (Llama bake-off winner)
+};
+
 // Three-segment prompt assembler (Req 2, R6, R8):
 //   pinned prefix  -> system prompt + active recipe schema (never evicted)
 //   anchored block -> a snapshot of the scratchpad + module state snapshots
-//   rolling tail   -> the last K tool interactions, oversized outputs spilled
+//   rolling tail   -> the last K tool interactions (or single turn under SAC), oversized outputs spilled
 // All thresholds come from TierLimits; the condenser hardcodes nothing (Req 4.4).
 class ContextCondenser {
 public:
-    explicit ContextCondenser(TierLimits limits);
+    explicit ContextCondenser(TierLimits limits, CondenserStrategy strategy = CondenserStrategy::sac);
+
+    [[nodiscard]] CondenserStrategy strategy() const noexcept { return strategy_; }
+    void set_strategy(CondenserStrategy strategy) noexcept { strategy_ = strategy; }
+
+    // Returns the current running summary folded under SAC strategy (or empty for EoCC).
+    [[nodiscard]] const std::string& running_summary() const noexcept { return running_summary_; }
 
     // Pinned prefix [0..P]: system prompt + active recipe schema. Set once; never
     // evicted (Req 2.1). Schema text is the rendered action schema for the recipe.
@@ -74,6 +86,8 @@ private:
     void render_anchored();
 
     TierLimits limits_;
+    CondenserStrategy strategy_ = CondenserStrategy::sac;
+    std::string running_summary_;
     std::string system_prompt_;
     std::string recipe_schema_;
     Message anchored_;                         // rendered scratchpad + snapshots

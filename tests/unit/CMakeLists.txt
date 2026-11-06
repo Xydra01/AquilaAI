@@ -1,4 +1,4 @@
-﻿add_executable(aquila_unit_tests
+add_executable(aquila_unit_tests
     deps_probe_test.cpp
     types_roundtrip_test.cpp
     types_errors_test.cpp
@@ -38,7 +38,16 @@
     # KV-unchanged, cancellation, prefix-reuse) + streaming/EOS/error-vocabulary unit
     # tests. Same `#if AQUILA_HAS_LLAMACPP` guard + AQUILA_TINY_GGUF SKIP pattern as
     # llama_session_test.cpp: one trivially-passing TEST_CASE on the stub lanes.
-    llama_backend_test.cpp)
+    llama_backend_test.cpp
+    sqlite_db_test.cpp
+    fact_store_test.cpp
+    embedding_test.cpp
+    vector_index_test.cpp
+    html_cleaner_test.cpp
+    page_cache_test.cpp
+    document_chunker_test.cpp
+    knowledge_module_test.cpp
+    knowledge_recipe_test.cpp)
 target_link_libraries(aquila_unit_tests PRIVATE
     aquila::core httplib::httplib Catch2::Catch2WithMain rapidcheck_catch
     # Carries AQUILA_HAS_LLAMACPP (1 built / 0 stubbed) into this test TU so the
