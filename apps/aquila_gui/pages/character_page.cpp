@@ -146,6 +146,17 @@ QString CharacterPage::initializationBible() const {
     return bibleEditor_->toPlainText();
 }
 
+void CharacterPage::appendCharacterReply(const QString& personaId, const QString& reply) {
+    dialogueTranscript_->append(QStringLiteral(
+        "<div style='text-align:left; margin:6px 0;'>"
+        "  <div style='background-color:#252526; color:#e0e0e0; border:1px solid #3c3c3c; border-radius:10px; padding:8px 12px; display:inline-block; max-width:85%%;'>"
+        "    <div style='font-size:11px; font-weight:bold; color:#79c0ff; margin-bottom:4px;'>👤 %1</div>"
+        "    <div>%2</div>"
+        "  </div>"
+        "</div>"
+    ).arg(personaId.toHtmlEscaped(), reply.toHtmlEscaped()));
+}
+
 void CharacterPage::onBibleTextChanged() {
     const int len = bibleEditor_->toPlainText().length();
     charCountBar_->setValue(std::min(len, 800));

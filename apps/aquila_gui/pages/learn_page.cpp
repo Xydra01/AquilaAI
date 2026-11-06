@@ -136,6 +136,19 @@ void LearnPage::setAssessmentQuestion(const QString& question, const QStringList
     }
 }
 
+void LearnPage::showAssessmentResult(bool correct, const QString& explanation) {
+    const QString resultHtml = QStringLiteral(
+        "<div style='margin-top:12px; padding:10px; border-radius:6px; background-color:%1; color:#ffffff;'>"
+        "  <b>%2</b><br>%3"
+        "</div>"
+    ).arg(
+        correct ? QStringLiteral("#2ea043") : QStringLiteral("#da3633"),
+        correct ? QStringLiteral("✓ Correct!") : QStringLiteral("✗ Incorrect"),
+        explanation.toHtmlEscaped()
+    );
+    questionViewer_->append(resultHtml);
+}
+
 void LearnPage::setMasteryLevel(int level) {
     masteryBar_->setValue(level);
     const char* titles[] = {"0 / 5 (Uninitiated)", "1 / 5 (Novice)", "2 / 5 (Competent)",
@@ -143,6 +156,18 @@ void LearnPage::setMasteryLevel(int level) {
     if (level >= 0 && level <= 5) {
         masteryLabel_->setText(QString::fromUtf8(titles[level]));
     }
+}
+
+int LearnPage::masteryLevel() const {
+    return masteryBar_->value();
+}
+
+QString LearnPage::currentQuestion() const {
+    return questionViewer_->toPlainText();
+}
+
+int LearnPage::answerOptionCount() const {
+    return answerCombo_->count();
 }
 
 void LearnPage::onGenerateAssessmentClicked() {

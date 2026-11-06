@@ -212,5 +212,21 @@ void TaskPage::clearLedger() {
     checklistTree_->clear();
 }
 
+QString TaskPage::objective() const {
+    return objectiveLabel_->text();
+}
+
+QString TaskPage::hypothesis() const {
+    return hypothesisLabel_->text();
+}
+
+int TaskPage::factsCount() const {
+    return factsList_->count();
+}
+
+int TaskPage::checklistCount() const {
+    return checklistTree_->topLevelItemCount();
+}
+
 }  // namespace aquila::gui
 

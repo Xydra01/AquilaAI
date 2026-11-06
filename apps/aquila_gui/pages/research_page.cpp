@@ -116,5 +116,13 @@ void ResearchPage::clearAll() {
     cacheTree_->clear();
 }
 
+int ResearchPage::searchResultCount() const {
+    return resultsTree_->topLevelItemCount();
+}
+
+int ResearchPage::factCount() const {
+    return factTree_->topLevelItemCount();
+}
+
 }  // namespace aquila::gui
 

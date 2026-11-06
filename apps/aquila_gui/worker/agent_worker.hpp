@@ -34,7 +34,8 @@ signals:
     void tokenStreamed(const QString& token);
     void turnCompleted(int index, const QString& thought, const QString& module,
                        const QString& action, const QString& output);
-    void scratchpadUpdated(const QString& active_objective, const QString& checklist_json);
+    void scratchpadUpdated(const QString& objective, const QString& hypothesis,
+                           const QStringList& facts, const QStringList& checklist);
     void statusChanged(const QString& statusText);
     void finished(bool success, const QString& completionOutput);
     void askUserRequested(const QString& question);

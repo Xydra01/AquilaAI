@@ -25,6 +25,9 @@ public:
     double temperature() const;
     QString workspacePath() const;
 
+    void setModelName(const QString& name);
+    void setWorkspacePath(const QString& path);
+
 signals:
     void settingsApplied();
     void themeChanged(bool isDark);

@@ -16,21 +16,30 @@ class ChatPage : public BasePage {
 public:
     explicit ChatPage(QWidget* parent = nullptr);
 
-    void appendUserMessage(const QString& text);
+    void appendUserMessage(const QString& text, const QStringList& attachments = {});
     void appendAssistantMessage(const QString& text);
     void appendToken(const QString& token);
     void appendSystemMessage(const QString& text);
     void finalizeAssistantMessage();
     void clearTranscript();
     void setFollowupSuggestions(const QStringList& suggestions);
+    void addAttachment(const QString& filePath);
 
     QString currentPrompt() const;
     void clearPrompt();
     void setRunning(bool running);
+    QStringList currentAttachments() const { return currentAttachments_; }
+    QPlainTextEdit* promptInput() const { return promptInput_; }
+    QTextEdit* transcript() const { return transcript_; }
 
 signals:
     void sendRequested(const QString& prompt, const QStringList& attachments);
     void cancelRequested();
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     void onSendClicked();

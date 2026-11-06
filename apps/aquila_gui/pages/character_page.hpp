@@ -22,6 +22,8 @@ public:
     void setPersonaList(const QStringList& personas);
     void setInitializationBible(const QString& text);
     QString initializationBible() const;
+    void appendCharacterReply(const QString& personaId, const QString& reply);
+    QTextEdit* dialogueTranscript() const { return dialogueTranscript_; }
 
 signals:
     void personaSelected(const QString& personaId);

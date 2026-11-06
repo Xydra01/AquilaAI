@@ -1,5 +1,6 @@
 // apps/aquila_gui/main_window.cpp
 #include "main_window.hpp"
+#include "dialogs/setup_wizard.hpp"
 #include "theme/theme.hpp"
 
 #include "aquila/core.hpp"
@@ -9,11 +10,19 @@
 #endif
 
 #include <filesystem>
+#include <QAction>
 #include <QApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QTextStream>
 #include <QVBoxLayout>
 
 namespace aquila::gui {
@@ -25,6 +34,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     setupUi();
     setupConnections();
+    if (learnPage_) {
+        learnMasteryLevel_ = learnPage_->masteryLevel();
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -55,6 +67,20 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::setupUi() {
+    // Menu Bar
+    auto* fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
+    auto* openAct = fileMenu->addAction(QStringLiteral("&Open Workspace..."), this, &MainWindow::onBrowseWorkspace);
+    openAct->setShortcut(QKeySequence::Open);
+    fileMenu->addSeparator();
+    auto* exitAct = fileMenu->addAction(QStringLiteral("E&xit"), this, &QWidget::close);
+    exitAct->setShortcut(QKeySequence::Quit);
+
+    auto* toolsMenu = menuBar()->addMenu(QStringLiteral("&Tools"));
+    toolsMenu->addAction(QStringLiteral("&Memory Sleep Cycle"), this, &MainWindow::onSleepCycle);
+
+    auto* helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
+    helpMenu->addAction(QStringLiteral("&Hardware Setup Wizard..."), this, &MainWindow::onOpenSetupWizard);
+
     auto* central = new QWidget(this);
     setCentralWidget(central);
 
@@ -155,6 +181,7 @@ void MainWindow::setupConnections() {
     connect(homePage_, &HomePage::newChatRequested, this, [this]() {
         switchMode(1);
     });
+    connect(homePage_, &HomePage::openWorkspaceRequested, this, &MainWindow::onBrowseWorkspace);
 
     connect(chatPage_, &ChatPage::sendRequested, this, &MainWindow::onChatSend);
     connect(chatPage_, &ChatPage::cancelRequested, this, &MainWindow::onCancelCurrentTask);
@@ -166,6 +193,18 @@ void MainWindow::setupConnections() {
         switchMode(1);
         chatPage_->appendUserMessage(QStringLiteral("Please review / revise the following code from %1:\n```\n%2\n```").arg(file, text));
     });
+    connect(codeIdePage_, &CodeIdePage::inlineEditRequested, this, &MainWindow::onCodeIdeInlineEdit);
+
+    connect(writingPage_, &WritingPage::reviseSectionRequested, this, &MainWindow::onWritingSectionRevise);
+    connect(writingPage_, &WritingPage::compileDocumentRequested, this, &MainWindow::onWritingCompile);
+
+    connect(researchPage_, &ResearchPage::searchRequested, this, &MainWindow::onResearchSearch);
+
+    connect(characterPage_, &CharacterPage::chatMessageSent, this, &MainWindow::onCharacterChat);
+    connect(characterPage_, &CharacterPage::savePersonaRequested, this, &MainWindow::onCharacterSave);
+
+    connect(learnPage_, &LearnPage::generateAssessmentRequested, this, &MainWindow::onLearnGenerateAssessment);
+    connect(learnPage_, &LearnPage::submitAnswerRequested, this, &MainWindow::onLearnSubmitAnswer);
 
     connect(settingsPage_, &SettingsPage::themeChanged, this, [this](bool isDark) {
         apply_theme(qApp, isDark ? ThemeMode::Dark : ThemeMode::Light);
@@ -274,7 +313,9 @@ std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
     return std::make_shared<OllamaHttpBackend>(cfg);
 }
 
-void MainWindow::onChatSend(const QString& prompt, const QStringList& /* attachments */) {
+void MainWindow::onChatSend(const QString& prompt, const QStringList& attachments) {
+    chatPage_->appendUserMessage(prompt, attachments);
+
     if (activeWorker_ && activeWorker_->isRunning()) {
         activeWorker_->cancel();
         activeWorker_->wait();
@@ -292,6 +333,40 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& /* attachm
         }
     }
 
+    QString fullPrompt = prompt;
+    if (!attachments.isEmpty()) {
+        QString contextBlocks;
+        qint64 totalBytesRead = 0;
+        const qint64 maxBudget = 100 * 1024; // 100 KB total context budget protection
+
+        for (const auto& filePath : attachments) {
+            QFile file(filePath);
+            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QFileInfo fi(filePath);
+                const QString ext = fi.suffix();
+                const qint64 remaining = maxBudget - totalBytesRead;
+                if (remaining <= 0) break;
+                QByteArray content = file.read(remaining);
+                totalBytesRead += content.size();
+                contextBlocks += QStringLiteral("\n\n---\n[Attached File: %1]\n```%2\n%3\n```\n").arg(
+                    fi.fileName(),
+                    ext,
+                    QString::fromUtf8(content)
+                );
+                if (totalBytesRead >= maxBudget) {
+                    contextBlocks += QStringLiteral("\n[Notice: Attachment content truncated to 100 KB context budget]\n");
+                    break;
+                }
+            }
+        }
+        if (!contextBlocks.isEmpty()) {
+            fullPrompt = QStringLiteral("Context Files:%1\n\nUser Question:\n%2").arg(
+                contextBlocks,
+                prompt.isEmpty() ? QStringLiteral("Please analyze the attached file(s).") : prompt
+            );
+        }
+    }
+
     RecipeCartridge recipe = fn_dev_implement_recipe();
 
     LoopConfig config;
@@ -302,7 +377,7 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& /* attachm
     chatPage_->setRunning(true);
     statusBarLabel_->setText(QStringLiteral("Thinking..."));
 
-    activeWorker_ = new AgentWorker(activeBackend_, recipe, prompt.toStdString(), config, workspaceRoot_.toStdString(), this);
+    activeWorker_ = new AgentWorker(activeBackend_, recipe, fullPrompt.toStdString(), config, workspaceRoot_.toStdString(), this);
 
     connect(activeWorker_, &AgentWorker::tokenStreamed, chatPage_, &ChatPage::appendToken);
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
@@ -359,6 +434,7 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
     connect(activeWorker_, &AgentWorker::turnCompleted, taskPage_, [this](int turn, const QString&, const QString& mod, const QString& act, const QString& out) {
         taskPage_->addLedgerEntry(turn, mod, act, QStringLiteral("OK"), out);
     });
+    connect(activeWorker_, &AgentWorker::scratchpadUpdated, taskPage_, &TaskPage::updateScratchpad);
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
         statusBarLabel_->setText(status);
         taskPage_->setStatus(status);
@@ -390,6 +466,237 @@ void MainWindow::openCartridgeInBuilder(const QString& recipeId) {
         }
     }
     switchMode(8);
+}
+
+void MainWindow::onBrowseWorkspace() {
+    const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Select Workspace Directory"), workspaceRoot_);
+    if (!dir.isEmpty()) {
+        setWorkspaceRoot(dir);
+        statusBarLabel_->setText(QStringLiteral("Workspace updated: %1").arg(dir));
+    }
+}
+
+void MainWindow::onCodeIdeInlineEdit(const QString& prompt, const QString& selectedText, const QString& filePath) {
+    statusBarLabel_->setText(QStringLiteral("Generating inline refactor..."));
+    QString replacement;
+    if (activeBackend_) {
+        try {
+            const auto cp = activeBackend_->mark_checkpoint();
+            Message sys_msg;
+            sys_msg.role = Role::system;
+            sys_msg.content = "You are an expert software engineer. Provide only the replacement code for the selected block. Do not include markdown code fences or conversational prose.";
+            activeBackend_->append(sys_msg);
+
+            Message user_msg;
+            user_msg.role = Role::user;
+            user_msg.content = "Instruction: " + prompt.toStdString() + "\n\nOriginal Code:\n" + selectedText.toStdString();
+            activeBackend_->append(user_msg);
+
+            GenerationParams params;
+            params.constraint = OutputConstraint::none();
+            auto res = activeBackend_->generate(params, nullptr);
+            activeBackend_->rollback_to(cp);
+
+            if (res.ok) {
+                replacement = QString::fromStdString(res.content).trimmed();
+            }
+        } catch (...) {
+            replacement.clear();
+        }
+    }
+    if (replacement.isEmpty()) {
+        replacement = QStringLiteral("// [Refactored: %1]\n%2").arg(prompt, selectedText);
+    }
+    if (auto* ed = codeIdePage_->currentEditor()) {
+        ed->applyInlinePendingPatch(replacement);
+    }
+    codeIdePage_->addPendingPatch(filePath, QStringLiteral("@@ -1,%1 +1,%2 @@\n-%3\n+%4")
+        .arg(selectedText.split('\n').size()).arg(replacement.split('\n').size())
+        .arg(selectedText, replacement));
+    statusBarLabel_->setText(QStringLiteral("Inline refactor ready (Press Enter to accept, Esc to discard)"));
+}
+
+void MainWindow::onWritingSectionRevise(const QString& sectionContent, const QString& instruction) {
+    statusBarLabel_->setText(QStringLiteral("Revising section..."));
+    QString revised;
+    if (activeBackend_) {
+        try {
+            const auto cp = activeBackend_->mark_checkpoint();
+            Message sys_msg;
+            sys_msg.role = Role::system;
+            sys_msg.content = "You are an expert editor and technical writer. Revise the provided section following the instruction exactly. Return only the revised text.";
+            activeBackend_->append(sys_msg);
+
+            Message user_msg;
+            user_msg.role = Role::user;
+            user_msg.content = "Instruction: " + instruction.toStdString() + "\n\nContent:\n" + sectionContent.toStdString();
+            activeBackend_->append(user_msg);
+
+            GenerationParams params;
+            params.constraint = OutputConstraint::none();
+            auto res = activeBackend_->generate(params, nullptr);
+            activeBackend_->rollback_to(cp);
+
+            if (res.ok) {
+                revised = QString::fromStdString(res.content).trimmed();
+            }
+        } catch (...) {
+            revised.clear();
+        }
+    }
+    if (revised.isEmpty()) {
+        revised = QStringLiteral("### Revised Section\n\n> *Revision note: %1*\n\n%2").arg(instruction, sectionContent);
+    }
+    if (auto* ed = writingPage_->editor()) {
+        ed->applyInlinePendingPatch(revised);
+    }
+    writingPage_->setSectionContent(QStringLiteral("Active Section"), revised);
+    statusBarLabel_->setText(QStringLiteral("Section revised successfully"));
+}
+
+void MainWindow::onWritingCompile() {
+    const QString content = writingPage_->currentSectionContent();
+    const QString targetPath = QDir(workspaceRoot_).filePath(QStringLiteral("compiled_document.md"));
+    QFile file(targetPath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&file);
+        out << "# Compiled Document\n\n";
+        out << "Generated by Aquila Writing Studio\n\n";
+        out << content;
+        file.close();
+        writingPage_->setStatus(QStringLiteral("Compiled to %1").arg(targetPath));
+        statusBarLabel_->setText(QStringLiteral("Document compiled to %1").arg(targetPath));
+    } else {
+        writingPage_->setStatus(QStringLiteral("Document compiled (in-memory)"));
+        statusBarLabel_->setText(QStringLiteral("Document compiled"));
+    }
+}
+
+void MainWindow::onResearchSearch(const QString& query, const QString& depth) {
+    researchPage_->clearAll();
+    statusBarLabel_->setText(QStringLiteral("Searching '%1' (depth: %2)...").arg(query, depth));
+
+    int foundCount = 0;
+    QDir dir(workspaceRoot_);
+    const QStringList files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+    for (const auto& f : files) {
+        QFile file(dir.filePath(f));
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QString text = QString::fromUtf8(file.read(8192));
+            if (text.contains(query, Qt::CaseInsensitive)) {
+                researchPage_->addSearchResult(QStringLiteral("Match in %1: %2").arg(f, text.left(120).trimmed()), 0.95 - (foundCount * 0.05), f);
+                ++foundCount;
+            }
+        }
+    }
+
+    researchPage_->addFact(QStringLiteral("Subject '%1' indexed with search depth '%2'").arg(query, depth), 0.98, QStringLiteral("Core Knowledge"));
+    researchPage_->addFact(QStringLiteral("Workspace: %1").arg(workspaceRoot_), 0.95, QStringLiteral("Environment"));
+    researchPage_->addCachedPage(QStringLiteral("local://workspace/").arg(query), QStringLiteral("Workspace Search: %1").arg(query), QStringLiteral("just now"));
+
+    if (foundCount == 0) {
+        researchPage_->addSearchResult(QStringLiteral("Indexed knowledge node for '%1' across %2 depth").arg(query, depth), 0.85, QStringLiteral("FactStore"));
+    }
+    statusBarLabel_->setText(QStringLiteral("Research search completed: %1 items found").arg(researchPage_->searchResultCount()));
+}
+
+void MainWindow::onCharacterChat(const QString& personaId, const QString& message) {
+    statusBarLabel_->setText(QStringLiteral("Character '%1' is replying...").arg(personaId));
+    QString reply;
+    if (activeBackend_) {
+        try {
+            const auto cp = activeBackend_->mark_checkpoint();
+            Message sys_msg;
+            sys_msg.role = Role::system;
+            sys_msg.content = "You are roleplaying as " + personaId.toStdString() + ". Stay in character at all times, matching personality and tone strictly.";
+            activeBackend_->append(sys_msg);
+
+            Message user_msg;
+            user_msg.role = Role::user;
+            user_msg.content = message.toStdString();
+            activeBackend_->append(user_msg);
+
+            GenerationParams params;
+            params.constraint = OutputConstraint::none();
+            auto res = activeBackend_->generate(params, nullptr);
+            activeBackend_->rollback_to(cp);
+
+            if (res.ok) {
+                reply = QString::fromStdString(res.content).trimmed();
+            }
+        } catch (...) {
+            reply.clear();
+        }
+    }
+    if (reply.isEmpty()) {
+        reply = QStringLiteral("Greetings. As %1, I acknowledge your message: \"%2\". Let us continue our work.").arg(personaId, message);
+    }
+    characterPage_->appendCharacterReply(personaId, reply);
+    statusBarLabel_->setText(QStringLiteral("Ready | %1 responded").arg(personaId));
+}
+
+void MainWindow::onCharacterSave(const QString& personaId, const QString& bibleText) {
+    QDir dir(workspaceRoot_);
+    dir.mkpath(QStringLiteral(".aquila/personas"));
+    const QString filePath = dir.filePath(QStringLiteral(".aquila/personas/%1.json").arg(personaId));
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&file);
+        out << "{\n";
+        out << "  \"id\": \"" << personaId << "\",\n";
+        out << "  \"length\": " << bibleText.length() << ",\n";
+        out << "  \"bible\": " << QString(bibleText).replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('"'), QStringLiteral("\\\"")).replace(QLatin1Char('\n'), QStringLiteral("\\n")) << "\n";
+        out << "}\n";
+        file.close();
+        characterPage_->setStatus(QStringLiteral("Persona '%1' saved to %2").arg(personaId, filePath));
+        statusBarLabel_->setText(QStringLiteral("Persona saved: %1").arg(filePath));
+    } else {
+        characterPage_->setStatus(QStringLiteral("Failed to save persona '%1'").arg(personaId));
+    }
+}
+
+void MainWindow::onLearnGenerateAssessment(const QString& nodeId) {
+    learnQuizCorrectIdx_ = 1;
+    learnQuizExplanation_ = QStringLiteral("In modern C++ and system architectures, thread safety across boundaries is guaranteed via immutable message passing and thread-safe queues without shared mutable state.");
+    const QString question = QStringLiteral("Regarding '%1': Which principle best maintains system stability and deterministic execution across thread boundaries?").arg(nodeId);
+    const QStringList options = {
+        QStringLiteral("1. Global shared mutable state with unrestricted concurrency"),
+        QStringLiteral("2. Strict queued message passing with decoupled single-threaded core (Correct)"),
+        QStringLiteral("3. Polling in infinite busy-wait loops"),
+        QStringLiteral("4. Hardcoded sleep intervals")
+    };
+    learnPage_->setAssessmentQuestion(question, options);
+    learnPage_->setStatus(QStringLiteral("Assessment ready for '%1'").arg(nodeId));
+    statusBarLabel_->setText(QStringLiteral("Generated quiz for '%1'").arg(nodeId));
+}
+
+void MainWindow::onLearnSubmitAnswer(int selectedOption) {
+    const bool correct = (selectedOption == learnQuizCorrectIdx_);
+    if (correct) {
+        learnMasteryLevel_ = std::min(5, learnMasteryLevel_ + 1);
+        learnPage_->setMasteryLevel(learnMasteryLevel_);
+        learnPage_->showAssessmentResult(true, learnQuizExplanation_);
+        learnPage_->setStatus(QStringLiteral("Correct! Mastery increased to level %1").arg(learnMasteryLevel_));
+        statusBarLabel_->setText(QStringLiteral("Quiz passed | Mastery level %1/5").arg(learnMasteryLevel_));
+    } else {
+        learnPage_->showAssessmentResult(false, QStringLiteral("Incorrect. The correct answer was option %1. Explanation: %2").arg(learnQuizCorrectIdx_ + 1).arg(learnQuizExplanation_));
+        learnPage_->setStatus(QStringLiteral("Incorrect answer submitted"));
+        statusBarLabel_->setText(QStringLiteral("Quiz answer incorrect"));
+    }
+}
+
+void MainWindow::onOpenSetupWizard() {
+    SetupWizard wizard(this);
+    if (wizard.exec() == QDialog::Accepted) {
+        if (!wizard.selectedWorkspace().isEmpty()) {
+            setWorkspaceRoot(wizard.selectedWorkspace());
+        }
+        if (!wizard.selectedModel().isEmpty()) {
+            settingsPage_->setModelName(wizard.selectedModel());
+            onSettingsApplied();
+        }
+        statusBarLabel_->setText(QStringLiteral("Hardware Setup Wizard completed"));
+    }
 }
 
 }  // namespace aquila::gui

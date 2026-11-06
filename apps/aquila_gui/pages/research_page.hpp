@@ -20,6 +20,8 @@ public:
     void addFact(const QString& fact, double confidence, const QString& entity);
     void addCachedPage(const QString& url, const QString& title, const QString& timestamp);
     void clearAll();
+    int searchResultCount() const;
+    int factCount() const;
 
 signals:
     void searchRequested(const QString& query, const QString& depth);

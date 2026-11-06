@@ -1,9 +1,15 @@
 // apps/aquila_gui/pages/chat_page.cpp
 #include "chat_page.hpp"
 
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QMimeData>
 #include <QScrollBar>
+#include <QUrl>
 
 namespace aquila::gui {
 
@@ -11,6 +17,7 @@ ChatPage::ChatPage(QWidget* parent)
     : BasePage(QStringLiteral("Chat Mode"),
                QStringLiteral("Conversational AI with Live Token Streaming and Markdown"),
                QStringLiteral("💬"), parent) {
+    setAcceptDrops(true);
     auto* layout = contentLayout();
 
     // Transcript view
@@ -46,6 +53,7 @@ ChatPage::ChatPage(QWidget* parent)
     promptInput_->setPlaceholderText(QStringLiteral("Type a message or instruction... (Enter to send, Shift+Enter for newline)"));
     promptInput_->setMaximumHeight(80);
     promptInput_->setMinimumHeight(44);
+    promptInput_->installEventFilter(this);
     inputRow->addWidget(promptInput_, 1);
 
     auto* btnCol = new QVBoxLayout();
@@ -81,20 +89,94 @@ ChatPage::ChatPage(QWidget* parent)
     });
 }
 
-void ChatPage::appendUserMessage(const QString& text) {
+void ChatPage::appendUserMessage(const QString& text, const QStringList& attachments) {
     finalizeAssistantMessage();
+
+    QString attachHtml;
+    if (!attachments.isEmpty()) {
+        attachHtml += QStringLiteral("<div style='margin-bottom: 6px;'>");
+        for (const auto& a : attachments) {
+            QFileInfo fi(a);
+            attachHtml += QStringLiteral(
+                "<span style='background-color: rgba(255,255,255,0.18); border-radius: 6px; padding: 2px 7px; margin-right: 4px; font-size: 11px;'>"
+                "📎 %1"
+                "</span>"
+            ).arg(fi.fileName().toHtmlEscaped());
+        }
+        attachHtml += QStringLiteral("</div>");
+    }
+
     const QString html = QStringLiteral(
         "<div style='margin-bottom: 12px; text-align: right;'>"
-        "  <span style='background-color: #0078d4; color: #ffffff; border-radius: 12px; "
-        "               padding: 8px 14px; display: inline-block; max-width: 80%%;'>"
+        "  <div style='background-color: #0078d4; color: #ffffff; border-radius: 12px; "
+        "               padding: 8px 14px; display: inline-block; max-width: 80%%; text-align: left;'>"
         "    %1"
-        "  </span>"
+        "    <div>%2</div>"
+        "  </div>"
         "</div>"
-    ).arg(text.toHtmlEscaped());
+    ).arg(attachHtml, text.toHtmlEscaped());
 
     transcript_->append(html);
     auto* bar = transcript_->verticalScrollBar();
     bar->setValue(bar->maximum());
+}
+
+bool ChatPage::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == promptInput_ && event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            if (keyEvent->modifiers() & Qt::ShiftModifier) {
+                return false; // let QPlainTextEdit insert newline
+            } else {
+                onSendClicked();
+                return true; // handled
+            }
+        }
+    }
+    return BasePage::eventFilter(watched, event);
+}
+
+void ChatPage::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData() && event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    } else {
+        BasePage::dragEnterEvent(event);
+    }
+}
+
+void ChatPage::dropEvent(QDropEvent* event) {
+    if (event->mimeData() && event->mimeData()->hasUrls()) {
+        for (const auto& url : event->mimeData()->urls()) {
+            if (url.isLocalFile()) {
+                addAttachment(url.toLocalFile());
+            }
+        }
+        event->acceptProposedAction();
+    } else {
+        BasePage::dropEvent(event);
+    }
+}
+
+void ChatPage::addAttachment(const QString& file) {
+    if (file.isEmpty() || currentAttachments_.contains(file)) return;
+    currentAttachments_.append(file);
+    QFileInfo fi(file);
+    QString sizeStr;
+    const qint64 sz = fi.size();
+    if (sz < 1024) sizeStr = QStringLiteral("%1 B").arg(sz);
+    else if (sz < 1024 * 1024) sizeStr = QStringLiteral("%1 KB").arg(sz / 1024);
+    else sizeStr = QStringLiteral("%1 MB").arg(sz / (1024 * 1024));
+
+    auto* chip = new QPushButton(QStringLiteral("📎 %1 (%2) ✕").arg(fi.fileName(), sizeStr), attachmentsContainer_);
+    chip->setStyleSheet(QStringLiteral(
+        "background-color: #333333; color: #79c0ff; border: 1px solid #444444; border-radius: 10px; padding: 3px 9px; font-size: 11px; font-weight: bold;"
+    ));
+    connect(chip, &QPushButton::clicked, this, [this, chip, file]() {
+        currentAttachments_.removeAll(file);
+        attachmentsLayout_->removeWidget(chip);
+        delete chip;
+    });
+    attachmentsLayout_->addWidget(chip);
 }
 
 void ChatPage::appendAssistantMessage(const QString& text) {
@@ -197,10 +279,7 @@ void ChatPage::setFollowupSuggestions(const QStringList& suggestions) {
 
 void ChatPage::onSendClicked() {
     const QString text = promptInput_->toPlainText().trimmed();
-    if (text.isEmpty()) return;
-
-    appendUserMessage(text);
-    promptInput_->clear();
+    if (text.isEmpty() && currentAttachments_.isEmpty()) return;
 
     QStringList attach = currentAttachments_;
     currentAttachments_.clear();
@@ -210,23 +289,14 @@ void ChatPage::onSendClicked() {
         delete it;
     }
 
+    promptInput_->clear();
     emit sendRequested(text, attach);
 }
 
 void ChatPage::onAttachClicked() {
-    const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Select File to Attach"));
-    if (!file.isEmpty()) {
-        currentAttachments_.append(file);
-        auto* chip = new QPushButton(QStringLiteral("📎 %1 ✕").arg(QFileInfo(file).fileName()), attachmentsContainer_);
-        chip->setStyleSheet(QStringLiteral(
-            "background-color: #333333; color: #ffffff; border-radius: 10px; padding: 2px 8px; font-size: 11px;"
-        ));
-        connect(chip, &QPushButton::clicked, this, [this, chip, file]() {
-            currentAttachments_.removeAll(file);
-            attachmentsLayout_->removeWidget(chip);
-            delete chip;
-        });
-        attachmentsLayout_->addWidget(chip);
+    const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("Select Files to Attach"));
+    for (const auto& file : files) {
+        addAttachment(file);
     }
 }
 

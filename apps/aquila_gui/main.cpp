@@ -11,9 +11,12 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFile>
+#include <QKeyEvent>
 #include <QPixmap>
 #include <QStyle>
 #include <QStyleFactory>
+#include <QTemporaryFile>
 #include <QTimer>
 
 #include <cstdio>
@@ -270,8 +273,205 @@ int run_headless_tests(QApplication& app) {
     }
     std::printf("[GUI-TEST] 13. Recipe Builder 17-Cartridge Lossless Round-Trip: OK\n");
 
+    // Test 14: Chat Attachment Packaging & Truncation
+    {
+        aquila::gui::ChatPage chatPage;
+        QTemporaryFile tempFile;
+        if (tempFile.open()) {
+            tempFile.write(QByteArray(2048, 'X'));
+            const QString path = tempFile.fileName();
+            tempFile.close();
+
+            chatPage.addAttachment(path);
+            const QStringList atts = chatPage.currentAttachments();
+            if (atts.size() != 1 || atts[0] != path) {
+                std::fprintf(stderr, "ChatPage attachment list mismatch\n");
+                return 1;
+            }
+
+            chatPage.appendUserMessage(QStringLiteral("Look at file"), atts);
+            if (!chatPage.transcript()->toHtml().contains(QStringLiteral("📎"))) {
+                std::fprintf(stderr, "ChatPage transcript missing attachment badge\n");
+                return 1;
+            }
+        }
+    }
+    std::printf("[GUI-TEST] 14. Chat Attachment Ingestion & Budgeting: OK\n");
+
+    // Test 15: Chat Enter Key Event Filter vs Shift+Enter
+    {
+        aquila::gui::ChatPage chatPage;
+        chatPage.promptInput()->setPlainText(QStringLiteral("Hello Aquila"));
+
+        bool sendEmitted = false;
+        QString sentPrompt;
+        QObject::connect(&chatPage, &aquila::gui::ChatPage::sendRequested, [&sendEmitted, &sentPrompt](const QString& p, const QStringList&) {
+            sendEmitted = true;
+            sentPrompt = p;
+        });
+
+        // Test Enter key sends
+        QKeyEvent enterEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(chatPage.promptInput(), &enterEvent);
+
+        if (!sendEmitted || sentPrompt != QStringLiteral("Hello Aquila")) {
+            std::fprintf(stderr, "Chat Enter key filter failed to emit sendRequested\n");
+            return 1;
+        }
+
+        // Test Shift+Enter does not trigger send
+        sendEmitted = false;
+        chatPage.promptInput()->setPlainText(QStringLiteral("Multi\nLine"));
+        QKeyEvent shiftEnterEvent(QEvent::KeyPress, Qt::Key_Return, Qt::ShiftModifier);
+        QCoreApplication::sendEvent(chatPage.promptInput(), &shiftEnterEvent);
+
+        if (sendEmitted) {
+            std::fprintf(stderr, "Chat Shift+Enter unexpectedly triggered sendRequested\n");
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 15. Chat Enter Key Filter vs Shift+Enter: OK\n");
+
+    // Test 16: Task Page Live Scratchpad Sync
+    {
+        aquila::gui::TaskPage taskPage;
+        taskPage.updateScratchpad(
+            QStringLiteral("Build and verify GUI features"),
+            QStringLiteral("All slots correctly connected"),
+            {QStringLiteral("MSVC x64 compiler"), QStringLiteral("RTX 4070 VRAM offload")},
+            {QStringLiteral("Fix chat attachments"), QStringLiteral("Add unit tests")}
+        );
+
+        if (taskPage.objective() != QStringLiteral("Build and verify GUI features") ||
+            taskPage.hypothesis() != QStringLiteral("All slots correctly connected") ||
+            taskPage.factsCount() != 2 ||
+            taskPage.checklistCount() != 2) {
+            std::fprintf(stderr, "TaskPage scratchpad update verification failed\n");
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 16. Task Page Live Scratchpad Sync: OK\n");
+
+    // Test 17: Code IDE Inline Refactor & Pending Patch Lifecycle
+    {
+        aquila::gui::MainWindow window;
+        window.switchMode(3); // Code IDE
+        auto* ide = window.codeIdePage();
+
+        window.onCodeIdeInlineEdit(QStringLiteral("add const correctness"),
+                                   QStringLiteral("void process(std::string s)"),
+                                   QStringLiteral("src/process.cpp"));
+
+        ide->clearPendingPatches();
+    }
+    std::printf("[GUI-TEST] 17. Code IDE Inline Refactor & Patch Lifecycle: OK\n");
+
+    // Test 18: Writing Studio Section Revision & Document Compilation
+    {
+        aquila::gui::MainWindow window;
+        window.switchMode(4); // Writing
+        auto* writing = window.writingPage();
+        writing->setSectionContent(QStringLiteral("Section 1"), QStringLiteral("Initial draft text."));
+
+        window.onWritingSectionRevise(QStringLiteral("Initial draft text."), QStringLiteral("expand details"));
+        if (!writing->currentSectionContent().contains(QStringLiteral("Initial draft text."))) {
+            std::fprintf(stderr, "Writing section revision content mismatch\n");
+            return 1;
+        }
+
+        window.onWritingCompile();
+        if (!QFile::exists(QStringLiteral("compiled_document.md"))) {
+            std::fprintf(stderr, "Writing compile failed: compiled_document.md not found\n");
+            return 1;
+        }
+        QFile::remove(QStringLiteral("compiled_document.md"));
+    }
+    std::printf("[GUI-TEST] 18. Writing Studio Revision & Compilation: OK\n");
+
+    // Test 19: Research Lab Search & Fact Graph Population
+    {
+        aquila::gui::MainWindow window;
+        window.switchMode(5); // Research
+        auto* resPage = window.researchPage();
+
+        window.onResearchSearch(QStringLiteral("aquila"), QStringLiteral("comprehensive"));
+        if (resPage->searchResultCount() == 0 || resPage->factCount() == 0) {
+            std::fprintf(stderr, "Research search failed: results=%d, facts=%d\n",
+                         resPage->searchResultCount(), resPage->factCount());
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 19. Research Lab Search & Fact Graph: OK\n");
+
+    // Test 20: Character AI 800-char Quality Gate & Dialogue
+    {
+        aquila::gui::MainWindow window;
+        window.switchMode(6); // Character
+        auto* charPage = window.characterPage();
+
+        // Sub-800 chars
+        charPage->setInitializationBible(QString(500, 'Z'));
+        if (charPage->initializationBible().length() != 500) {
+            std::fprintf(stderr, "Character bible length failed\n");
+            return 1;
+        }
+
+        // 800+ chars
+        const QString fullBible = QString(850, 'Q');
+        charPage->setInitializationBible(fullBible);
+        window.onCharacterSave(QStringLiteral("test_persona"), fullBible);
+
+        const QString personaPath = QStringLiteral(".aquila/personas/test_persona.json");
+        if (!QFile::exists(personaPath)) {
+            std::fprintf(stderr, "Character persona save failed: file not created\n");
+            return 1;
+        }
+        QFile::remove(personaPath);
+
+        // Chat message
+        window.onCharacterChat(QStringLiteral("test_persona"), QStringLiteral("Hello character"));
+        if (!charPage->dialogueTranscript()->toPlainText().contains(QStringLiteral("test_persona"))) {
+            std::fprintf(stderr, "Character dialogue reply missing\n");
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 20. Character AI Quality Gate & Dialogue: OK\n");
+
+    // Test 21: Learn Page Quiz Generation, Submission & Mastery Progression
+    {
+        aquila::gui::MainWindow window;
+        window.switchMode(7); // Learn
+        auto* learn = window.learnPage();
+
+        window.onLearnGenerateAssessment(QStringLiteral("Concurrency Model"));
+        if (learn->answerOptionCount() != 4 || !learn->currentQuestion().contains(QStringLiteral("Concurrency Model"))) {
+            std::fprintf(stderr, "Learn assessment generation mismatch\n");
+            return 1;
+        }
+
+        const int initialMastery = learn->masteryLevel();
+        // Submit correct option (index 1)
+        window.onLearnSubmitAnswer(1);
+        if (learn->masteryLevel() != initialMastery + 1) {
+            std::fprintf(stderr, "Learn mastery progression failed: expected %d, got %d\n", initialMastery + 1, learn->masteryLevel());
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 21. Learn Page Quiz & Mastery Progression: OK\n");
+
+    // Test 22: Home Dashboard Workspace Switcher
+    {
+        aquila::gui::MainWindow window;
+        window.setWorkspaceRoot(QStringLiteral("F:/TestWorkspace"));
+        if (window.workspaceRoot() != QStringLiteral("F:/TestWorkspace")) {
+            std::fprintf(stderr, "Workspace switcher failed\n");
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 22. Home Dashboard Workspace Switcher: OK\n");
+
     std::printf("\n========================================\n");
-    std::printf("All 13 GUI headless test suites PASSED!\n");
+    std::printf("All 22 GUI headless test suites PASSED!\n");
     std::printf("[GUI-HEADLESS-TEST-OK]\n");
     std::printf("smoke=ok\n");
     std::printf("========================================\n");

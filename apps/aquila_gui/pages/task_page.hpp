@@ -26,6 +26,11 @@ public:
                           const QStringList& facts, const QStringList& checklist);
     void clearLedger();
 
+    QString objective() const;
+    QString hypothesis() const;
+    int factsCount() const;
+    int checklistCount() const;
+
 signals:
     void runRecipeRequested(const QString& recipeId, const QString& prompt);
     void cancelRequested();

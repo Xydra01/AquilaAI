@@ -205,4 +205,12 @@ QString SettingsPage::workspacePath() const {
     return workspaceInput_->text();
 }
 
+void SettingsPage::setModelName(const QString& name) {
+    modelInput_->setText(name);
+}
+
+void SettingsPage::setWorkspacePath(const QString& path) {
+    workspaceInput_->setText(path);
+}
+
 }  // namespace aquila::gui

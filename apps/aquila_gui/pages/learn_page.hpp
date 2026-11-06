@@ -21,7 +21,11 @@ public:
     void setCourseList(const QStringList& courses);
     void setSyllabusTree(const QString& courseJson);
     void setAssessmentQuestion(const QString& question, const QStringList& options);
+    void showAssessmentResult(bool correct, const QString& explanation);
     void setMasteryLevel(int level);
+    int masteryLevel() const;
+    QString currentQuestion() const;
+    int answerOptionCount() const;
 
 signals:
     void courseSelected(const QString& courseId);

@@ -51,6 +51,16 @@ public slots:
     void onCancelCurrentTask();
     void openCartridgeInBuilder(const QString& recipeId);
     void onSettingsApplied();
+    void onBrowseWorkspace();
+    void onCodeIdeInlineEdit(const QString& prompt, const QString& selectedText, const QString& filePath);
+    void onWritingSectionRevise(const QString& sectionContent, const QString& instruction);
+    void onWritingCompile();
+    void onResearchSearch(const QString& query, const QString& depth);
+    void onCharacterChat(const QString& personaId, const QString& message);
+    void onCharacterSave(const QString& personaId, const QString& bibleText);
+    void onLearnGenerateAssessment(const QString& nodeId);
+    void onLearnSubmitAnswer(int selectedOption);
+    void onOpenSetupWizard();
 
 private:
     void setupUi();
@@ -79,6 +89,10 @@ private:
     QString workspaceRoot_ = ".";
     AgentWorker* activeWorker_ = nullptr;
     std::shared_ptr<aquila::IInferenceBackend> activeBackend_;
+
+    int learnQuizCorrectIdx_ = 1;
+    QString learnQuizExplanation_;
+    int learnMasteryLevel_ = 1;
 };
 
 }  // namespace aquila::gui

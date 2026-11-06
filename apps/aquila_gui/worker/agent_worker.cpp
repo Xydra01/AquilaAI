@@ -98,6 +98,45 @@ void AgentWorker::run() {
             thought = QString::fromStdString(rec.call->thought);
             module = QString::fromStdString(rec.call->module);
             action = QString::fromStdString(rec.call->action);
+
+            if (rec.call->module == "OrchestratorModule") {
+                QString obj = QString::fromStdString(user_request_.empty() ? recipe_.goal_template : user_request_);
+                QString hyp;
+                QStringList facts;
+                QStringList checkList;
+
+                const auto& args = rec.call->args;
+                if (args.is_object() && args.contains("notes") && args["notes"].is_object()) {
+                    const auto& notes = args["notes"];
+                    if (notes.contains("objective") && notes["objective"].is_string()) {
+                        obj = QString::fromStdString(notes["objective"].get<std::string>());
+                    }
+                    if (notes.contains("hypothesis") && notes["hypothesis"].is_string()) {
+                        hyp = QString::fromStdString(notes["hypothesis"].get<std::string>());
+                    }
+                    if (notes.contains("verified_facts") && notes["verified_facts"].is_array()) {
+                        for (const auto& f : notes["verified_facts"]) {
+                            if (f.is_string()) facts.append(QString::fromStdString(f.get<std::string>()));
+                        }
+                    }
+                    if (notes.contains("checklist") && notes["checklist"].is_array()) {
+                        for (const auto& c : notes["checklist"]) {
+                            if (c.is_string()) {
+                                checkList.append(QString::fromStdString(c.get<std::string>()));
+                            } else if (c.is_object() && c.contains("item") && c["item"].is_string()) {
+                                const QString state = c.value("done", false) ? QStringLiteral(" [DONE]") : QStringLiteral("");
+                                checkList.append(QString::fromStdString(c["item"].get<std::string>()) + state);
+                            }
+                        }
+                    }
+                }
+                if (checkList.isEmpty()) {
+                    for (const auto& item : recipe_.scratchpad_checklist) {
+                        checkList.append(QString::fromStdString(item));
+                    }
+                }
+                emit scratchpadUpdated(obj, hyp, facts, checkList);
+            }
         }
         if (rec.interaction) {
             output = QString::fromStdString(rec.interaction->result.llm_facing_output);
@@ -112,6 +151,14 @@ void AgentWorker::run() {
         ModuleRegistry registry = ModuleRegistry::builtin();
         ModuleContext ctx;
         ctx.workspace_root = workspace_root_;
+
+        QStringList initChecklist;
+        for (const auto& item : recipe_.scratchpad_checklist) {
+            initChecklist.append(QString::fromStdString(item));
+        }
+        emit scratchpadUpdated(QString::fromStdString(user_request_.empty() ? recipe_.goal_template : user_request_),
+                               QStringLiteral("Formulating execution plan and inspecting context"),
+                               {}, initChecklist);
 
         emit statusChanged(QStringLiteral("Running recipe '%1'...").arg(QString::fromStdString(recipe_.recipe_id)));
         AgentLoop loop(*backend_, registry, ctx);
