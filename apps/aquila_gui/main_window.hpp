@@ -78,6 +78,7 @@ private:
 
     QString workspaceRoot_ = ".";
     AgentWorker* activeWorker_ = nullptr;
+    std::shared_ptr<aquila::IInferenceBackend> activeBackend_;
 };
 
 }  // namespace aquila::gui

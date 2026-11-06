@@ -241,6 +241,7 @@ void MainWindow::onSettingsApplied() {
     if (!settingsPage_->workspacePath().isEmpty()) {
         setWorkspaceRoot(settingsPage_->workspacePath());
     }
+    activeBackend_.reset();
 }
 
 std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
@@ -279,13 +280,16 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& /* attachm
         activeWorker_->wait();
     }
 
-    std::shared_ptr<aquila::IInferenceBackend> backend;
-    try {
-        backend = createBackend();
-    } catch (const std::exception& e) {
-        chatPage_->appendAssistantMessage(QStringLiteral("❌ Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
-        statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
-        return;
+    if (!activeBackend_) {
+        statusBarLabel_->setText(QStringLiteral("Loading model weights..."));
+        qApp->processEvents();
+        try {
+            activeBackend_ = createBackend();
+        } catch (const std::exception& e) {
+            chatPage_->appendAssistantMessage(QStringLiteral("❌ Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
+            statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
+            return;
+        }
     }
 
     RecipeCartridge recipe = fn_dev_implement_recipe();
@@ -296,9 +300,9 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& /* attachm
     config.context_strategy = CondenserStrategy::sac;
 
     chatPage_->setRunning(true);
-    statusBarLabel_->setText(QStringLiteral("Agent thinking..."));
+    statusBarLabel_->setText(QStringLiteral("Thinking..."));
 
-    activeWorker_ = new AgentWorker(backend, recipe, prompt.toStdString(), config, workspaceRoot_.toStdString(), this);
+    activeWorker_ = new AgentWorker(activeBackend_, recipe, prompt.toStdString(), config, workspaceRoot_.toStdString(), this);
 
     connect(activeWorker_, &AgentWorker::tokenStreamed, chatPage_, &ChatPage::appendToken);
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
@@ -320,14 +324,17 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         activeWorker_->wait();
     }
 
-    std::shared_ptr<aquila::IInferenceBackend> backend;
-    try {
-        backend = createBackend();
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, QStringLiteral("Backend Error"),
-                              QStringLiteral("Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
-        statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
-        return;
+    if (!activeBackend_) {
+        statusBarLabel_->setText(QStringLiteral("Loading model weights..."));
+        qApp->processEvents();
+        try {
+            activeBackend_ = createBackend();
+        } catch (const std::exception& e) {
+            QMessageBox::critical(this, QStringLiteral("Backend Error"),
+                                  QStringLiteral("Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
+            statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
+            return;
+        }
     }
 
     RecipeCartridge recipe = fn_dev_implement_recipe();
@@ -347,7 +354,7 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
     statusBarLabel_->setText(QStringLiteral("Running %1...").arg(recipeId));
 
     const std::string goal = prompt.isEmpty() ? recipe.goal_template : prompt.toStdString();
-    activeWorker_ = new AgentWorker(backend, recipe, goal, config, workspaceRoot_.toStdString(), this);
+    activeWorker_ = new AgentWorker(activeBackend_, recipe, goal, config, workspaceRoot_.toStdString(), this);
 
     connect(activeWorker_, &AgentWorker::turnCompleted, taskPage_, [this](int turn, const QString&, const QString& mod, const QString& act, const QString& out) {
         taskPage_->addLedgerEntry(turn, mod, act, QStringLiteral("OK"), out);

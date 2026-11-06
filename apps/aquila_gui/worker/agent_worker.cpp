@@ -30,6 +30,53 @@ void AgentWorker::deliverUserResponse(const QString& text) {
 }
 
 void AgentWorker::run() {
+    if (config_.mode == "chat") {
+        emit statusChanged(QStringLiteral("Generating response..."));
+        try {
+            if (backend_->mark_checkpoint() == 0) {
+                Message sys_msg;
+                sys_msg.role = Role::system;
+                sys_msg.content = "You are Aquila, an autonomous, highly capable AI assistant and software engineering partner. Provide clear, direct, and insightful responses in markdown format.";
+                backend_->append(sys_msg);
+            }
+
+            Message user_msg;
+            user_msg.role = Role::user;
+            user_msg.content = user_request_;
+            backend_->append(user_msg);
+
+            GenerationParams params;
+            params.temperature = 0.6;
+            params.constraint = OutputConstraint::none();
+
+            const auto res = backend_->generate(params, [this](std::string_view tok, std::string_view) -> bool {
+                emit tokenStreamed(QString::fromUtf8(tok.data(), static_cast<qsizetype>(tok.size())));
+                return !cancel_flag_.load();
+            });
+
+            if (cancel_flag_.load()) {
+                emit statusChanged(QStringLiteral("Generation cancelled by user."));
+                emit finished(false, QStringLiteral("Cancelled"));
+            } else if (!res.ok) {
+                const std::string err = res.error_detail.empty() ? res.error_code : res.error_detail;
+                emit statusChanged(QStringLiteral("Error: %1").arg(QString::fromStdString(err)));
+                emit finished(false, QString::fromStdString(err));
+            } else {
+                Message ass_msg;
+                ass_msg.role = Role::assistant;
+                ass_msg.content = res.content;
+                backend_->append(ass_msg);
+
+                emit statusChanged(QStringLiteral("Ready"));
+                emit finished(true, QString::fromStdString(res.content));
+            }
+        } catch (const std::exception& e) {
+            emit statusChanged(QStringLiteral("Error: %1").arg(e.what()));
+            emit finished(false, QString::fromStdString(e.what()));
+        }
+        return;
+    }
+
     emit statusChanged(QStringLiteral("Initializing agent loop..."));
 
     config_.on_token = [this](std::string_view tok, std::string_view) -> bool {
