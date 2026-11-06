@@ -688,6 +688,10 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -711,8 +715,9 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Analyze requirements and codebase",
+    "Ensure workspace virtualenv and install required dependencies",
     "Implement necessary code changes",
-    "Run test suite to verify implementation",
+    "Run script or test suite to verify implementation",
     "Complete task"
   ]
 }

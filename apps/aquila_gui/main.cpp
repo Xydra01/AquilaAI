@@ -3,6 +3,7 @@
 #include "dialogs/setup_wizard.hpp"
 #include "main_window.hpp"
 #include "theme/theme.hpp"
+#include "theme/markdown_renderer.hpp"
 #include "widgets/flow_layout.hpp"
 #include "widgets/inline_prompt_bar.hpp"
 #include "widgets/inline_diff_overlay.hpp"
@@ -470,8 +471,40 @@ int run_headless_tests(QApplication& app) {
     }
     std::printf("[GUI-TEST] 22. Home Dashboard Workspace Switcher: OK\n");
 
+    // Test 23: Markdown Rendering Engine
+    {
+        const QString input = QStringLiteral("## World Clock\nHere is python code:\n```python\nimport pytz\nprint('time')\n```\n- Point 1\n- Point 2\n**Bold note**");
+        const QString html = aquila::gui::MarkdownRenderer::toHtml(input);
+        if (!html.contains(QStringLiteral("<h2")) || !html.contains(QStringLiteral("import pytz"))) {
+            std::fprintf(stderr, "Markdown rendering verification failed\n");
+            return 1;
+        }
+        if (!html.contains(QStringLiteral("<b>Bold note</b>"))) {
+            std::fprintf(stderr, "Markdown bold formatting failed\n");
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 23. Markdown Rendering Engine: OK\n");
+
+    // Test 24: Venv Sandbox Actions & Recipe Enum Constraining
+    {
+        aquila::RecipeCartridge recipe = aquila::fn_dev_implement_recipe();
+        const auto schema = aquila::AgentLoop::action_call_schema(&recipe);
+        if (!schema.contains("properties") || !schema["properties"].contains("module") ||
+            !schema["properties"]["module"].contains("enum")) {
+            std::fprintf(stderr, "Action call schema missing module enum constraint\n");
+            return 1;
+        }
+        const auto enumList = schema["properties"]["module"]["enum"];
+        if (enumList.size() != 3) {
+            std::fprintf(stderr, "Module enum constraint size mismatch: expected 3, got %lld\n", static_cast<long long>(enumList.size()));
+            return 1;
+        }
+    }
+    std::printf("[GUI-TEST] 24. Venv Sandbox Actions & Recipe Enum Schema: OK\n");
+
     std::printf("\n========================================\n");
-    std::printf("All 22 GUI headless test suites PASSED!\n");
+    std::printf("All 24 GUI headless test suites PASSED!\n");
     std::printf("[GUI-HEADLESS-TEST-OK]\n");
     std::printf("smoke=ok\n");
     std::printf("========================================\n");

@@ -1,5 +1,6 @@
 // apps/aquila_gui/pages/learn_page.cpp
 #include "learn_page.hpp"
+#include "../theme/markdown_renderer.hpp"
 
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -137,6 +138,7 @@ void LearnPage::setAssessmentQuestion(const QString& question, const QStringList
 }
 
 void LearnPage::showAssessmentResult(bool correct, const QString& explanation) {
+    const QString formattedHtml = MarkdownRenderer::toHtml(explanation);
     const QString resultHtml = QStringLiteral(
         "<div style='margin-top:12px; padding:10px; border-radius:6px; background-color:%1; color:#ffffff;'>"
         "  <b>%2</b><br>%3"
@@ -144,7 +146,7 @@ void LearnPage::showAssessmentResult(bool correct, const QString& explanation) {
     ).arg(
         correct ? QStringLiteral("#2ea043") : QStringLiteral("#da3633"),
         correct ? QStringLiteral("✓ Correct!") : QStringLiteral("✗ Incorrect"),
-        explanation.toHtmlEscaped()
+        formattedHtml
     );
     questionViewer_->append(resultHtml);
 }

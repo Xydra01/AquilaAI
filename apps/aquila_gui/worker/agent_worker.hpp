@@ -33,7 +33,7 @@ public:
 signals:
     void tokenStreamed(const QString& token);
     void turnCompleted(int index, const QString& thought, const QString& module,
-                       const QString& action, const QString& output);
+                       const QString& action, bool success, const QString& output);
     void scratchpadUpdated(const QString& objective, const QString& hypothesis,
                            const QStringList& facts, const QStringList& checklist);
     void statusChanged(const QString& statusText);

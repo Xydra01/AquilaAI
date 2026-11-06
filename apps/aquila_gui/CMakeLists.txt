@@ -20,6 +20,8 @@ qt_add_executable(aquila_gui
     main_window.cpp
     theme/theme.hpp
     theme/theme.cpp
+    theme/markdown_renderer.hpp
+    theme/markdown_renderer.cpp
     widgets/nav_rail.hpp
     widgets/nav_rail.cpp
     widgets/flow_layout.hpp

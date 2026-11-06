@@ -18,7 +18,7 @@ namespace {
 const std::set<std::string>& default_allowlist() {
     static const std::set<std::string> kPrograms = {"python", "python3", "py",   "pytest", "git",   "cmake", "ninja",
                                                     "ctest",  "cargo",   "go",   "npm",    "npx",   "flake8", "ruff",
-                                                    "mypy"};
+                                                    "mypy",   "pip",     "pip3", "uv"};
     return kPrograms;
 }
 
@@ -44,6 +44,14 @@ std::vector<ActionSchema> ExecutionModule::get_actions() const {
          schema(R"({"type":"object","properties":{"filter":{"type":"string"}},"additionalProperties":false})")},
         {"exec_sandboxed_cmd", "Run one allowlisted program (argv, no shell) inside the workspace.",
          schema(R"({"type":"object","properties":{"argv":{"type":"array","minItems":1,"items":{"type":"string"}},"cwd":{"type":"string"}},"required":["argv"],"additionalProperties":false})")},
+        {"ensure_venv", "Ensure an isolated Python virtual environment (.venv) exists in the workspace. Creates it if missing.",
+         schema(R"({"type":"object","properties":{"venv_dir":{"type":"string"}},"additionalProperties":false})")},
+        {"pip_install", "Install one or more Python packages into the workspace virtual environment.",
+         schema(R"({"type":"object","properties":{"packages":{"type":"array","items":{"type":"string"},"minItems":1},"upgrade":{"type":"boolean"}},"required":["packages"],"additionalProperties":false})")},
+        {"run_python", "Execute a Python script or Python code snippet inside the workspace virtual environment.",
+         schema(R"({"type":"object","properties":{"script":{"type":"string"},"code":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"additionalProperties":false})")},
+        {"pip_list", "List installed Python packages inside the workspace virtual environment.",
+         schema(R"({"type":"object","additionalProperties":false})")},
     };
 }
 
@@ -148,7 +156,172 @@ ActionResult ExecutionModule::run(const std::string& action, const Json& args) {
         const auto cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
         return execute(action, std::move(argv), cwd, false, "command_failed");
     }
+    if (action == "ensure_venv") {
+        const std::string venv_dir = args.contains("venv_dir") ? args["venv_dir"].get<std::string>() : ".venv";
+        return ensure_venv_action(venv_dir);
+    }
+    if (action == "pip_install") {
+        if (!args.contains("packages") || !args["packages"].is_array() || args["packages"].empty()) {
+            return fail("invalid_args", "pip_install requires a non-empty 'packages' array");
+        }
+        const auto pkgs = args["packages"].get<std::vector<std::string>>();
+        const bool upgrade = args.contains("upgrade") ? args["upgrade"].get<bool>() : false;
+        return pip_install_action(pkgs, upgrade);
+    }
+    if (action == "run_python") {
+        const std::string script = args.contains("script") ? args["script"].get<std::string>() : "";
+        const std::string code = args.contains("code") ? args["code"].get<std::string>() : "";
+        std::vector<std::string> sargs;
+        if (args.contains("args") && args["args"].is_array()) {
+            sargs = args["args"].get<std::vector<std::string>>();
+        }
+        const std::string cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
+        return run_python_action(script, code, sargs, cwd);
+    }
+    if (action == "pip_list") {
+        return pip_list_action();
+    }
     return fail("unknown_action", "ExecutionModule has no action '" + action + "'");
+}
+
+ActionResult ExecutionModule::ensure_venv_action(const std::string& venv_name) {
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    const std::string target_name = venv_name.empty() ? ".venv" : venv_name;
+    const auto venv = base / target_name;
+
+    std::error_code ec;
+#ifdef _WIN32
+    const bool exists = fs::exists(venv / "Scripts" / "python.exe", ec);
+#else
+    const bool exists = fs::exists(venv / "bin" / "python", ec);
+#endif
+
+    if (exists) {
+        ActionResult res;
+        res.success = true;
+        res.llm_facing_output = "virtualenv already active at " + path_to_utf8(venv);
+        return res;
+    }
+
+    std::vector<std::string> argv = {"python", "-m", "venv", target_name};
+    exec::RunOptions opt;
+    opt.argv = argv;
+    opt.cwd = base;
+    opt.timeout_s = 60.0;
+    opt.env = env_;
+    auto run_res = exec::run(opt);
+    if (!run_res.started || run_res.exit_code != 0) {
+        opt.argv = {"python3", "-m", "venv", target_name};
+        run_res = exec::run(opt);
+        if (!run_res.started || run_res.exit_code != 0) {
+            opt.argv = {"py", "-m", "venv", target_name};
+            run_res = exec::run(opt);
+        }
+    }
+
+    if (!run_res.started || run_res.exit_code != 0) {
+        return fail("venv_creation_failed", "failed to create virtualenv at " + path_to_utf8(venv) +
+                                                ": " + (run_res.output.empty() ? run_res.error : run_res.output));
+    }
+
+    ActionResult res;
+    res.success = true;
+    res.llm_facing_output = "successfully initialized isolated virtualenv at " + path_to_utf8(venv);
+    return res;
+}
+
+ActionResult ExecutionModule::pip_install_action(const std::vector<std::string>& packages, bool upgrade) {
+    ensure_venv_action(".venv");
+
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    const auto venv = base / ".venv";
+#ifdef _WIN32
+    std::string py_exe = path_to_utf8(venv / "Scripts" / "python.exe");
+    std::error_code ec;
+    if (!fs::exists(py_exe, ec)) py_exe = "python";
+#else
+    std::string py_exe = path_to_utf8(venv / "bin" / "python");
+    std::error_code ec;
+    if (!fs::exists(py_exe, ec)) py_exe = "python3";
+#endif
+
+    std::vector<std::string> argv = {py_exe, "-m", "pip", "install"};
+    if (upgrade) {
+        argv.push_back("--upgrade");
+    }
+    for (const auto& pkg : packages) {
+        argv.push_back(pkg);
+    }
+
+    exec::RunOptions opt;
+    opt.argv = argv;
+    opt.cwd = base;
+    opt.timeout_s = 180.0;
+    opt.env = env_;
+    opt.env["VIRTUAL_ENV"] = path_to_utf8(venv);
+
+    const auto run_res = exec::run(opt);
+    if (!run_res.started || run_res.exit_code != 0) {
+        return fail("pip_install_failed", "pip install failed with exit code " + std::to_string(run_res.exit_code) +
+                                              ":\n" + run_res.output);
+    }
+
+    ActionResult res;
+    res.success = true;
+    res.llm_facing_output = "packages installed successfully into .venv:\n" + run_res.output;
+    return res;
+}
+
+ActionResult ExecutionModule::run_python_action(const std::string& script, const std::string& code,
+                                               const std::vector<std::string>& script_args, const std::string& cwd) {
+    ensure_venv_action(".venv");
+
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    const auto venv = base / ".venv";
+#ifdef _WIN32
+    std::string py_exe = path_to_utf8(venv / "Scripts" / "python.exe");
+    std::error_code ec;
+    if (!fs::exists(py_exe, ec)) py_exe = "python";
+#else
+    std::string py_exe = path_to_utf8(venv / "bin" / "python");
+    std::error_code ec;
+    if (!fs::exists(py_exe, ec)) py_exe = "python3";
+#endif
+
+    std::vector<std::string> argv = {py_exe};
+    if (!code.empty()) {
+        argv.push_back("-c");
+        argv.push_back(code);
+    } else if (!script.empty()) {
+        argv.push_back(script);
+        for (const auto& a : script_args) {
+            argv.push_back(a);
+        }
+    } else {
+        return fail("invalid_args", "run_python requires either 'script' or 'code'");
+    }
+
+    const auto target_cwd = cwd.empty() ? cwd_ : cwd;
+    return execute("run_python", argv, target_cwd, false, "python_execution_failed");
+}
+
+ActionResult ExecutionModule::pip_list_action() {
+    ensure_venv_action(".venv");
+
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    const auto venv = base / ".venv";
+#ifdef _WIN32
+    std::string py_exe = path_to_utf8(venv / "Scripts" / "python.exe");
+    std::error_code ec;
+    if (!fs::exists(py_exe, ec)) py_exe = "python";
+#else
+    std::string py_exe = path_to_utf8(venv / "bin" / "python");
+    std::error_code ec;
+    if (!fs::exists(py_exe, ec)) py_exe = "python3";
+#endif
+
+    std::vector<std::string> argv = {py_exe, "-m", "pip", "list"};
+    return execute("pip_list", argv, cwd_, false, "pip_list_failed");
 }
 
 ActionResult ExecutionModule::execute(const std::string& action, std::vector<std::string> argv, const std::string& cwd,
@@ -176,6 +349,29 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
     opt.cwd = dir;
     opt.env = env_;
     opt.timeout_s = timeout_s_;
+
+    // Inject .venv if active in workspace
+    const auto base_dir = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    const auto venv_dir = base_dir / ".venv";
+    std::error_code ec_v;
+    if (fs::is_directory(venv_dir, ec_v)) {
+        opt.env["VIRTUAL_ENV"] = path_to_utf8(venv_dir);
+#ifdef _WIN32
+        const auto scripts_dir = venv_dir / "Scripts";
+        if (fs::is_directory(scripts_dir, ec_v)) {
+            const auto it_path = opt.env.find("PATH");
+            const std::string existing_path = it_path != opt.env.end() ? it_path->second : "";
+            opt.env["PATH"] = path_to_utf8(scripts_dir) + (existing_path.empty() ? "" : ";" + existing_path);
+        }
+#else
+        const auto bin_dir = venv_dir / "bin";
+        if (fs::is_directory(bin_dir, ec_v)) {
+            const auto it_path = opt.env.find("PATH");
+            const std::string existing_path = it_path != opt.env.end() ? it_path->second : "";
+            opt.env["PATH"] = path_to_utf8(bin_dir) + (existing_path.empty() ? "" : ":" + existing_path);
+        }
+#endif
+    }
     const auto res = exec::run(opt);
     if (!res.started) return fail("spawn_failed", res.error);
 

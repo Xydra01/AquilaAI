@@ -15,6 +15,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
+#include <set>
 #include <sstream>
 #include <string_view>
 
@@ -380,6 +382,223 @@ int run_chat(const CliOptions& opts, std::istream& in, std::ostream& out, std::o
 
 int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
              IInferenceBackend* custom_backend) {
+    if (opts.live) {
+        out << "========================================\n"
+            << "AQUILA LIVE RECURSIVE EVALUATION HARNESS\n"
+            << "========================================\n";
+
+        const std::string recipe_name = opts.recipe_id.empty() ? "fn_dev_implement" : opts.recipe_id;
+        auto maybe_recipe = resolve_recipe(recipe_name, opts.workspace_root);
+        if (!maybe_recipe) {
+            err << "Error: recipe '" << recipe_name << "' not found for live eval.\n";
+            return 2;
+        }
+        const RecipeCartridge recipe = *maybe_recipe;
+        const std::string goal = opts.task_prompt.empty() ? recipe.goal_template : opts.task_prompt;
+
+        out << "Recipe: " << recipe.recipe_id << "\n"
+            << "Goal: " << goal << "\n"
+            << "Workspace: " << opts.workspace_root << "\n"
+            << "Backend: " << opts.backend_type << " (" << (opts.model_name.empty() ? "default" : opts.model_name) << ")\n"
+            << "Tier: " << opts.tier_name << "\n"
+            << "Scrutiny: Thinking inspection & trajectory dissection ENABLED\n"
+            << "----------------------------------------\n";
+
+        std::shared_ptr<IInferenceBackend> backend_holder;
+        IInferenceBackend* active_be = custom_backend;
+        if (active_be == nullptr) {
+            if (opts.backend_type == "llama") {
+#if AQUILA_HAS_LLAMACPP
+                if (opts.model_name.empty()) {
+                    err << "Error: --model <path_to_gguf> is required for llama.cpp backend.\n";
+                    return 2;
+                }
+                LlamaConfig lcfg;
+                lcfg.model_path = opts.model_name;
+                lcfg.n_ctx = (opts.tier_name == "gpu") ? 8192 : 2048;
+                if (opts.tier_name == "gpu") {
+                    lcfg.n_gpu_layers = 999;
+                }
+                try {
+                    backend_holder = std::make_shared<LlamaCppBackend>(lcfg);
+                    active_be = backend_holder.get();
+                } catch (const std::exception& e) {
+                    err << "Error: failed to initialize Llama backend: " << e.what() << "\n";
+                    return 1;
+                }
+#else
+                err << "Error: llama.cpp backend not enabled in this build.\n";
+                return 1;
+#endif
+            } else {
+                OllamaConfig ocfg;
+                ocfg.base_url = opts.ollama_host;
+                if (!opts.model_name.empty()) {
+                    ocfg.model = opts.model_name;
+                }
+                backend_holder = std::make_shared<OllamaHttpBackend>(ocfg);
+                active_be = backend_holder.get();
+            }
+        }
+
+        ModuleRegistry registry = ModuleRegistry::builtin();
+        ModuleContext mod_ctx;
+        mod_ctx.workspace_root = opts.workspace_root;
+
+        LoopConfig config;
+        config.task_id = "live-eval-" + recipe.recipe_id;
+        config.mode = "task";
+        config.context_strategy = CondenserStrategy::sac;
+
+        struct TurnDissection {
+            int turn = 0;
+            std::string thought;
+            std::string module;
+            std::string action;
+            Json args;
+            bool success = false;
+            std::string output;
+            bool repeated = false;
+            bool unloaded_module = false;
+            bool unexposed_action = false;
+        };
+
+        std::vector<TurnDissection> dissections;
+        std::set<std::string> loaded_modules_set;
+        std::map<std::string, std::set<std::string>> exposed_actions_map;
+        for (const auto& lm : recipe.load_modules) {
+            loaded_modules_set.insert(lm.module);
+            for (const auto& act : lm.expose_actions) {
+                exposed_actions_map[lm.module].insert(act);
+            }
+        }
+
+        std::string last_sig;
+        config.on_turn = [&](const TurnRecord& rec) {
+            TurnDissection d;
+            d.turn = static_cast<int>(rec.index) + 1;
+            if (rec.call) {
+                d.thought = rec.call->thought;
+                d.module = rec.call->module;
+                d.action = rec.call->action;
+                d.args = rec.call->args;
+            }
+            if (rec.interaction) {
+                d.output = rec.interaction->result.llm_facing_output;
+                d.success = rec.interaction->result.success;
+            } else if (!rec.note.empty()) {
+                d.output = rec.note;
+                d.success = rec.parsed;
+            }
+
+            if (!d.module.empty() && !loaded_modules_set.count(d.module)) {
+                d.unloaded_module = true;
+            }
+            if (!d.module.empty() && !d.action.empty() && loaded_modules_set.count(d.module) &&
+                !exposed_actions_map[d.module].count(d.action)) {
+                d.unexposed_action = true;
+            }
+            const std::string sig = d.module + "::" + d.action + "::" + d.args.dump();
+            if (sig == last_sig) {
+                d.repeated = true;
+            }
+            last_sig = sig;
+
+            out << "\n[Turn " << d.turn << "] " << (d.success ? "✓" : "✗") << "\n";
+            if (!d.thought.empty()) {
+                out << "  🤔 Thought: " << d.thought << "\n";
+            }
+            out << "  ⚡ Action:  " << d.module << "::" << d.action << "(" << d.args.dump() << ")\n";
+            if (d.unloaded_module) {
+                out << "  ⚠️  FLAG: Hallucinated/unloaded module '" << d.module << "'!\n";
+            }
+            if (d.unexposed_action) {
+                out << "  ⚠️  FLAG: Action '" << d.action << "' not exposed by " << d.module << "!\n";
+            }
+            if (d.repeated) {
+                out << "  ⚠️  FLAG: Identical action call repeated from previous turn!\n";
+            }
+            std::string out_snippet = d.output;
+            if (out_snippet.size() > 200) {
+                out_snippet = out_snippet.substr(0, 200) + "...";
+            }
+            out << "  📥 Result:  " << (d.success ? "OK" : "FAILED") << " - " << out_snippet << "\n";
+
+            dissections.push_back(std::move(d));
+        };
+
+        AgentLoop loop(*active_be, registry, mod_ctx);
+        const auto res = loop.run(recipe, goal, config);
+
+        out << "\n========================================\n"
+            << "EVALUATION AUTOPSY & TRAJECTORY ANALYSIS\n"
+            << "========================================\n"
+            << "Status: " << (res.success ? "PASSED (Exit Gate Satisfied)" : "FAILED (Exit Gate Not Passed)") << "\n"
+            << "Outcome: " << (res.outcome == LoopOutcome::success ? "success" : (res.outcome == LoopOutcome::aborted ? "aborted" : "turn_limit")) << "\n"
+            << "Total Turns: " << dissections.size() << "\n";
+
+        int failed_actions = 0;
+        int repeated_actions = 0;
+        int hallucinated_modules = 0;
+        int hallucinated_actions = 0;
+        for (const auto& d : dissections) {
+            if (!d.success) failed_actions++;
+            if (d.repeated) repeated_actions++;
+            if (d.unloaded_module) hallucinated_modules++;
+            if (d.unexposed_action) hallucinated_actions++;
+        }
+
+        out << "Diagnostics:\n"
+            << "  • Failed Actions: " << failed_actions << "\n"
+            << "  • Repeated Actions: " << repeated_actions << "\n"
+            << "  • Hallucinated Modules: " << hallucinated_modules << "\n"
+            << "  • Unexposed Actions: " << hallucinated_actions << "\n";
+
+        if (!res.completion_output.empty()) {
+            out << "Completion / Gate Output: " << res.completion_output << "\n";
+        }
+
+        Json report = Json::object();
+        report["recipe"] = recipe.recipe_id;
+        report["goal"] = goal;
+        report["success"] = res.success;
+        report["outcome"] = res.outcome == LoopOutcome::success ? "success" : "failed";
+        report["turns_count"] = dissections.size();
+        report["completion_output"] = res.completion_output;
+        report["metrics"] = {
+            {"failed_actions", failed_actions},
+            {"repeated_actions", repeated_actions},
+            {"hallucinated_modules", hallucinated_modules},
+            {"unexposed_actions", hallucinated_actions}
+        };
+
+        Json turns_json = Json::array();
+        for (const auto& d : dissections) {
+            turns_json.push_back({
+                {"turn", d.turn},
+                {"thought", d.thought},
+                {"module", d.module},
+                {"action", d.action},
+                {"args", d.args},
+                {"success", d.success},
+                {"output", d.output},
+                {"repeated", d.repeated},
+                {"unloaded_module", d.unloaded_module},
+                {"unexposed_action", d.unexposed_action}
+            });
+        }
+        report["trajectory"] = std::move(turns_json);
+
+        const std::string out_path = opts.report_path.empty() ? "eval_report.json" : opts.report_path;
+        std::ofstream report_file(out_path);
+        if (report_file.is_open()) {
+            report_file << report.dump(2) << "\n";
+            out << "Detailed dissection report written to: " << out_path << "\n";
+        }
+        out << "========================================\n";
+        return res.success ? 0 : 1;
+    }
+
     const auto all = all_builtin_recipes();
     std::vector<RecipeCartridge> to_eval;
     if (!opts.recipe_id.empty()) {
@@ -468,6 +687,12 @@ CliOptions parse_args(int argc, const char* const* argv) {
             opts.version = true;
         } else if (arg == "--verbose") {
             opts.verbose = true;
+        } else if (arg == "--live") {
+            opts.live = true;
+        } else if (arg == "--dissect") {
+            opts.dissect = true;
+        } else if (arg == "--report" && i + 1 < argc) {
+            opts.report_path = argv[++i];
         } else if ((arg == "--recipe" || arg == "-r") && i + 1 < argc) {
             opts.recipe_id = argv[++i];
         } else if ((arg == "--task" || arg == "-t") && i + 1 < argc) {

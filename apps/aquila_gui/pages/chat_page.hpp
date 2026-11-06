@@ -57,6 +57,7 @@ private:
 
     QString currentAssistantReply_;
     bool isStreaming_ = false;
+    int streamingStartPos_ = -1;
     QStringList currentAttachments_;
 };
 

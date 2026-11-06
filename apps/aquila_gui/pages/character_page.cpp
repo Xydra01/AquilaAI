@@ -1,5 +1,6 @@
 // apps/aquila_gui/pages/character_page.cpp
 #include "character_page.hpp"
+#include "../theme/markdown_renderer.hpp"
 
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -147,6 +148,7 @@ QString CharacterPage::initializationBible() const {
 }
 
 void CharacterPage::appendCharacterReply(const QString& personaId, const QString& reply) {
+    const QString formattedHtml = MarkdownRenderer::toHtml(reply);
     dialogueTranscript_->append(QStringLiteral(
         "<div style='text-align:left; margin:6px 0;'>"
         "  <div style='background-color:#252526; color:#e0e0e0; border:1px solid #3c3c3c; border-radius:10px; padding:8px 12px; display:inline-block; max-width:85%%;'>"
@@ -154,7 +156,7 @@ void CharacterPage::appendCharacterReply(const QString& personaId, const QString
         "    <div>%2</div>"
         "  </div>"
         "</div>"
-    ).arg(personaId.toHtmlEscaped(), reply.toHtmlEscaped()));
+    ).arg(personaId.toHtmlEscaped(), formattedHtml));
 }
 
 void CharacterPage::onBibleTextChanged() {

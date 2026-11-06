@@ -138,13 +138,16 @@ void AgentWorker::run() {
                 emit scratchpadUpdated(obj, hyp, facts, checkList);
             }
         }
+        bool success = true;
         if (rec.interaction) {
             output = QString::fromStdString(rec.interaction->result.llm_facing_output);
+            success = rec.interaction->result.success;
         } else if (!rec.note.empty()) {
             output = QString::fromStdString(rec.note);
+            success = rec.parsed;
         }
 
-        emit turnCompleted(static_cast<int>(rec.index), thought, module, action, output);
+        emit turnCompleted(static_cast<int>(rec.index), thought, module, action, success, output);
     };
 
     try {

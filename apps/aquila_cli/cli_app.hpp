@@ -25,6 +25,9 @@ struct CliOptions {
     bool verbose = false;
     bool help = false;
     bool version = false;
+    bool live = false;
+    bool dissect = false;
+    std::string report_path;
     std::vector<std::string> extra_args;
 };
 

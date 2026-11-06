@@ -431,8 +431,9 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
     const std::string goal = prompt.isEmpty() ? recipe.goal_template : prompt.toStdString();
     activeWorker_ = new AgentWorker(activeBackend_, recipe, goal, config, workspaceRoot_.toStdString(), this);
 
-    connect(activeWorker_, &AgentWorker::turnCompleted, taskPage_, [this](int turn, const QString&, const QString& mod, const QString& act, const QString& out) {
-        taskPage_->addLedgerEntry(turn, mod, act, QStringLiteral("OK"), out);
+    connect(activeWorker_, &AgentWorker::turnCompleted, taskPage_,
+            [this](int turn, const QString&, const QString& mod, const QString& act, bool success, const QString& out) {
+        taskPage_->addLedgerEntry(turn, mod, act, success ? QStringLiteral("OK") : QStringLiteral("FAILED"), out);
     });
     connect(activeWorker_, &AgentWorker::scratchpadUpdated, taskPage_, &TaskPage::updateScratchpad);
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
