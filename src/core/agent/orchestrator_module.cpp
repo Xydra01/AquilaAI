@@ -1,5 +1,8 @@
 #include "aquila/agent/orchestrator_module.hpp"
 
+#include <filesystem>
+#include <fstream>
+
 namespace aquila {
 
 using namespace json_io;
@@ -25,6 +28,9 @@ std::vector<ActionSchema> OrchestratorModule::get_actions() const {
         {"complete_recipe",
          "Declare the recipe finished; the loop runs the deterministic exit gate.",
          schema(R"({"type":"object","properties":{"output":{"type":"string"}},"additionalProperties":false})")},
+        {"register_new_recipe",
+         "Dynamically register a new workflow recipe cartridge.",
+         schema(R"({"type":"object","properties":{"recipe":{"type":"object"}},"required":["recipe"],"additionalProperties":false})")},
     };
 }
 
@@ -52,15 +58,30 @@ Json OrchestratorModule::export_state_snapshot() const {
     Json pad;
     to_json(pad, pad_);
     s["scratchpad"] = std::move(pad);
+    s["registered_recipes"] = Json::array();
+    for (const auto& [id, c] : registered_recipes_) {
+        (void)id;
+        Json r;
+        to_json(r, c);
+        s["registered_recipes"].push_back(std::move(r));
+    }
     return s;
 }
 
 void OrchestratorModule::restore_state_snapshot(const Json& snapshot) {
     expect_object(snapshot, "");
-    reject_unknown(snapshot, "", {"required_fields", "scratchpad"});
+    reject_unknown(snapshot, "", {"required_fields", "scratchpad", "registered_recipes"});
     required_fields_ =
         read_string_array(require(snapshot, "", "required_fields"), "/required_fields");
     from_json(require(snapshot, "", "scratchpad"), pad_, "/scratchpad");
+    registered_recipes_.clear();
+    if (snapshot.contains("registered_recipes")) {
+        for (const auto& r_json : snapshot["registered_recipes"]) {
+            RecipeCartridge c;
+            from_json(r_json, c, "/registered_recipes");
+            registered_recipes_[c.recipe_id] = std::move(c);
+        }
+    }
 }
 
 // --- Action bodies + intent coordination (Req 3.2-3.4) ---------------------
@@ -69,6 +90,7 @@ ActionResult OrchestratorModule::run(const std::string& action_name, const Json&
     if (action_name == "checkpoint_notes") return checkpoint_notes(args);
     if (action_name == "trigger_context_condense") return trigger_context_condense(args);
     if (action_name == "complete_recipe") return complete_recipe(args);
+    if (action_name == "register_new_recipe") return register_new_recipe(args);
     return fail("unknown_action", "OrchestratorModule has no action '" + action_name + "'");
 }
 
@@ -153,6 +175,31 @@ ActionResult OrchestratorModule::complete_recipe(const Json& args) {
     completion_output_ = args.value("output", std::string{});
     intent_ = Intent::completion_requested;
     return ok("recipe completion requested");
+}
+
+ActionResult OrchestratorModule::register_new_recipe(const Json& args) {
+    RecipeCartridge cartridge;
+    try {
+        from_json(args["recipe"], cartridge, "/recipe");
+    } catch (const SchemaError& e) {
+        return fail("invalid_cartridge", "recipe validation failed: " + std::string(e.what()));
+    }
+
+    try {
+        const auto recipes_dir = ctx_.workspace_root / ".aquila" / "recipes";
+        std::error_code ec;
+        std::filesystem::create_directories(recipes_dir, ec);
+        const auto recipe_path = recipes_dir / (cartridge.recipe_id + ".recipe.json");
+        std::ofstream ofs(recipe_path, std::ios::binary | std::ios::trunc);
+        if (ofs) {
+            ofs << to_canonical_string(cartridge);
+        }
+    } catch (...) {
+        // Disk write is best-effort for persistence; memory registration still succeeds.
+    }
+
+    registered_recipes_[cartridge.recipe_id] = cartridge;
+    return ok("recipe '" + cartridge.recipe_id + "' registered successfully");
 }
 
 bool OrchestratorModule::scratchpad_valid() const {

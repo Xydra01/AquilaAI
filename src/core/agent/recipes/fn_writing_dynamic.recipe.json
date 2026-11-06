@@ -1,0 +1,58 @@
+{
+  "recipe_id": "fn_writing_dynamic",
+  "goal_template": "Iteratively research, draft and refine a technical paper: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "DocumentModule",
+      "initial_state": {},
+      "expose_actions": [
+        "init_document",
+        "write_section",
+        "read_outline",
+        "revise_selection",
+        "compile_document",
+        "get_draft_state"
+      ]
+    },
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "search_local_docs",
+        "store_fact",
+        "get_all_facts"
+      ]
+    },
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file",
+        "read_region"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "current_hypothesis",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe",
+        "trigger_context_condense"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Setup outline and gather background facts",
+    "Write core technical sections",
+    "Compile and verify document"
+  ]
+}

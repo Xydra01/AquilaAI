@@ -1,0 +1,42 @@
+{
+  "recipe_id": "fn_persona_lore",
+  "goal_template": "Expand world lore and interactive dialogue for persona: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "PersonaModule",
+      "initial_state": {},
+      "expose_actions": [
+        "load_persona",
+        "chat_as_persona",
+        "update_preferences"
+      ]
+    },
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "search_local_docs",
+        "store_fact",
+        "get_all_facts"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Load persona and inspect lore",
+    "Roleplay dialogue and update lore knowledge",
+    "Complete recipe"
+  ]
+}

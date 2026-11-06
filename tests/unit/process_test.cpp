@@ -194,7 +194,11 @@ TEST_CASE("run: output beyond the cap keeps head and tail") {
 }
 
 TEST_CASE("run: missing programs do not start") {
-    const auto r = exec::run(RunOptions{{"definitely-not-a-program-aquila"}, {}, {}, 5.0, 1024});
+    RunOptions opt;
+    opt.argv = {"definitely-not-a-program-aquila"};
+    opt.timeout_s = 5.0;
+    opt.max_output_bytes = 1024;
+    const auto r = exec::run(opt);
     CHECK_FALSE(r.started);
     CHECK(r.error.find("program not found") != std::string::npos);
 }
@@ -204,14 +208,36 @@ TEST_CASE("run: .cmd files run via cmd.exe but refuse cmd metacharacters") {
     test::TempDir tmp;
     tmp.write("hello.cmd", "@echo hi %1\r\n");
     const auto script = (tmp.path() / "hello.cmd").string();
-    auto r = exec::run(RunOptions{{script, "there"}, tmp.path(), {}, 10.0, 4096});
+    RunOptions opt1;
+    opt1.argv = {script, "there"};
+    opt1.cwd = tmp.path();
+    opt1.timeout_s = 10.0;
+    opt1.max_output_bytes = 4096;
+    auto r = exec::run(opt1);
     REQUIRE(r.started);
     CHECK(lf(r.output) == "hi there\n");
     for (const auto* bad : {"a&calc", "x|y", "%PATH%", "q\"uote", "car^et"}) {
         INFO(bad);
-        r = exec::run(RunOptions{{script, bad}, tmp.path(), {}, 10.0, 4096});
+        RunOptions bad_opt;
+        bad_opt.argv = {script, bad};
+        bad_opt.cwd = tmp.path();
+        bad_opt.timeout_s = 10.0;
+        bad_opt.max_output_bytes = 4096;
+        r = exec::run(bad_opt);
         CHECK_FALSE(r.started);
         CHECK(r.error.find("cmd.exe would interpret") != std::string::npos);
     }
 }
 #endif
+
+TEST_CASE("run: stdin_data is piped to child process") {
+    RunOptions opt;
+    opt.argv = {kHelper, "echo-stdin"};
+    opt.stdin_data = "{\"command\":\"test\",\"value\":42}\n";
+    opt.timeout_s = 5.0;
+    const auto r = exec::run(opt);
+    REQUIRE(r.started);
+    CHECK(r.exit_code == 0);
+    CHECK_FALSE(r.timed_out);
+    CHECK(lf(r.output) == "{\"command\":\"test\",\"value\":42}\n");
+}

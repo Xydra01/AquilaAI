@@ -226,21 +226,37 @@ RunResult run(const RunOptions& opt) {
     Handle rd(rd_raw);
     Handle wr(wr_raw);
     SetHandleInformation(rd.h, HANDLE_FLAG_INHERIT, 0);
-    Handle nul(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr));
 
-    // Only the two pipe ends are inherited, never other handles of this process.
+    Handle nul;
+    Handle in_rd;
+    Handle in_wr;
+    if (!opt.stdin_data.empty()) {
+        HANDLE in_rd_raw = nullptr;
+        HANDLE in_wr_raw = nullptr;
+        if (!CreatePipe(&in_rd_raw, &in_wr_raw, &sa, 0)) {
+            r.error = "CreatePipe (stdin) failed: " + last_error_text();
+            return r;
+        }
+        in_rd.reset(in_rd_raw);
+        in_wr.reset(in_wr_raw);
+        SetHandleInformation(in_wr.h, HANDLE_FLAG_INHERIT, 0);
+    } else {
+        nul.reset(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr));
+    }
+
+    // Only the designated pipe ends are inherited, never other handles of this process.
     SIZE_T attr_size = 0;
     InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
     std::vector<char> attr_buf(attr_size);
     auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_buf.data());
     InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size);
-    HANDLE inherit[2] = {wr.h, nul.h};
+    HANDLE inherit[2] = {wr.h, in_rd.valid() ? in_rd.h : nul.h};
     UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof(inherit), nullptr, nullptr);
 
     STARTUPINFOEXW si{};
     si.StartupInfo.cb = sizeof(si);
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    si.StartupInfo.hStdInput = nul.h;
+    si.StartupInfo.hStdInput = in_rd.valid() ? in_rd.h : nul.h;
     si.StartupInfo.hStdOutput = wr.h;
     si.StartupInfo.hStdError = wr.h;
     si.lpAttributeList = attrs;
@@ -266,6 +282,14 @@ RunResult run(const RunOptions& opt) {
     Handle proc(pi.hProcess);
     Handle thread(pi.hThread);
     AssignProcessToJobObject(job.h, proc.h);
+
+    if (in_wr.valid()) {
+        DWORD written = 0;
+        WriteFile(in_wr.h, opt.stdin_data.data(), static_cast<DWORD>(opt.stdin_data.size()), &written, nullptr);
+        in_wr.reset();
+    }
+    in_rd.reset();
+
     ResumeThread(thread.h);
     wr.reset();
     nul.reset();

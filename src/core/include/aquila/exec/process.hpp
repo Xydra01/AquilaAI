@@ -30,6 +30,7 @@ struct RunOptions {
     std::map<std::string, std::string> env;  // added after secrets are removed
     double timeout_s = 120.0;                // whole-run limit; kills the process tree
     std::size_t max_output_bytes = 1 << 20;  // head and tail are kept beyond this
+    std::string stdin_data;                  // input piped to child process's stdin (empty => NUL / dev/null)
 };
 
 struct RunResult {

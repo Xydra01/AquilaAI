@@ -1,0 +1,56 @@
+{
+  "recipe_id": "fn_learn_syllabus_web",
+  "goal_template": "Research contemporary topics and build an interactive course: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "LearnModule",
+      "initial_state": {},
+      "expose_actions": [
+        "write_syllabus",
+        "finalize_course",
+        "generate_assessment",
+        "record_result",
+        "search_archive",
+        "get_course_info"
+      ]
+    },
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "search_local_docs",
+        "store_fact"
+      ]
+    },
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file",
+        "read_region"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "verified_facts",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Gather knowledge and citations",
+    "Construct syllabus tree conforming to curriculum rules",
+    "Finalize course"
+  ]
+}

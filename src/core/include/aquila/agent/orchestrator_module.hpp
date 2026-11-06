@@ -1,7 +1,9 @@
 // aquila/agent/orchestrator_module.hpp
 #pragma once
 #include "aquila/modules/module.hpp"
+#include "aquila/types/recipe.hpp"
 #include "aquila/types/scratchpad.hpp"
+#include <map>
 #include <string>
 #include <vector>
 
@@ -33,6 +35,9 @@ public:
     // reads it when handling Intent::completion_requested to feed the exit gate;
     // empty until the LLM calls complete_recipe.
     [[nodiscard]] const std::string& completion_output() const noexcept { return completion_output_; }
+    [[nodiscard]] const std::map<std::string, RecipeCartridge>& registered_recipes() const noexcept {
+        return registered_recipes_;
+    }
 
     // Set by complete_recipe / trigger_context_condense so the loop can act on the
     // intent after execute_action returns (ModuleBase stays side-effect-local).
@@ -46,6 +51,7 @@ private:
     ActionResult checkpoint_notes(const Json& args);          // updates pad_ fields (Req 3.2)
     ActionResult trigger_context_condense(const Json& args);  // validates then requests wipe (Req 3.3)
     ActionResult complete_recipe(const Json& args);           // requests completion gate (Req 3.4)
+    ActionResult register_new_recipe(const Json& args);       // dynamic recipe registration (M7)
 
     // True iff the named scratchpad field exists and is non-empty in `pad`.
     // Unknown names are treated as empty so a stray required_field can never
@@ -57,6 +63,7 @@ private:
     ModuleContext ctx_;
     AgentScratchpad pad_;
     std::vector<std::string> required_fields_;
+    std::map<std::string, RecipeCartridge> registered_recipes_;
     Intent intent_ = Intent::none;
     std::string completion_output_;
 };

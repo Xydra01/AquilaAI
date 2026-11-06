@@ -1,0 +1,42 @@
+{
+  "recipe_id": "fn_writing_sources",
+  "goal_template": "Compose sourced article synthesizing local reference documents: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "DocumentModule",
+      "initial_state": {},
+      "expose_actions": [
+        "init_document",
+        "write_section",
+        "compile_document"
+      ]
+    },
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "search_local_docs",
+        "store_fact"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "verified_facts"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Search reference documents for quotes and sources",
+    "Write sourced sections",
+    "Compile finished document"
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "recipe_id": "fn_research_full",
+  "goal_template": "Conduct comprehensive research on: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "search_local_docs",
+        "store_fact",
+        "get_all_facts"
+      ]
+    },
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file",
+        "read_region",
+        "outline"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "verified_facts",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe",
+        "trigger_context_condense"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Search local documentation and corpus for relevant material",
+    "Store key verified findings into long-term knowledge memory",
+    "Summarize final synthesis into report file",
+    "Call complete_recipe"
+  ]
+}

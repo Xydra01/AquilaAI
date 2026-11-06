@@ -2,6 +2,7 @@
 
 #include "aquila/json.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -45,6 +46,7 @@ struct RecipeCartridge {
     std::vector<HookCall> pre_llm_hooks;
     std::vector<std::string> scratchpad_checklist;
     std::optional<ValidationHook> post_llm_validation_hook;
+    std::vector<std::string> include;  // optional parent/nested recipe IDs (D9)
 
     bool operator==(const RecipeCartridge&) const = default;
 };
@@ -60,5 +62,13 @@ void from_json(const Json& j, ValidationHook& v, const std::string& path);
 
 void to_json(Json& j, const RecipeCartridge& v);
 void from_json(const Json& j, RecipeCartridge& v, const std::string& path);
+
+// Resolves nested recipe cartridges referenced by `include`.
+// Validates no cyclic includes, merges load_modules (combining expose_actions and
+// letting root initial_state take precedence), merges pre_llm_hooks and
+// scratchpad_checklist, and returns a fully flattened RecipeCartridge with empty include.
+RecipeCartridge resolve_includes(
+    const RecipeCartridge& root,
+    const std::function<std::optional<RecipeCartridge>(const std::string&)>& resolver);
 
 }  // namespace aquila

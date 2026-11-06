@@ -76,9 +76,21 @@ RunResult run(const RunOptions& opt) {
 
     int out[2];
     int status_pipe[2];
+    int in_pipe[2] = {-1, -1};
     if (::pipe(out) != 0 || ::pipe(status_pipe) != 0) {
         r.error = std::string("pipe failed: ") + std::strerror(errno);
         return r;
+    }
+    if (!opt.stdin_data.empty()) {
+        if (::pipe(in_pipe) != 0) {
+            ::close(out[0]);
+            ::close(out[1]);
+            ::close(status_pipe[0]);
+            ::close(status_pipe[1]);
+            r.error = std::string("stdin pipe failed: ") + std::strerror(errno);
+            return r;
+        }
+        ::fcntl(in_pipe[1], F_SETFD, FD_CLOEXEC);
     }
     ::fcntl(out[0], F_SETFD, FD_CLOEXEC);
     ::fcntl(status_pipe[0], F_SETFD, FD_CLOEXEC);
@@ -87,13 +99,20 @@ RunResult run(const RunOptions& opt) {
     const auto start = std::chrono::steady_clock::now();
     const pid_t pid = ::fork();
     if (pid < 0) {
+        if (in_pipe[0] >= 0) { ::close(in_pipe[0]); ::close(in_pipe[1]); }
         r.error = std::string("fork failed: ") + std::strerror(errno);
         return r;
     }
     if (pid == 0) {
         ::setpgid(0, 0);
-        const int devnull = ::open("/dev/null", O_RDONLY);
-        if (devnull >= 0) ::dup2(devnull, 0);
+        if (in_pipe[0] >= 0) {
+            ::dup2(in_pipe[0], 0);
+            ::close(in_pipe[0]);
+            ::close(in_pipe[1]);
+        } else {
+            const int devnull = ::open("/dev/null", O_RDONLY);
+            if (devnull >= 0) ::dup2(devnull, 0);
+        }
         ::dup2(out[1], 1);
         ::dup2(out[1], 2);
         int err = 0;
@@ -109,6 +128,13 @@ RunResult run(const RunOptions& opt) {
     ::setpgid(pid, pid);  // also from the parent, to win the race with the child
     ::close(out[1]);
     ::close(status_pipe[1]);
+    if (in_pipe[0] >= 0) ::close(in_pipe[0]);
+    if (in_pipe[1] >= 0) {
+        if (!opt.stdin_data.empty()) {
+            (void)!::write(in_pipe[1], opt.stdin_data.data(), opt.stdin_data.size());
+        }
+        ::close(in_pipe[1]);
+    }
     int child_err = 0;
     const auto n = ::read(status_pipe[0], &child_err, sizeof child_err);
     ::close(status_pipe[0]);

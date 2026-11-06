@@ -1,0 +1,50 @@
+{
+  "recipe_id": "fn_dev_implement",
+  "goal_template": "Implement software feature according to specifications and pass tests: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file",
+        "read_region",
+        "surgical_edit",
+        "outline"
+      ]
+    },
+    {
+      "module": "ExecutionModule",
+      "initial_state": {
+        "test_cmd": "pytest"
+      },
+      "expose_actions": [
+        "exec_sandboxed_cmd",
+        "run_test_suite"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "current_hypothesis",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe",
+        "trigger_context_condense"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Analyze requirements and codebase",
+    "Implement necessary code changes",
+    "Run test suite to verify implementation",
+    "Complete task"
+  ]
+}

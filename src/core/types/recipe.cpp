@@ -100,13 +100,16 @@ void to_json(Json& j, const RecipeCartridge& v) {
         to_json(hook, *v.post_llm_validation_hook);
         j["post_llm_validation_hook"] = std::move(hook);
     }
+    if (!v.include.empty()) {
+        j["include"] = v.include;
+    }
 }
 
 void from_json(const Json& j, RecipeCartridge& v, const std::string& path) {
     expect_object(j, path);
     reject_unknown(j, path,
                    {"recipe_id", "goal_template", "load_modules", "pre_llm_hooks",
-                    "scratchpad_checklist", "post_llm_validation_hook"});
+                    "scratchpad_checklist", "post_llm_validation_hook", "include"});
 
     const auto id_path = child_path(path, "recipe_id");
     v.recipe_id = read_string(require(j, path, "recipe_id"), id_path);
@@ -144,6 +147,122 @@ void from_json(const Json& j, RecipeCartridge& v, const std::string& path) {
         check_module_loaded(v.load_modules, hook.module, child_path(hook_path, "module"));
         v.post_llm_validation_hook = std::move(hook);
     }
+
+    v.include.clear();
+    if (const auto it = j.find("include"); it != j.end()) {
+        v.include = read_string_array(*it, child_path(path, "include"));
+    }
+}
+
+namespace {
+
+RecipeCartridge merge_cartridges(const RecipeCartridge& base, const RecipeCartridge& derived) {
+    RecipeCartridge out;
+    out.recipe_id = derived.recipe_id;
+    out.goal_template = derived.goal_template.empty() ? base.goal_template : derived.goal_template;
+
+    out.load_modules = base.load_modules;
+    for (const auto& dm : derived.load_modules) {
+        auto it = std::find_if(out.load_modules.begin(), out.load_modules.end(),
+                               [&](const ModuleLoad& m) { return m.module == dm.module; });
+        if (it != out.load_modules.end()) {
+            if (!dm.initial_state.empty()) {
+                it->initial_state = dm.initial_state;
+            }
+            for (const auto& act : dm.expose_actions) {
+                if (std::find(it->expose_actions.begin(), it->expose_actions.end(), act) ==
+                    it->expose_actions.end()) {
+                    it->expose_actions.push_back(act);
+                }
+            }
+        } else {
+            out.load_modules.push_back(dm);
+        }
+    }
+
+    out.pre_llm_hooks = base.pre_llm_hooks;
+    for (const auto& hook : derived.pre_llm_hooks) {
+        out.pre_llm_hooks.push_back(hook);
+    }
+
+    out.scratchpad_checklist = base.scratchpad_checklist;
+    for (const auto& item : derived.scratchpad_checklist) {
+        if (std::find(out.scratchpad_checklist.begin(), out.scratchpad_checklist.end(), item) ==
+            out.scratchpad_checklist.end()) {
+            out.scratchpad_checklist.push_back(item);
+        }
+    }
+
+    if (derived.post_llm_validation_hook.has_value()) {
+        out.post_llm_validation_hook = derived.post_llm_validation_hook;
+    } else {
+        out.post_llm_validation_hook = base.post_llm_validation_hook;
+    }
+
+    return out;
+}
+
+RecipeCartridge resolve_includes_impl(
+    const RecipeCartridge& current,
+    const std::function<std::optional<RecipeCartridge>(const std::string&)>& resolver,
+    std::vector<std::string>& active_chain) {
+    if (std::find(active_chain.begin(), active_chain.end(), current.recipe_id) != active_chain.end()) {
+        throw SchemaError("/include", "cyclic include detected: " + current.recipe_id);
+    }
+    active_chain.push_back(current.recipe_id);
+
+    if (current.include.empty()) {
+        active_chain.pop_back();
+        RecipeCartridge res = current;
+        res.include.clear();
+        return res;
+    }
+
+    RecipeCartridge merged_bases;
+    bool has_base = false;
+    for (const auto& inc_id : current.include) {
+        if (std::find(active_chain.begin(), active_chain.end(), inc_id) != active_chain.end()) {
+            throw SchemaError("/include", "cyclic include detected: " + inc_id);
+        }
+        auto inc_opt = resolver(inc_id);
+        if (!inc_opt) {
+            throw SchemaError("/include", "included recipe not found: " + inc_id);
+        }
+        RecipeCartridge resolved_inc = resolve_includes_impl(*inc_opt, resolver, active_chain);
+        if (!has_base) {
+            merged_bases = std::move(resolved_inc);
+            has_base = true;
+        } else {
+            merged_bases = merge_cartridges(merged_bases, resolved_inc);
+        }
+    }
+
+    active_chain.pop_back();
+
+    RecipeCartridge final_res = merge_cartridges(merged_bases, current);
+    final_res.recipe_id = current.recipe_id;
+    final_res.goal_template =
+        current.goal_template.empty() ? merged_bases.goal_template : current.goal_template;
+    final_res.include.clear();
+
+    for (const auto& hook : final_res.pre_llm_hooks) {
+        check_module_loaded(final_res.load_modules, hook.module, "/pre_llm_hooks");
+    }
+    if (final_res.post_llm_validation_hook) {
+        check_module_loaded(final_res.load_modules, final_res.post_llm_validation_hook->module,
+                            "/post_llm_validation_hook");
+    }
+
+    return final_res;
+}
+
+}  // namespace
+
+RecipeCartridge resolve_includes(
+    const RecipeCartridge& root,
+    const std::function<std::optional<RecipeCartridge>(const std::string&)>& resolver) {
+    std::vector<std::string> active_chain;
+    return resolve_includes_impl(root, resolver, active_chain);
 }
 
 }  // namespace aquila

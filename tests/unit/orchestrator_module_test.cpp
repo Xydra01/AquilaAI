@@ -264,8 +264,8 @@ TEST_CASE("OrchestratorModule exposes three object-schema actions and signals co
         REQUIRE(a.parameters_json_schema.contains("type"));
         CHECK(a.parameters_json_schema.at("type").get<std::string>() == "object");
     }
-    CHECK(names == std::set<std::string>{"checkpoint_notes", "trigger_context_condense",
-                                        "complete_recipe"});
+    CHECK(names == std::set<std::string>{"checkpoint_notes", "complete_recipe",
+                                         "register_new_recipe", "trigger_context_condense"});
 
     // No intent before any action runs.
     CHECK(module.take_intent() == OrchestratorModule::Intent::none);
@@ -281,4 +281,27 @@ TEST_CASE("OrchestratorModule exposes three object-schema actions and signals co
 
     // take_intent clears: a second read returns none.
     CHECK(module.take_intent() == OrchestratorModule::Intent::none);
+}
+
+TEST_CASE("OrchestratorModule: register_new_recipe validation and persistence") {
+    OrchestratorModule module(make_ctx());
+
+    Json bad_cartridge = Json::object();
+    bad_cartridge["recipe_id"] = "bad";
+    // missing load_modules
+    ActionResult res_bad = module.execute_action("register_new_recipe", Json{{"recipe", bad_cartridge}});
+    CHECK_FALSE(res_bad.success);
+    CHECK(res_bad.error_code == "invalid_cartridge");
+
+    Json valid_cartridge = Json::object();
+    valid_cartridge["recipe_id"] = "custom_workflow";
+    valid_cartridge["goal_template"] = "Do something: {{task}}";
+    valid_cartridge["load_modules"] = Json::array({
+        Json{{"module", "OrchestratorModule"}, {"initial_state", Json::object()}, {"expose_actions", Json::array({"complete_recipe"})}}
+    });
+
+    ActionResult res_good = module.execute_action("register_new_recipe", Json{{"recipe", valid_cartridge}});
+    CHECK(res_good.success);
+    CHECK(module.registered_recipes().contains("custom_workflow"));
+    CHECK(module.registered_recipes().at("custom_workflow").goal_template == "Do something: {{task}}");
 }

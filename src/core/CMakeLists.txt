@@ -49,6 +49,11 @@ add_library(aquila_core STATIC
     context/sac_strategy.cpp
     agent/orchestrator_module.cpp
     agent/agent_loop.cpp
+    agent/micro_pass.cpp
+    document/document_module.cpp
+    persona/persona_module.cpp
+    learn/learn_module.cpp
+    plugins/script_module.cpp
     storage/sqlite_db.cpp
     storage/fact_store.cpp
     knowledge/blake2b.cpp

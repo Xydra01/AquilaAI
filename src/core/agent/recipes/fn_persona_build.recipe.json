@@ -1,0 +1,46 @@
+{
+  "recipe_id": "fn_persona_build",
+  "goal_template": "Construct and initialize an immersive character persona: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "PersonaModule",
+      "initial_state": {},
+      "expose_actions": [
+        "load_persona",
+        "write_initialization",
+        "finalize_persona",
+        "update_preferences",
+        "chat_as_persona"
+      ]
+    },
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file",
+        "read_region"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Craft rich initialization profile (>=800 characters)",
+    "Write initialization and configure preferences",
+    "Finalize persona profile"
+  ]
+}

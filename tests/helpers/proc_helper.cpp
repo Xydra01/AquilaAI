@@ -98,6 +98,12 @@ int main(int argc, char** argv) {
         for (int i = 2; i < argc; ++i) std::printf("[%s]\n", argv[i]);
         return 0;
     }
+    if (mode == "echo-stdin") {
+        char buf[4096];
+        std::size_t n = 0;
+        while ((n = std::fread(buf, 1, sizeof buf, stdin)) > 0) std::fwrite(buf, 1, n, stdout);
+        return 0;
+    }
     if (mode == "spawn-grandchild" || mode == "orphan") {
         const long pid = spawn_sleeper(argv[0], arg);
         std::printf("grandchild %ld\n", pid);

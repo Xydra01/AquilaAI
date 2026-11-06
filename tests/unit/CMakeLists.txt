@@ -47,7 +47,14 @@ add_executable(aquila_unit_tests
     page_cache_test.cpp
     document_chunker_test.cpp
     knowledge_module_test.cpp
-    knowledge_recipe_test.cpp)
+    knowledge_recipe_test.cpp
+    document_module_test.cpp
+    persona_module_test.cpp
+    learn_module_test.cpp
+    script_module_test.cpp
+    recipe_nesting_test.cpp
+    micro_pass_test.cpp
+    recipes_all_test.cpp)
 target_link_libraries(aquila_unit_tests PRIVATE
     aquila::core httplib::httplib Catch2::Catch2WithMain rapidcheck_catch
     # Carries AQUILA_HAS_LLAMACPP (1 built / 0 stubbed) into this test TU so the

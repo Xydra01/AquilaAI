@@ -1,0 +1,61 @@
+{
+  "recipe_id": "fn_dev_dynamic",
+  "goal_template": "Perform dynamic debugging, profiling, and iterative refactoring: {{user_instructions}}",
+  "load_modules": [
+    {
+      "module": "WorkspaceModule",
+      "initial_state": {
+        "root_dir": "."
+      },
+      "expose_actions": [
+        "create_file",
+        "read_region",
+        "surgical_edit",
+        "outline"
+      ]
+    },
+    {
+      "module": "ExecutionModule",
+      "initial_state": {
+        "test_cmd": "pytest"
+      },
+      "expose_actions": [
+        "exec_sandboxed_cmd",
+        "run_test_suite"
+      ]
+    },
+    {
+      "module": "KnowledgeModule",
+      "initial_state": {},
+      "expose_actions": [
+        "search_local_docs",
+        "store_fact",
+        "get_all_facts"
+      ]
+    },
+    {
+      "module": "OrchestratorModule",
+      "initial_state": {
+        "required_fields": [
+          "active_objective",
+          "current_hypothesis",
+          "verified_facts",
+          "failed_approaches_do_not_repeat",
+          "next_immediate_action"
+        ]
+      },
+      "expose_actions": [
+        "checkpoint_notes",
+        "complete_recipe",
+        "trigger_context_condense"
+      ]
+    }
+  ],
+  "pre_llm_hooks": [],
+  "scratchpad_checklist": [
+    "Reproduce issue and record hypotheses",
+    "Run diagnostic commands and analyze output",
+    "Apply surgical fixes and re-verify",
+    "Complete recipe"
+  ]
+}
