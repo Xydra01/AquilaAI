@@ -31,6 +31,9 @@ signals:
 
 private slots:
     void onBrowseWorkspace();
+    void onBrowseModel();
+    void onBackendComboChanged(int index);
+    void onTierComboChanged(int index);
     void onSaveClicked();
     void onThemeComboChanged(int index);
 
@@ -38,6 +41,7 @@ private:
     QComboBox* backendCombo_ = nullptr;
     QLineEdit* hostInput_ = nullptr;
     QLineEdit* modelInput_ = nullptr;
+    QPushButton* browseModelBtn_ = nullptr;
     QComboBox* tierCombo_ = nullptr;
     QSpinBox* contextSpin_ = nullptr;
     QDoubleSpinBox* tempSpin_ = nullptr;

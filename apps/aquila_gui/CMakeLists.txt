@@ -66,7 +66,7 @@ qt_add_executable(aquila_gui
     dialogs/plan_review_dialog.cpp
 )
 target_include_directories(aquila_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(aquila_gui PRIVATE aquila::core Qt6::Widgets Qt6::OpenGL QtNodes::QtNodes)
+target_link_libraries(aquila_gui PRIVATE aquila::core aquila_llamacpp Qt6::Widgets Qt6::OpenGL QtNodes::QtNodes)
 aquila_set_warnings(aquila_gui)
 
 get_target_property(_qmake Qt6::qmake IMPORTED_LOCATION)

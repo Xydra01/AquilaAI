@@ -50,10 +50,12 @@ public slots:
     void onTaskRun(const QString& recipeId, const QString& prompt);
     void onCancelCurrentTask();
     void openCartridgeInBuilder(const QString& recipeId);
+    void onSettingsApplied();
 
 private:
     void setupUi();
     void setupConnections();
+    std::shared_ptr<aquila::IInferenceBackend> createBackend();
 
     NavRailWidget* navRail_ = nullptr;
     QStackedWidget* pageStack_ = nullptr;

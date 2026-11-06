@@ -4,7 +4,11 @@
 
 #include "aquila/core.hpp"
 #include "aquila/inference/ollama_backend.hpp"
+#if AQUILA_HAS_LLAMACPP
+#include "aquila/inference/llama_backend.hpp"
+#endif
 
+#include <filesystem>
 #include <QApplication>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -166,6 +170,7 @@ void MainWindow::setupConnections() {
     connect(settingsPage_, &SettingsPage::themeChanged, this, [this](bool isDark) {
         apply_theme(qApp, isDark ? ThemeMode::Dark : ThemeMode::Light);
     });
+    connect(settingsPage_, &SettingsPage::settingsApplied, this, &MainWindow::onSettingsApplied);
 }
 
 void MainWindow::switchMode(int index) {
@@ -197,16 +202,91 @@ void MainWindow::onSleepCycle() {
     statusBarLabel_->setText(QStringLiteral("Ready | Memory Consolidated"));
 }
 
+void MainWindow::onSettingsApplied() {
+    const bool isGpu = (settingsPage_->computeTier() == QStringLiteral("gpu"));
+    if (isGpu) {
+        topTierBadge_->setText(QStringLiteral("⚡ Tier: GPU Boost (RTX 4070)"));
+        topTierBadge_->setStyleSheet(QStringLiteral(
+            "background-color: rgba(227, 179, 65, 0.2); color: #f2cc60; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight:bold;"
+        ));
+    } else {
+        topTierBadge_->setText(QStringLiteral("⚡ Tier: CPU-First Base"));
+        topTierBadge_->setStyleSheet(QStringLiteral(
+            "background-color: rgba(56, 139, 253, 0.15); color: #58a6ff; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight:bold;"
+        ));
+    }
+
+    const QString bType = settingsPage_->backendType();
+    const QString mName = settingsPage_->modelName().trimmed();
+    if (bType == QStringLiteral("llama")) {
+        QString displayName = mName;
+        const int slashIdx = std::max(displayName.lastIndexOf('/'), displayName.lastIndexOf('\\'));
+        if (slashIdx >= 0) {
+            displayName = displayName.mid(slashIdx + 1);
+        }
+        if (displayName.isEmpty()) {
+            displayName = isGpu ? QStringLiteral("Llama-3.1-8B") : QStringLiteral("Llama-3.2-3B");
+        }
+        topModelBadge_->setText(QStringLiteral("🧠 Model: %1 (%2)").arg(displayName, isGpu ? QStringLiteral("llama.cpp CUDA") : QStringLiteral("llama.cpp CPU")));
+        topModelBadge_->setStyleSheet(QStringLiteral(
+            "background-color: rgba(163, 113, 247, 0.2); color: #d2a8ff; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight:bold;"
+        ));
+    } else {
+        topModelBadge_->setText(QStringLiteral("🧠 Model: %1 (Ollama)").arg(mName.isEmpty() ? QStringLiteral("aquila") : mName));
+        topModelBadge_->setStyleSheet(QStringLiteral(
+            "background-color: rgba(63, 185, 80, 0.15); color: #7ee787; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight:bold;"
+        ));
+    }
+
+    if (!settingsPage_->workspacePath().isEmpty()) {
+        setWorkspaceRoot(settingsPage_->workspacePath());
+    }
+}
+
+std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
+#if AQUILA_HAS_LLAMACPP
+    if (settingsPage_->backendType() == QStringLiteral("llama")) {
+        LlamaConfig lcfg;
+        const bool isGpu = (settingsPage_->computeTier() == QStringLiteral("gpu"));
+        QString m = settingsPage_->modelName().trimmed();
+        if (m.isEmpty() || m == QStringLiteral("aquila")) {
+            if (isGpu && std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
+                lcfg.model_path = "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
+            } else if (std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
+                lcfg.model_path = "D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+            } else {
+                lcfg.model_path = m.toStdString();
+            }
+        } else {
+            lcfg.model_path = m.toStdString();
+        }
+
+        lcfg.profile = isGpu ? ComputeProfile::gpu_high_vram : ComputeProfile::cpu_low_spec_edge;
+        lcfg.n_ctx = static_cast<std::uint32_t>(settingsPage_->contextWindow());
+        lcfg.n_gpu_layers = isGpu ? 999 : 0;
+        return std::make_shared<LlamaCppBackend>(lcfg);
+    }
+#endif
+    OllamaConfig cfg;
+    cfg.base_url = settingsPage_->ollamaHost().toStdString();
+    cfg.model = settingsPage_->modelName().toStdString();
+    return std::make_shared<OllamaHttpBackend>(cfg);
+}
+
 void MainWindow::onChatSend(const QString& prompt, const QStringList& /* attachments */) {
     if (activeWorker_ && activeWorker_->isRunning()) {
         activeWorker_->cancel();
         activeWorker_->wait();
     }
 
-    OllamaConfig cfg;
-    cfg.base_url = settingsPage_->ollamaHost().toStdString();
-    cfg.model = settingsPage_->modelName().toStdString();
-    auto backend = std::make_shared<OllamaHttpBackend>(cfg);
+    std::shared_ptr<aquila::IInferenceBackend> backend;
+    try {
+        backend = createBackend();
+    } catch (const std::exception& e) {
+        chatPage_->appendAssistantMessage(QStringLiteral("❌ Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
+        statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
+        return;
+    }
 
     RecipeCartridge recipe = fn_dev_implement_recipe();
 
@@ -240,10 +320,15 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         activeWorker_->wait();
     }
 
-    OllamaConfig cfg;
-    cfg.base_url = settingsPage_->ollamaHost().toStdString();
-    cfg.model = settingsPage_->modelName().toStdString();
-    auto backend = std::make_shared<OllamaHttpBackend>(cfg);
+    std::shared_ptr<aquila::IInferenceBackend> backend;
+    try {
+        backend = createBackend();
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, QStringLiteral("Backend Error"),
+                              QStringLiteral("Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
+        statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
+        return;
+    }
 
     RecipeCartridge recipe = fn_dev_implement_recipe();
     for (const auto& r : all_builtin_recipes()) {

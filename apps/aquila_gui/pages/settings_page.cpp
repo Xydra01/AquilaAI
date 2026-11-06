@@ -1,6 +1,7 @@
 // apps/aquila_gui/pages/settings_page.cpp
 #include "settings_page.hpp"
 
+#include <filesystem>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -29,14 +30,20 @@ SettingsPage::SettingsPage(QWidget* parent)
 
     backendCombo_ = new QComboBox(backendGroup);
     backendCombo_->addItems({QStringLiteral("Ollama (HTTP localhost:11434)"), QStringLiteral("Llama.cpp (Direct C++ In-Process)")});
+    connect(backendCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SettingsPage::onBackendComboChanged);
     backendForm->addRow(QStringLiteral("Backend:"), backendCombo_);
 
     hostInput_ = new QLineEdit(QStringLiteral("http://127.0.0.1:11434"), backendGroup);
     backendForm->addRow(QStringLiteral("Ollama Host:"), hostInput_);
 
+    auto* modelRow = new QHBoxLayout();
     modelInput_ = new QLineEdit(QStringLiteral("aquila"), backendGroup);
     modelInput_->setPlaceholderText(QStringLiteral("Model tag or path to .gguf file"));
-    backendForm->addRow(QStringLiteral("Model / Weights:"), modelInput_);
+    modelRow->addWidget(modelInput_, 1);
+    browseModelBtn_ = new QPushButton(QStringLiteral("Browse..."), backendGroup);
+    connect(browseModelBtn_, &QPushButton::clicked, this, &SettingsPage::onBrowseModel);
+    modelRow->addWidget(browseModelBtn_);
+    backendForm->addRow(QStringLiteral("Model / Weights:"), modelRow);
 
     layout->addWidget(backendGroup);
 
@@ -50,6 +57,7 @@ SettingsPage::SettingsPage(QWidget* parent)
         QStringLiteral("CPU Base (8GB RAM tier, tight 2048 token window)"),
         QStringLiteral("GPU Boost (RTX 4070 VRAM offload, 8192 token window)")
     });
+    connect(tierCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SettingsPage::onTierComboChanged);
     tierForm->addRow(QStringLiteral("Compute Profile:"), tierCombo_);
 
     contextSpin_ = new QSpinBox(tierGroup);
@@ -115,6 +123,48 @@ void SettingsPage::onBrowseWorkspace() {
     const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Select Workspace Directory"));
     if (!dir.isEmpty()) {
         workspaceInput_->setText(dir);
+    }
+}
+
+void SettingsPage::onBrowseModel() {
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Select Model Weights (.gguf)"),
+        QStringLiteral("D:/aquila-models"),
+        QStringLiteral("GGUF Model Files (*.gguf);;All Files (*.*)"));
+    if (!file.isEmpty()) {
+        modelInput_->setText(file);
+    }
+}
+
+void SettingsPage::onBackendComboChanged(int index) {
+    const bool isLlama = (index == 1);
+    hostInput_->setEnabled(!isLlama);
+    if (isLlama) {
+        const QString cur = modelInput_->text().trimmed();
+        if (cur.isEmpty() || cur == QStringLiteral("aquila")) {
+            if (computeTier() == QStringLiteral("gpu") &&
+                std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
+                modelInput_->setText(QStringLiteral("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"));
+            } else if (std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
+                modelInput_->setText(QStringLiteral("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+            }
+        }
+    }
+}
+
+void SettingsPage::onTierComboChanged(int index) {
+    if (index == 1) { // GPU
+        contextSpin_->setValue(8192);
+        if (backendCombo_->currentIndex() == 1 &&
+            std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
+            modelInput_->setText(QStringLiteral("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"));
+        }
+    } else { // CPU
+        contextSpin_->setValue(2048);
+        if (backendCombo_->currentIndex() == 1 &&
+            std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
+            modelInput_->setText(QStringLiteral("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+        }
     }
 }
 
