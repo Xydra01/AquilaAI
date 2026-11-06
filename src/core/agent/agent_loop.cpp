@@ -125,6 +125,13 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // this bound with the orchestrator-intent handling, the should_condense() wipe,
     // and the turn-limit terminal semantics.
     for (std::uint64_t turn = 0; turn < limits.max_turns; ++turn) {
+        if (config.check_cancelled && config.check_cancelled()) {
+            result.outcome = LoopOutcome::aborted;
+            result.success = false;
+            result.run_record = std::move(run_record);
+            return result;
+        }
+
         // 1. Assemble the prompt and resend it in full. The scaffold cannot reuse
         // KV, so rewind to the load-time baseline and re-append every message.
         const std::vector<Message> messages = condenser.build_messages();
@@ -133,10 +140,10 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             backend_.append(message);
         }
 
-        // 2. Generate. No streaming: pass an empty TokenCallback. A backend failure
+        // 2. Generate. Pass config.on_token (or empty if omitted). A backend failure
         // (ok == false) is a failed turn — record the backend error, nudge the
         // model, and continue without throwing (Req 1.2).
-        const GenerationResult gen = backend_.generate(params, TokenCallback{});
+        const GenerationResult gen = backend_.generate(params, config.on_token);
         if (!gen.ok) {
             const std::string note =
                 "backend generation failed (" + gen.error_code + ": " + gen.error_detail +
@@ -147,6 +154,9 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             record.parsed = false;
             record.note = note;
             result.transcript.push_back(std::move(record));
+            if (config.on_turn) {
+                config.on_turn(result.transcript.back());
+            }
             condenser.push_guidance(note);
             continue;
         }
@@ -168,6 +178,9 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             record.parsed = false;
             record.note = note;
             result.transcript.push_back(std::move(record));
+            if (config.on_turn) {
+                config.on_turn(result.transcript.back());
+            }
             condenser.push_guidance(note);
             continue;
         }
@@ -196,6 +209,9 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         record.call = call;
         record.interaction = interaction;
         result.transcript.push_back(std::move(record));
+        if (config.on_turn) {
+            config.on_turn(result.transcript.back());
+        }
 
         // 6. Advance the RunRecord (Req 6.2): step_index counts completed turns and
         // last_interaction tracks the most recent dispatch. No session field is

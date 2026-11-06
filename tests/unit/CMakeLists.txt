@@ -54,9 +54,10 @@ add_executable(aquila_unit_tests
     script_module_test.cpp
     recipe_nesting_test.cpp
     micro_pass_test.cpp
-    recipes_all_test.cpp)
+    recipes_all_test.cpp
+    cli_test.cpp)
 target_link_libraries(aquila_unit_tests PRIVATE
-    aquila::core httplib::httplib Catch2::Catch2WithMain rapidcheck_catch
+    aquila::core aquila_cli_lib httplib::httplib Catch2::Catch2WithMain rapidcheck_catch
     # Carries AQUILA_HAS_LLAMACPP (1 built / 0 stubbed) into this test TU so the
     # llama_session_test.cpp guard resolves; when built it also brings the llama.cpp
     # SYSTEM includes so the test can query <llama.h> (llama_memory_seq_pos_max).

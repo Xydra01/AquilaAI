@@ -52,6 +52,11 @@ struct LoopConfig {
     std::string instance_id;
     Json ground_truth = Json::object();
     CondenserStrategy context_strategy = CondenserStrategy::sac;
+
+    // M8 Streaming, Progress & Cancellation Callbacks:
+    TokenCallback on_token = {};
+    std::function<void(const TurnRecord&)> on_turn = {};
+    std::function<bool()> check_cancelled = {};
 };
 
 // Single-threaded, deterministic driver (Req 1, Req 5, R14). No async, no

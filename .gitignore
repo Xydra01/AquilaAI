@@ -31,3 +31,4 @@ __pycache__/
 # diagnostic logs from live-test debugging
 /diag*.log
 /bakeoff-debug.log
+.aquila/
