@@ -145,9 +145,9 @@ TEST_CASE("Property 1: rollback is exact (position + deterministic generate)",
                  RC_ASSERT(base->mark_checkpoint() == std::size_t{0});
 
                  // Decode the prefix, mark the checkpoint, decode extra on top.
-                 base->append(Message{Role::user, prefix});
+                 base->append(Message{Role::user, prefix, {}});
                  const std::size_t checkpoint = base->mark_checkpoint();
-                 base->append(Message{Role::user, extra});
+                 base->append(Message{Role::user, extra, {}});
                  RC_ASSERT(base->mark_checkpoint() > checkpoint);
 
                  // Roll back to the checkpoint: the position must be EXACTLY it.
@@ -162,7 +162,7 @@ TEST_CASE("Property 1: rollback is exact (position + deterministic generate)",
                  // generate. Exactness of rollback means the KV is byte-for-byte the
                  // prefix-only state, so the continuations must be identical.
                  LlamaCppBackend fresh(cpu_config());
-                 fresh.append(Message{Role::user, prefix});
+                 fresh.append(Message{Role::user, prefix, {}});
                  RC_ASSERT(fresh.mark_checkpoint() == checkpoint);
                  const GenerationResult fresh_gen =
                      fresh.generate(greedy_params(), nullptr);

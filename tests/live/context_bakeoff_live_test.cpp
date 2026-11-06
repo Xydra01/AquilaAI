@@ -205,7 +205,7 @@ TEST_CASE("live: context-strategy bake-off decides D14", "[context_bakeoff][live
                 for (const Message& turn : task.turns) {
                     strat->add_turn(backend, turn);
                 }
-                strat->add_turn(backend, Message{Role::user, task.final_prompt});
+                strat->add_turn(backend, Message{Role::user, task.final_prompt, {}});
                 const GenerationResult r = strat->next_action(backend, schema_params(), nullptr);
                 last_content = r.content; last_done_reason = r.done_reason;
                 if (r.ok && r.done_reason == "stop") {

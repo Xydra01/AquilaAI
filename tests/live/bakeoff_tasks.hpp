@@ -42,7 +42,7 @@ inline std::vector<Message> common_prefix() {
                 "You are Aquila, a careful coding agent. Respond with exactly one "
                 "JSON action object: {\"thought\", \"module\", \"action\", \"args\"}. "
                 "Always use values the user established earlier in the conversation; "
-                "never invent identifiers, paths, or names."},
+                "never invent identifiers, paths, or names.", {}},
     };
 }
 
@@ -56,7 +56,7 @@ inline std::vector<Message> detour_turns(std::size_t n_detour) {
                             "tool_result[" + std::to_string(i) + "]: scanned module "
                             "sources; no actionable findings. Checked imports, ran the "
                             "linter, inspected the build graph, and confirmed the "
-                            "workspace is clean. Continuing the investigation."});
+                            "workspace is clean. Continuing the investigation.", {}});
     }
     return t;
 }
@@ -71,8 +71,7 @@ inline std::vector<Task> suite(std::size_t n_detour = 8) {
         Task t;
         t.name = "remember_filename";
         t.prefix = common_prefix();
-        t.turns.push_back(Message{Role::user,
-            "Remember this exact target filename for later: harness_report_7f3a.md"});
+        t.turns.push_back(Message{Role::user, "Remember this exact target filename for later: harness_report_7f3a.md", {}});
         for (auto& m : detour_turns(n_detour)) t.turns.push_back(m);
         t.final_prompt = "Now create that file. Emit the create_file action with the "
                          "args.path set to the filename I gave you earlier.";
@@ -89,8 +88,7 @@ inline std::vector<Task> suite(std::size_t n_detour = 8) {
         Task t;
         t.name = "remember_issue_id";
         t.prefix = common_prefix();
-        t.turns.push_back(Message{Role::user,
-            "Track issue AQ-20481 across this session; it is the only issue that matters."});
+        t.turns.push_back(Message{Role::user, "Track issue AQ-20481 across this session; it is the only issue that matters.", {}});
         for (auto& m : detour_turns(n_detour)) t.turns.push_back(m);
         t.final_prompt = "Close the issue. Emit the close_issue action with args.id set "
                          "to the issue identifier from earlier.";
@@ -106,8 +104,7 @@ inline std::vector<Task> suite(std::size_t n_detour = 8) {
         Task t;
         t.name = "remember_numeric_constraint";
         t.prefix = common_prefix();
-        t.turns.push_back(Message{Role::user,
-            "Hard rule for this task: max_retries must be exactly 3. Do not change it."});
+        t.turns.push_back(Message{Role::user, "Hard rule for this task: max_retries must be exactly 3. Do not change it.", {}});
         for (auto& m : detour_turns(n_detour)) t.turns.push_back(m);
         t.final_prompt = "Configure the runner. Emit the set_config action with "
                          "args.max_retries set to the value from the hard rule.";
@@ -126,8 +123,7 @@ inline std::vector<Task> suite(std::size_t n_detour = 8) {
         Task t;
         t.name = "remember_path";
         t.prefix = common_prefix();
-        t.turns.push_back(Message{Role::user,
-            "The config we care about lives at src/core/agent/tier_defaults.yaml."});
+        t.turns.push_back(Message{Role::user, "The config we care about lives at src/core/agent/tier_defaults.yaml.", {}});
         for (auto& m : detour_turns(n_detour)) t.turns.push_back(m);
         t.final_prompt = "Read that config. Emit the read_file action with args.path "
                          "set to the path I mentioned.";
@@ -144,8 +140,7 @@ inline std::vector<Task> suite(std::size_t n_detour = 8) {
         Task t;
         t.name = "remember_flag";
         t.prefix = common_prefix();
-        t.turns.push_back(Message{Role::user,
-            "The feature flag to toggle is called kv_rollback_experimental."});
+        t.turns.push_back(Message{Role::user, "The feature flag to toggle is called kv_rollback_experimental.", {}});
         for (auto& m : detour_turns(n_detour)) t.turns.push_back(m);
         t.final_prompt = "Disable it. Emit the toggle_flag action with args.flag set "
                          "to the flag name and args.enabled false.";

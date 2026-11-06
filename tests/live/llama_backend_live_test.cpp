@@ -120,7 +120,7 @@ TEST_CASE("live.gpu: GBNF makes invalid JSON impossible over N>=50 trials",
     for (int rep = 0; rep < 3; ++rep) {
         for (const std::string& prompt : prompts) {
             backend.rollback_to(0);
-            backend.append(Message{Role::user, prompt});
+            backend.append(Message{Role::user, prompt, {}});
             const GenerationResult r = backend.generate(schema_params(), nullptr);
             ++trials;
             REQUIRE(r.ok);

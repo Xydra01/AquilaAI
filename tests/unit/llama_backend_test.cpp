@@ -191,7 +191,7 @@ TEST_CASE("Property 4: schema-constrained generate always yields ActionCall-vali
                  // Start each iteration from an empty context so the budget is spent
                  // on the (grammar-forced) object, not leftover turns.
                  backend->rollback_to(0);
-                 backend->append(Message{Role::user, prompt});
+                 backend->append(Message{Role::user, prompt, {}});
 
                  const GenerationResult r =
                      backend->generate(greedy_schema_params(/*max_tokens=*/256), nullptr);
@@ -240,7 +240,7 @@ TEST_CASE("Property 6: generate leaves the KV unchanged and is repeatable",
                  const std::string ctx_text = *short_text();
 
                  backend->rollback_to(0);
-                 backend->append(Message{Role::user, ctx_text});
+                 backend->append(Message{Role::user, ctx_text, {}});
 
                  const std::size_t before = backend->mark_checkpoint();
 
@@ -286,7 +286,7 @@ TEST_CASE("Property 7: cancel-after-k is typed 'cancelled' and leaves the KV unc
                  const int k = *rc::gen::inRange<int>(1, 6);  // cancel after 1..5
 
                  backend->rollback_to(0);
-                 backend->append(Message{Role::user, ctx_text});
+                 backend->append(Message{Role::user, ctx_text, {}});
                  const std::size_t before = backend->mark_checkpoint();
 
                  int seen = 0;
@@ -411,7 +411,7 @@ TEST_CASE("generate streams token pieces in order and their concatenation equals
     }
 
     LlamaCppBackend backend(cpu_config());
-    backend.append(Message{Role::user, "once upon a time"});
+    backend.append(Message{Role::user, "once upon a time", {}});
 
     std::string streamed;
     std::vector<std::string> pieces;
@@ -450,7 +450,7 @@ TEST_CASE("done_reason is 'length' at the max_tokens cap and 'stop' on a natural
     }
 
     LlamaCppBackend backend(cpu_config());
-    backend.append(Message{Role::user, "the end"});
+    backend.append(Message{Role::user, "the end", {}});
 
     SECTION("a tiny max_tokens stops with done_reason=\"length\"") {
         // A 1-token cap cannot reach a natural EOS first (unless the very first
@@ -506,7 +506,7 @@ TEST_CASE("append overflow is a typed context_overflow; generate never puts mode
 
         std::string overflow_code;
         try {
-            backend.append(Message{Role::user, long_prompt});
+            backend.append(Message{Role::user, long_prompt, {}});
         } catch (const LlamaError& e) {
             overflow_code = e.code;
         }
@@ -518,7 +518,7 @@ TEST_CASE("append overflow is a typed context_overflow; generate never puts mode
     // `content`, never in error_code / error_detail.
     {
         LlamaCppBackend backend(cpu_config());
-        backend.append(Message{Role::user, "a short tale"});
+        backend.append(Message{Role::user, "a short tale", {}});
         const GenerationResult r = backend.generate(greedy_params(/*max_tokens=*/8), nullptr);
         CHECK(r.ok);
         CHECK(r.error_code.empty());
