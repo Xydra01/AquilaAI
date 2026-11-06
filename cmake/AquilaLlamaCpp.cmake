@@ -115,14 +115,37 @@ set(CMAKE_CXX_STANDARD "${_aq_saved_cxx_standard}")
 # the sanitizer-scrub as a per-target compile/link option override. Our own
 # wrapper TUs stay instrumented, so the sanitizer still covers M5's own code.
 if(AQUILA_SANITIZE AND NOT MSVC)
-    # Build the sanitizer spec the same way AquilaSanitizers.cmake does, to turn
-    # each one OFF on the upstream targets.
+    # Turn our sanitizers OFF on EVERY upstream llama.cpp/ggml target, not a hardcoded
+    # few. We test our wrapper, not ggml's internals. The compute kernels live in ggml
+    # SUB-targets (ggml-base, ggml-cpu, ...), and ggml dispatches quantize/dequantize
+    # through function pointers whose static type differs from the callee -- which
+    # UBSan's -fsanitize=function flags as undefined behavior at RUNTIME when the
+    # llamacpp unit tests decode on the tiny model (ggml-cpu/ops.cpp dequantize_row_*).
+    # This is the same upstream pattern tree-sitter needed -fsanitize=function off for.
+    # Collect ALL targets defined under the llamacpp subtree and scrub each.
     set(_aq_llama_noscan "")
     foreach(_san IN LISTS AQUILA_SANITIZE)
         list(APPEND _aq_llama_noscan "-fno-sanitize=${_san}")
     endforeach()
-    foreach(_tgt llama ggml llama-common llama-common-base)
-        if(TARGET ${_tgt})
+    # -fsanitize=function is enabled as part of -fsanitize=undefined but must be named
+    # explicitly to be sure it is disabled on these targets (it is the one that fires).
+    list(APPEND _aq_llama_noscan "-fno-sanitize=function")
+
+    # Recursively collect EVERY target under the llamacpp subtree and scrub each, so
+    # no ggml sub-target (ggml-base, ggml-cpu and its arch variants, vendored libs)
+    # is missed regardless of upstream target-name changes between tags.
+    set(_aq_scan_dirs "${llamacpp_SOURCE_DIR}")
+    set(_aq_llama_all_tgts "")
+    while(_aq_scan_dirs)
+        list(POP_FRONT _aq_scan_dirs _aq_dir)
+        get_property(_aq_dtgts DIRECTORY "${_aq_dir}" PROPERTY BUILDSYSTEM_TARGETS)
+        list(APPEND _aq_llama_all_tgts ${_aq_dtgts})
+        get_property(_aq_subdirs DIRECTORY "${_aq_dir}" PROPERTY SUBDIRECTORIES)
+        list(APPEND _aq_scan_dirs ${_aq_subdirs})
+    endwhile()
+    foreach(_tgt IN LISTS _aq_llama_all_tgts)
+        get_target_property(_aq_ttype ${_tgt} TYPE)
+        if(NOT _aq_ttype STREQUAL "INTERFACE_LIBRARY" AND NOT _aq_ttype STREQUAL "UTILITY")
             target_compile_options(${_tgt} PRIVATE ${_aq_llama_noscan})
         endif()
     endforeach()
