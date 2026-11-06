@@ -28,6 +28,26 @@ MainWindow::~MainWindow() {
         activeWorker_->cancel();
         activeWorker_->wait(1000);
     }
+    delete homePage_;
+    homePage_ = nullptr;
+    delete chatPage_;
+    chatPage_ = nullptr;
+    delete taskPage_;
+    taskPage_ = nullptr;
+    delete codeIdePage_;
+    codeIdePage_ = nullptr;
+    delete writingPage_;
+    writingPage_ = nullptr;
+    delete researchPage_;
+    researchPage_ = nullptr;
+    delete characterPage_;
+    characterPage_ = nullptr;
+    delete learnPage_;
+    learnPage_ = nullptr;
+    delete builderPage_;
+    builderPage_ = nullptr;
+    delete settingsPage_;
+    settingsPage_ = nullptr;
 }
 
 void MainWindow::setupUi() {
@@ -92,6 +112,7 @@ void MainWindow::setupUi() {
     researchPage_ = new ResearchPage(pageStack_);
     characterPage_ = new CharacterPage(pageStack_);
     learnPage_ = new LearnPage(pageStack_);
+    builderPage_ = new RecipeBuilderPage(pageStack_);
     settingsPage_ = new SettingsPage(pageStack_);
 
     pageStack_->addWidget(homePage_);       // 0
@@ -102,7 +123,8 @@ void MainWindow::setupUi() {
     pageStack_->addWidget(researchPage_);   // 5
     pageStack_->addWidget(characterPage_);  // 6
     pageStack_->addWidget(learnPage_);      // 7
-    pageStack_->addWidget(settingsPage_);   // 8
+    pageStack_->addWidget(builderPage_);    // 8
+    pageStack_->addWidget(settingsPage_);   // 9
 
     rightLayout->addWidget(pageStack_, 1);
     mainLayout->addWidget(rightArea, 1);
@@ -120,8 +142,10 @@ void MainWindow::setupConnections() {
     connect(navRail_, &NavRailWidget::themeToggleRequested, this, &MainWindow::onThemeToggle);
     connect(navRail_, &NavRailWidget::sleepRequested, this, &MainWindow::onSleepCycle);
     connect(navRail_, &NavRailWidget::settingsRequested, this, [this]() {
-        switchMode(8);
+        switchMode(9);
     });
+
+    connect(taskPage_, &TaskPage::openBuilderRequested, this, &MainWindow::openCartridgeInBuilder);
 
     connect(homePage_, &HomePage::modeRequested, this, &MainWindow::switchMode);
     connect(homePage_, &HomePage::newChatRequested, this, [this]() {
@@ -263,6 +287,17 @@ void MainWindow::onCancelCurrentTask() {
         statusBarLabel_->setText(QStringLiteral("Cancelling task..."));
         activeWorker_->cancel();
     }
+}
+
+void MainWindow::openCartridgeInBuilder(const QString& recipeId) {
+    const auto list = aquila::all_builtin_recipes();
+    for (const auto& r : list) {
+        if (r.recipe_id == recipeId.toStdString()) {
+            builderPage_->loadCartridge(r);
+            break;
+        }
+    }
+    switchMode(8);
 }
 
 }  // namespace aquila::gui

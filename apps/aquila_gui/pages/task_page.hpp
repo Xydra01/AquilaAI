@@ -29,6 +29,7 @@ public:
 signals:
     void runRecipeRequested(const QString& recipeId, const QString& prompt);
     void cancelRequested();
+    void openBuilderRequested(const QString& recipeId);
 
 private:
     void onRunClicked();
@@ -37,6 +38,7 @@ private:
     QLineEdit* promptInput_ = nullptr;
     QPushButton* runButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
+    QPushButton* openBuilderButton_ = nullptr;
 
     QTreeWidget* ledgerTree_ = nullptr;
     QLabel* objectiveLabel_ = nullptr;

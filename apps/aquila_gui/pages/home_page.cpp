@@ -65,6 +65,7 @@ HomePage::HomePage(QWidget* parent)
         {"🔍", "Research Lab", "Local markdown vector search, SQLite fact graph, and persistent page cache.", 5},
         {"👤", "Character AI", "Persona management with strict 800+ character initialization quality gates.", 6},
         {"🎓", "Learn & Archive", "Hierarchical course syllabus generation, quizzes, and 0-5 mastery tracking.", 7},
+        {"🧩", "Recipe Builder", "Visual graph workflow editor for assembling and validating custom recipe cartridges.", 8},
     };
 
     int row = 0;

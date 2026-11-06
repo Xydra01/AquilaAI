@@ -40,6 +40,12 @@ TaskPage::TaskPage(QWidget* parent)
     connect(cancelButton_, &QPushButton::clicked, this, &TaskPage::cancelRequested);
     controls->addWidget(cancelButton_);
 
+    openBuilderButton_ = new QPushButton(QStringLiteral("🧩 Open in Builder"), this);
+    connect(openBuilderButton_, &QPushButton::clicked, this, [this]() {
+        emit openBuilderRequested(recipeCombo_->currentText());
+    });
+    controls->addWidget(openBuilderButton_);
+
     layout->addLayout(controls);
 
     // Splitter: Left = Execution Ledger, Right = Scratchpad Monitor

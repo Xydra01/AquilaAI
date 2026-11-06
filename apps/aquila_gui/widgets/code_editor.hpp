@@ -10,6 +10,8 @@
 namespace aquila::gui {
 
 class CodeEditor;
+class InlinePromptBar;
+class InlineDiffOverlay;
 
 class LineNumberArea : public QWidget {
     Q_OBJECT
@@ -54,22 +56,41 @@ public:
     QString filePath() const { return filePath_; }
     void setFilePath(const QString& path) { filePath_ = path; }
 
+    bool hasPendingPatch() const;
+    void showInlinePrompt();
+    void hideInlinePrompt();
+    void applyInlinePendingPatch(const QString& replacementText);
+    void acceptInlinePatch();
+    void rejectInlinePatch();
+
 signals:
     void subcallRequested(const QString& selectedText);
+    void inlinePromptSubmitted(const QString& prompt, const QString& selectedText, const QString& filePath);
+    void inlinePatchAccepted(const QString& filePath);
+    void inlinePatchRejected(const QString& filePath);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private slots:
     void updateLineNumberAreaWidth(int newBlockCount);
     void highlightCurrentLine();
     void updateLineNumberArea(const QRect& rect, int dy);
+    void onPromptSubmitted(const QString& prompt);
 
 private:
+    void repositionPromptBar();
+
     QWidget* lineNumberArea_ = nullptr;
     CodeSyntaxHighlighter* highlighter_ = nullptr;
+    InlinePromptBar* promptBar_ = nullptr;
+    InlineDiffOverlay* diffOverlay_ = nullptr;
     QString filePath_;
+    int activeSelectionStart_ = 0;
+    int activeSelectionLength_ = 0;
+    QString activeSelectedText_;
 };
 
 }  // namespace aquila::gui

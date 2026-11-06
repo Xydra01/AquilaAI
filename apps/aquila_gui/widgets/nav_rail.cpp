@@ -27,7 +27,7 @@ NavRailWidget::NavRailWidget(QWidget* parent) : QWidget(parent) {
     mainLayout->addWidget(sep1);
 
     // Mode Buttons:
-    // 0: Home, 1: Chat, 2: Task, 3: Code, 4: Writing, 5: Research, 6: Character, 7: Learn
+    // 0: Home, 1: Chat, 2: Task, 3: Code, 4: Writing, 5: Research, 6: Character, 7: Learn, 8: Builder
     const struct {
         const char* icon;
         const char* label;
@@ -40,6 +40,7 @@ NavRailWidget::NavRailWidget(QWidget* parent) : QWidget(parent) {
         {"🔍", "Research"},
         {"👤", "Character"},
         {"🎓", "Learn"},
+        {"🧩", "Builder"},
     };
 
     int idx = 0;

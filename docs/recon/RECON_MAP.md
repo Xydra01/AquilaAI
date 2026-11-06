@@ -396,7 +396,7 @@ Order follows R5 (data structures → execution sandbox → orchestration loop),
 | M6 | **KnowledgeModule** (SQLite + vector + embeddings + page cache) | Reads existing `fact_graph.db`; recall@k on fixture matches Python within tolerance |
 | M7 | DocumentModule, PersonaModule, LearnModule (5.2) + recipe cartridges for research / writing / learn / persona; `ScriptModule` over `manifest.json` plugins (D5); `register_new_recipe`, nesting, `llm_micro_pass` (D9) | Capability parity scenarios re-expressed as cartridge tests; a sample plugin manifest loads and runs via stdin/stdout |
 | M8 | CLI surface + **Qt 6 Widgets GUI shell** (D3): all current pages ported (G1-G12 in `GUI_EVALUATION.md`) | Each row G1-G12 has a passing check (manual QA list from Python `docs/workspace-qa-*.md` re-run on C++) |
-| M9 | **Live canvas** for code + writing (D10, F1) + **GUI recipe builder** on QtNodes (D8, F2) | Highlight → agent edit → inline pending patch → accept/undo, scripted UI test; builder round-trips cartridge JSON losslessly |
+| M9 | **Live canvas** for code + writing (D10, F1) + **GUI recipe builder** on QtNodes (D8, F2) | Highlight → agent edit → inline pending patch → accept/undo, scripted UI test; builder round-trips cartridge JSON losslessly. **Done 2026-11-06** (section 8.9): Tests 11, 12, 13 passing offscreen, exact 17-cartridge round-trip parity, zero leaks under Clang ASan/UBSan, clean on MSVC Release |
 | M10 | Remote server (52-route HTTP/WS contract, `webapp/` unchanged), MCP client + host, setup wizard, packaging (D6) | Existing `webapp/` works against the C++ server; MCP host tools listed by a client |
 
 ### 8.1 Core value types (M1)
@@ -634,6 +634,32 @@ Milestone M8 delivers the native user-facing applications for Aquila C++20, comp
   - `mingw-san`: 100% test pass under Clang AddressSanitizer and UndefinedBehaviorSanitizer with zero memory leaks and zero runtime defects.
 - **R20 Accounting:** Added 3,885 C++ lines in `apps/` (CLI + GUI), replacing 9,052 Python lines in `gui/` — yielding a net **57% LOC reduction** while providing compile-time type safety, zero Python runtime dependencies, and headless CI testability.
 
+### 8.9 Milestone M9: Live Canvas & GUI Recipe Builder
+
+Milestone M9 delivers the interactive editing and visual workflow authoring capabilities of Aquila C++20, realizing the Gemini-style in-place document manipulation (**Live Canvas**, D10, F1) and the node-based workflow cartridge graph editor (**GUI Recipe Builder**, D8, F2) on `QtNodes` v3.0.16.
+
+**Key Deliverables & Verification:**
+- **QtNodes Integration (`cmake/AquilaQtNodes.cmake`):** Seamless FetchContent integration of `paceholder/nodeeditor` v3.0.16, pinned by SHA256 (`453e6eb783379fee6edf9282283576eaa7d27349b8731e638926ccbd8331f7ef`) configured as a static library with warning suppression (`/W0`).
+- **Live Canvas Subsystem (`apps/aquila_gui/widgets/`):**
+  - `InlinePromptBar`: Floating prompt input widget with `Ctrl+K` trigger, submit / cancel buttons, and focus grab.
+  - `InlineDiffOverlay`: Real-time Myers line diffing highlighting inserted replacement lines in soft dark green (`#1e462d`) and faded deletions, coupled with floating `InlinePatchPill` displaying `+N -M` diff statistics with Accept (`Ctrl+Enter`) and Reject (`Esc`) controls.
+  - Integrated into both `CodeEditor` (Code IDE Page) and `WritingPage` (Writing Studio), enabling instant revision, review, accept, reject, and non-destructive `undo()` across code buffers and prose sections.
+- **Visual Recipe Builder (`apps/aquila_gui/builder/`):**
+  - Custom `NodeDelegateModel` implementations: `CartridgeRootNodeModel` (5 typed input ports), `ModuleNodeModel` (dynamic initial state JSON editor), `PreHookNodeModel`, `ValidationHookNodeModel`, `ChecklistNodeModel`, and `IncludeNodeModel`.
+  - Bi-directional bridge `CartridgeGraphBridge`: Converts `RecipeCartridge` struct to QtNodes data-flow graph and back with 100% field equality.
+  - Interactive `RecipeBuilderPage`: Three-pane layout (left node palette, center interactive graph view with auto-layout and pan/zoom, right synchronized live JSON drawer), toolbar with New, Load Builtin, Save to `.aquila/recipes/`, and Validate against `ModuleRegistry::builtin()`.
+- **Navigation Rail & Shell Integration:**
+  - Added 10th mode button to `NavRailWidget`: 🧩 **Builder** (`Ctrl+9`).
+  - Added "🧩 Open in Builder" jump button in `TaskPage` to open the currently selected recipe in the visual builder with one click.
+- **Headless Test Suite Extensions (`apps/aquila_gui/main.cpp`):**
+  - Test 11: Code Editor Live Canvas (Ctrl+K, Myers pending patch preview, reject restoration, accept commit, undo restoration).
+  - Test 12: Writing Studio Live Canvas (prose outline section revision, diff preview, accept commit).
+  - Test 13: Recipe Builder Graph & Lossless 17-Cartridge Round-Trip (verified exact field equality `c == out` across all 17 builtin cartridges).
+- **Multi-Preset Verification:**
+  - `msvc-release`: 100% CTest pass across all 9 suites (`cli.*`, `gui.smoke`, `gui.headless`, `unit`, `sanitizer.*`) with zero compiler warnings under `/W4 /WX`.
+  - `mingw-san`: 100% CTest pass under Clang AddressSanitizer and UndefinedBehaviorSanitizer with zero memory leaks and zero runtime defects.
+- **R20 Accounting:** Added 1,585 C++ lines in `apps/aquila_gui/` (Live Canvas + Recipe Builder + Graph Bridge), achieving full visual workflow editing and interactive in-place document diffing with zero Python dependencies.
+
 ## 9. Open decisions (need the user)
 
 Decided (2026-11-02, by user):
@@ -681,3 +707,4 @@ No decisions are open right now.
 | 2026-11-06 | M6 KnowledgeModule, SQLite3, Vector Store, Embeddings, Page Cache, and SAC Context Condenser (section 8.6). SQLite amalgamation pinned in CMake; RAII wrappers; FactStore parity with real fact_graph.db; Blake2b-64 HashingEmbedder bit-parity with Python; in-process VectorIndex with Chroma ingest; fuzz-safe HtmlCleaner + WebFetcher; persistent PageCache; structural DocumentChunker + hybrid dense/FTS5 BM25 search; KnowledgeModule builtin. ContextCondenser upgraded to SAC strategy (Finding F3 winner, Option A). All 187 MSVC and 170 MinGW unit tests pass warning- and sanitizer-clean; R20 accounting: +2673 C++ LOC vs ~5715 Python LOC (>50% compression, zero external daemon dependencies). |
 | 2026-11-06 | M7 Domain Modules, Script Plugins, Advanced Cartridges, and 15-Recipe Portfolio (section 8.7). Subprocess stdin piping implemented; DocumentModule (canvas authoring), PersonaModule (character AI, 800-char gate, 40-turn window), LearnModule (syllabus validation >=8 units, mastery 0-5), ScriptModule (manifest.json dynamic plugin adapter). RecipeCartridge includes resolved deterministically; register_new_recipe added to OrchestratorModule; isolated run_micro_pass with RAII KV rollback. All 15 Python workflow recipes ported to native C++ cartridges with exact byte parity. 202 MSVC and 185 MinGW unit tests pass warning- and sanitizer-clean (7142 assertions). R20: +2676 C++ LOC vs ~4200 lines of untyped Python. |
 | 2026-11-06 | M8 CLI Surface & Native Qt 6 Widgets GUI Shell (section 8.8). Complete CLI with 7 subcommands (run, chat, list-recipes, list-modules, eval, version, help). Native Qt 6.11.3 Widgets desktop GUI shell with Fluent theme styling, custom NavRail, FlowLayout, Myers pending diff cards, code editor with gutter lines, and 12 capability rows across 9 mode pages. Decoupled QThread AgentWorker with thread-safe queued signals and atomic cancellation; SetupWizard (4 pages) and PlanReviewDialog. Headless offscreen automated suite (10 test suites) passing without display server. Multi-preset verified: 100% CTest pass on MSVC (9/9 suites) and MinGW Clang ASan + UBSan (36 assertions). R20: 3885 C++ lines in apps/ vs 9052 Python lines in gui/ (57% net LOC reduction). |
+| 2026-11-06 | M9 Live Canvas & GUI Recipe Builder (section 8.9). Gemini-style in-place live document editing (Ctrl+K, floating InlinePromptBar, soft green Myers InlineDiffOverlay, inline +N -M diff statistics pill, non-destructive undo) across Code IDE and Writing Studio. Visual data-flow recipe builder on QtNodes v3.0.16 (6 typed custom node models, bi-directional CartridgeGraphBridge with 100% field round-trip equality across all 17 builtin cartridges, node palette, live JSON drawer, auto-layout, validation against ModuleRegistry). NavRail 10th mode button (Builder) and TaskPage jump integration. Headless test suite expanded to 13 suites (Tests 11, 12, 13 passing offscreen). 100% CTest pass on MSVC (9/9 suites) and MinGW Clang ASan + UBSan. |

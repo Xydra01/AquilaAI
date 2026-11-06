@@ -58,12 +58,15 @@ WritingPage::WritingPage(QWidget* parent)
     auto* editorLayout = new QVBoxLayout(editorGroup);
     editorLayout->setContentsMargins(4, 8, 4, 4);
 
-    sectionEditor_ = new QPlainTextEdit(editorGroup);
-    sectionEditor_->setFont(QFont(QStringLiteral("Segoe UI"), 11));
+    sectionEditor_ = new CodeEditor(editorGroup);
+    sectionEditor_->setFont(QFont(QStringLiteral("Consolas"), 11));
     sectionEditor_->setPlaceholderText(QStringLiteral("Write or edit section draft content here..."));
-    connect(sectionEditor_, &QPlainTextEdit::textChanged, this, [this]() {
+    connect(sectionEditor_, &CodeEditor::textChanged, this, [this]() {
         updateWordCount();
         updatePreview(sectionEditor_->toPlainText());
+    });
+    connect(sectionEditor_, &CodeEditor::inlinePromptSubmitted, this, [this](const QString& prompt, const QString& selected, const QString&) {
+        emit reviseSectionRequested(selected, prompt);
     });
     editorLayout->addWidget(sectionEditor_);
     splitter->addWidget(editorGroup);

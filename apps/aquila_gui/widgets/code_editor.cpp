@@ -1,5 +1,7 @@
 // apps/aquila_gui/widgets/code_editor.cpp
 #include "code_editor.hpp"
+#include "inline_prompt_bar.hpp"
+#include "inline_diff_overlay.hpp"
 
 #include <QAction>
 #include <QMenu>
@@ -106,6 +108,19 @@ CodeEditor::CodeEditor(QWidget* parent) : QPlainTextEdit(parent) {
     lineNumberArea_ = new LineNumberArea(this);
     highlighter_ = new CodeSyntaxHighlighter(document());
 
+    promptBar_ = new InlinePromptBar(this);
+    promptBar_->hide();
+    connect(promptBar_, &InlinePromptBar::submitRequested, this, &CodeEditor::onPromptSubmitted);
+    connect(promptBar_, &InlinePromptBar::cancelRequested, this, &CodeEditor::hideInlinePrompt);
+
+    diffOverlay_ = new InlineDiffOverlay(this, this);
+    connect(diffOverlay_, &InlineDiffOverlay::patchAccepted, this, [this](const QString&) {
+        emit inlinePatchAccepted(filePath_);
+    });
+    connect(diffOverlay_, &InlineDiffOverlay::patchRejected, this, [this]() {
+        emit inlinePatchRejected(filePath_);
+    });
+
     setFont(QFont(QStringLiteral("Consolas"), 11));
     setLineWrapMode(QPlainTextEdit::NoWrap);
 
@@ -115,6 +130,95 @@ CodeEditor::CodeEditor(QWidget* parent) : QPlainTextEdit(parent) {
 
     updateLineNumberAreaWidth(0);
     highlightCurrentLine();
+}
+
+bool CodeEditor::hasPendingPatch() const {
+    return diffOverlay_ && diffOverlay_->hasPendingPatch();
+}
+
+void CodeEditor::showInlinePrompt() {
+    QTextCursor cursor = textCursor();
+    if (!cursor.hasSelection()) {
+        cursor.select(QTextCursor::LineUnderCursor);
+        setTextCursor(cursor);
+    }
+    activeSelectionStart_ = cursor.selectionStart();
+    activeSelectionLength_ = cursor.selectionEnd() - cursor.selectionStart();
+    activeSelectedText_ = cursor.selectedText();
+
+    repositionPromptBar();
+    promptBar_->clearInput();
+    promptBar_->show();
+    promptBar_->raise();
+    promptBar_->focusInput();
+}
+
+void CodeEditor::hideInlinePrompt() {
+    if (promptBar_) {
+        promptBar_->hide();
+    }
+    setFocus();
+}
+
+void CodeEditor::repositionPromptBar() {
+    if (!promptBar_) return;
+    const QRect rect = cursorRect(textCursor());
+    const int barWidth = qMin(650, qMax(350, width() - 80));
+    const int barHeight = 44;
+    const int barX = qMax(lineNumberAreaWidth() + 10, qMin(width() - barWidth - 20, rect.left()));
+    int barY = rect.bottom() + 6;
+    if (barY + barHeight > height()) {
+        barY = qMax(10, rect.top() - barHeight - 6);
+    }
+    promptBar_->setGeometry(barX, barY, barWidth, barHeight);
+}
+
+void CodeEditor::onPromptSubmitted(const QString& prompt) {
+    hideInlinePrompt();
+    emit inlinePromptSubmitted(prompt, activeSelectedText_, filePath_);
+}
+
+void CodeEditor::applyInlinePendingPatch(const QString& replacementText) {
+    if (diffOverlay_) {
+        diffOverlay_->startPendingPatch(activeSelectionStart_, activeSelectionLength_,
+                                        activeSelectedText_, replacementText);
+    }
+}
+
+void CodeEditor::acceptInlinePatch() {
+    if (diffOverlay_) {
+        diffOverlay_->acceptPatch();
+    }
+}
+
+void CodeEditor::rejectInlinePatch() {
+    if (diffOverlay_) {
+        diffOverlay_->rejectPatch();
+    }
+}
+
+void CodeEditor::keyPressEvent(QKeyEvent* event) {
+    if (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_K) {
+        showInlinePrompt();
+        event->accept();
+        return;
+    }
+
+    if (diffOverlay_ && diffOverlay_->hasPendingPatch()) {
+        if ((event->modifiers() == Qt::ControlModifier && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) ||
+            (event->key() == Qt::Key_Return && event->modifiers() == Qt::NoModifier)) {
+            acceptInlinePatch();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Escape) {
+            rejectInlinePatch();
+            event->accept();
+            return;
+        }
+    }
+
+    QPlainTextEdit::keyPressEvent(event);
 }
 
 int CodeEditor::lineNumberAreaWidth() {
@@ -195,8 +299,12 @@ void CodeEditor::contextMenuEvent(QContextMenuEvent* event) {
     std::unique_ptr<QMenu> menu(createStandardContextMenu());
     menu->addSeparator();
 
-    auto* subcallAct = menu->addAction(QStringLiteral("⚡ Ask Agent to Revise Selection"));
+    auto* inlineAct = menu->addAction(QStringLiteral("✨ Edit Selection with Agent... (Ctrl+K)"));
     const QString sel = textCursor().selectedText();
+    inlineAct->setEnabled(!sel.isEmpty());
+    connect(inlineAct, &QAction::triggered, this, &CodeEditor::showInlinePrompt);
+
+    auto* subcallAct = menu->addAction(QStringLiteral("⚡ Ask Agent about Selection"));
     subcallAct->setEnabled(!sel.isEmpty());
 
     connect(subcallAct, &QAction::triggered, this, [this, sel]() {

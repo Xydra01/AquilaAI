@@ -21,11 +21,13 @@ public:
 
     void setWorkspaceRoot(const QString& path);
     void openFile(const QString& filePath);
+    CodeEditor* currentEditor() const;
     void addPendingPatch(const QString& filePath, const QString& diffText);
     void clearPendingPatches();
 
 signals:
     void agentSubcallRequested(const QString& selectedText, const QString& filePath);
+    void inlineEditRequested(const QString& prompt, const QString& selectedText, const QString& filePath);
     void patchAccepted(const QString& filePath);
     void patchRejected(const QString& filePath);
 

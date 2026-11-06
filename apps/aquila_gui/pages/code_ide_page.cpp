@@ -76,6 +76,11 @@ void CodeIdePage::setWorkspaceRoot(const QString& path) {
     fileTree_->setRootIndex(fileModel_->index(path));
 }
 
+CodeEditor* CodeIdePage::currentEditor() const {
+    if (!editorTabs_ || editorTabs_->count() == 0) return nullptr;
+    return qobject_cast<CodeEditor*>(editorTabs_->currentWidget());
+}
+
 void CodeIdePage::openFile(const QString& filePath) {
     for (int i = 0; i < editorTabs_->count(); ++i) {
         auto* ed = qobject_cast<CodeEditor*>(editorTabs_->widget(i));
@@ -85,14 +90,12 @@ void CodeIdePage::openFile(const QString& filePath) {
         }
     }
 
+    QString content;
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        setStatus(QStringLiteral("Could not open file: %1").arg(filePath));
-        return;
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        content = QString::fromUtf8(file.readAll());
+        file.close();
     }
-
-    const QString content = QString::fromUtf8(file.readAll());
-    file.close();
 
     auto* editor = new CodeEditor(editorTabs_);
     editor->setPlainText(content);
@@ -100,6 +103,9 @@ void CodeIdePage::openFile(const QString& filePath) {
 
     connect(editor, &CodeEditor::subcallRequested, this, [this, filePath](const QString& sel) {
         emit agentSubcallRequested(sel, filePath);
+    });
+    connect(editor, &CodeEditor::inlinePromptSubmitted, this, [this](const QString& prompt, const QString& sel, const QString& path) {
+        emit inlineEditRequested(prompt, sel, path);
     });
 
     const QString tabTitle = QFileInfo(filePath).fileName();

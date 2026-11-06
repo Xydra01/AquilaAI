@@ -1,6 +1,7 @@
 // apps/aquila_gui/main_window.hpp
 #pragma once
 
+#include "builder/recipe_builder_page.hpp"
 #include "pages/character_page.hpp"
 #include "pages/chat_page.hpp"
 #include "pages/code_ide_page.hpp"
@@ -39,6 +40,7 @@ public:
     ResearchPage* researchPage() const { return researchPage_; }
     CharacterPage* characterPage() const { return characterPage_; }
     LearnPage* learnPage() const { return learnPage_; }
+    RecipeBuilderPage* builderPage() const { return builderPage_; }
     SettingsPage* settingsPage() const { return settingsPage_; }
 
 public slots:
@@ -47,6 +49,7 @@ public slots:
     void onChatSend(const QString& prompt, const QStringList& attachments);
     void onTaskRun(const QString& recipeId, const QString& prompt);
     void onCancelCurrentTask();
+    void openCartridgeInBuilder(const QString& recipeId);
 
 private:
     void setupUi();
@@ -63,6 +66,7 @@ private:
     ResearchPage* researchPage_ = nullptr;
     CharacterPage* characterPage_ = nullptr;
     LearnPage* learnPage_ = nullptr;
+    RecipeBuilderPage* builderPage_ = nullptr;
     SettingsPage* settingsPage_ = nullptr;
 
     QLabel* topWorkspaceBadge_ = nullptr;

@@ -2,9 +2,9 @@
 #pragma once
 
 #include "base_page.hpp"
+#include "../widgets/code_editor.hpp"
 
 #include <QLabel>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSplitter>
 #include <QTextEdit>
@@ -21,6 +21,7 @@ public:
     void setSectionContent(const QString& sectionName, const QString& content);
     QString currentSectionContent() const;
     void updatePreview(const QString& markdown);
+    CodeEditor* editor() const { return sectionEditor_; }
 
 signals:
     void sectionSelected(const QString& sectionName);
@@ -33,7 +34,7 @@ private:
     void updateWordCount();
 
     QTreeWidget* outlineTree_ = nullptr;
-    QPlainTextEdit* sectionEditor_ = nullptr;
+    CodeEditor* sectionEditor_ = nullptr;
     QTextEdit* markdownPreview_ = nullptr;
     QLabel* wordCountLabel_ = nullptr;
     QPushButton* compileButton_ = nullptr;

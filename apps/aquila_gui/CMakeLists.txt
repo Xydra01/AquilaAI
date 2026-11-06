@@ -1,4 +1,4 @@
-find_package(Qt6 6.11 QUIET COMPONENTS Widgets)
+find_package(Qt6 6.11 QUIET COMPONENTS Widgets OpenGL OpenGLWidgets)
 if(NOT Qt6_FOUND)
     message(FATAL_ERROR
         "Qt6 (>= 6.11, Widgets) not found. Set QT_ROOT_DIR to the Qt MSVC kit, e.g. "
@@ -26,6 +26,10 @@ qt_add_executable(aquila_gui
     widgets/flow_layout.cpp
     widgets/code_editor.hpp
     widgets/code_editor.cpp
+    widgets/inline_prompt_bar.hpp
+    widgets/inline_prompt_bar.cpp
+    widgets/inline_diff_overlay.hpp
+    widgets/inline_diff_overlay.cpp
     widgets/pending_patch_widget.hpp
     widgets/pending_patch_widget.cpp
     worker/agent_worker.hpp
@@ -50,13 +54,19 @@ qt_add_executable(aquila_gui
     pages/learn_page.cpp
     pages/settings_page.hpp
     pages/settings_page.cpp
+    builder/builder_data_models.hpp
+    builder/builder_data_models.cpp
+    builder/cartridge_graph_bridge.hpp
+    builder/cartridge_graph_bridge.cpp
+    builder/recipe_builder_page.hpp
+    builder/recipe_builder_page.cpp
     dialogs/setup_wizard.hpp
     dialogs/setup_wizard.cpp
     dialogs/plan_review_dialog.hpp
     dialogs/plan_review_dialog.cpp
 )
 target_include_directories(aquila_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(aquila_gui PRIVATE aquila::core Qt6::Widgets)
+target_link_libraries(aquila_gui PRIVATE aquila::core Qt6::Widgets Qt6::OpenGL QtNodes::QtNodes)
 aquila_set_warnings(aquila_gui)
 
 get_target_property(_qmake Qt6::qmake IMPORTED_LOCATION)
