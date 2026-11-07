@@ -50,6 +50,11 @@ std::vector<Message> ContextCondenser::build_messages() const {
     // 2. Anchored block [P+1..S]: one system message with the scratchpad + snapshots.
     messages.push_back(anchored_);
 
+    // 3. The initial user request (persisted across condensation and turns).
+    if (!user_prompt_.empty()) {
+        messages.push_back(Message{Role::user, user_prompt_, {}});
+    }
+
     // Under SAC mode, if earlier turns were folded, emit the running summary.
     if (strategy_ == CondenserStrategy::sac && !running_summary_.empty()) {
         messages.push_back(Message{Role::system, "State so far:\n" + running_summary_, {}});
@@ -62,7 +67,7 @@ std::vector<Message> ContextCondenser::build_messages() const {
         call["module"] = interaction.module;
         call["action"] = interaction.action;
         call["args"] = interaction.args;
-        messages.push_back(Message{Role::user, call.dump(), {}});
+        messages.push_back(Message{Role::assistant, call.dump(), {}});
         messages.push_back(Message{Role::tool, interaction.result.llm_facing_output, {}});
     }
 
@@ -116,6 +121,7 @@ std::size_t forward_to_utf8_boundary(const std::string& text, std::size_t index)
 }  // namespace
 
 void ContextCondenser::record_tool_cycle(const ToolInteraction& interaction) {
+    guidance_.clear();
     // Head+tail-truncate the LLM-facing output before it enters the tail; the full
     // text (if oversized) lands in spill_ keyed by the ref embedded in the view.
     ToolInteraction stored = interaction;
@@ -155,6 +161,10 @@ void ContextCondenser::record_tool_cycle(const ToolInteraction& interaction) {
 
 void ContextCondenser::push_guidance(std::string text) {
     guidance_.push_back(std::move(text));
+}
+
+void ContextCondenser::clear_guidance() {
+    guidance_.clear();
 }
 
 std::string ContextCondenser::head_tail_truncate(const std::string& text, std::string& out_ref) {

@@ -287,6 +287,9 @@ void PersonaModule::restore_state_snapshot(const Json& snapshot) {
 
 ActionResult PersonaModule::run(const std::string& action_name, const Json& args) {
     if (action_name == "load_persona") {
+        if (persona_.build_complete) {
+            return ok("✅ Persona '" + persona_.display_name + "' is already fully built and finalized. Now call OrchestratorModule.complete_recipe to finish the recipe.");
+        }
         const std::string pid = args.value("persona_id", "");
         if (pid.empty()) {
             return fail("missing_persona_id", "❌ Error: persona_id must not be empty.");
@@ -304,12 +307,15 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
     }
 
     if (action_name == "write_initialization") {
+        if (persona_.build_complete) {
+            return ok("✅ Persona '" + persona_.display_name + "' is already fully built and finalized. Do NOT write initialization again. Now call OrchestratorModule.complete_recipe to finish the recipe.");
+        }
         if (!has_active_persona()) {
             return fail("no_active_persona", "❌ Error: No active persona loaded. Use load_persona first.");
         }
-        const std::string file_path = args.value("file_path", "");
-        if (file_path != "initialization.md") {
-            return fail("invalid_file_path", "❌ Error: file_path must be exactly 'initialization.md'.");
+        const std::string file_path = args.value("file_path", "initialization.md");
+        if (!file_path.empty() && file_path != "initialization.md") {
+            return fail("invalid_file_path", "❌ Error: file_path must be 'initialization.md'.");
         }
         const std::string content = args.value("content", "");
         if (content.size() < kInitDocMinChars) {
@@ -321,7 +327,7 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
         if (init_written_) {
             return fail("already_written",
                         "❌ OS BLOCK: initialization.md is already written. Do NOT call write_persona_file again. "
-                        "Call finalize_persona(greeting=..., tagline=...) then mark_objective_complete.");
+                        "Call finalize_persona(greeting=..., tagline=...) then call OrchestratorModule.complete_recipe.");
         }
 
         std::error_code ec;
@@ -335,10 +341,13 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
 
         init_written_ = true;
         return ok("✅ Wrote " + std::to_string(content.size()) + " characters to initialization.md. "
-                  "Do NOT rewrite — call finalize_persona(greeting=..., tagline=...) then mark_objective_complete.");
+                  "Do NOT rewrite — call finalize_persona(greeting=..., tagline=...) then call OrchestratorModule.complete_recipe.");
     }
 
     if (action_name == "finalize_persona") {
+        if (persona_.build_complete) {
+            return ok("✅ Persona '" + persona_.display_name + "' is already finalized and ready for chat. Now call OrchestratorModule.complete_recipe to finish the recipe.");
+        }
         if (!has_active_persona()) {
             return fail("no_active_persona", "❌ Error: No active persona loaded. Use load_persona first.");
         }
@@ -359,7 +368,7 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
         }
         persona_.build_complete = true;
         save_persona_record();
-        return ok("✅ Persona '" + persona_.display_name + "' finalized and ready for chat.");
+        return ok("✅ Persona '" + persona_.display_name + "' finalized and ready for chat. Now call OrchestratorModule.complete_recipe to finish the recipe.");
     }
 
     if (action_name == "update_preferences") {

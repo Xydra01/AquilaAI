@@ -1,6 +1,6 @@
 add_library(aquila_cli_lib STATIC cli_app.cpp)
 target_include_directories(aquila_cli_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(aquila_cli_lib PUBLIC aquila::core)
+target_link_libraries(aquila_cli_lib PUBLIC aquila::core aquila_llamacpp)
 aquila_set_warnings(aquila_cli_lib)
 
 add_executable(aquila_cli main.cpp)

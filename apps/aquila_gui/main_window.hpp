@@ -88,6 +88,7 @@ private:
 
     QString workspaceRoot_ = ".";
     AgentWorker* activeWorker_ = nullptr;
+    std::vector<Message> chatHistory_;
     std::shared_ptr<aquila::IInferenceBackend> activeBackend_;
 
     int learnQuizCorrectIdx_ = 1;

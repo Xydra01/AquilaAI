@@ -32,3 +32,10 @@ __pycache__/
 /diag*.log
 /bakeoff-debug.log
 .aquila/
+eval_reports/
+eval_battery_summary.json
+eval_report.json
+debug.log
+Agent-Drafts/
+Agent-Learn/
+Agent-Personas/

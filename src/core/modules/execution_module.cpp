@@ -7,7 +7,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <system_error>
+#include <unordered_set>
 
 namespace aquila {
 
@@ -52,6 +54,8 @@ std::vector<ActionSchema> ExecutionModule::get_actions() const {
          schema(R"({"type":"object","properties":{"script":{"type":"string"},"code":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"additionalProperties":false})")},
         {"pip_list", "List installed Python packages inside the workspace virtual environment.",
          schema(R"({"type":"object","additionalProperties":false})")},
+        {"run", "Execute a shell command string or Python script inside the workspace.",
+         schema(R"({"type":"object","properties":{"cmd":{"type":"string"},"command":{"type":"string"},"script":{"type":"string"},"code":{"type":"string"},"cwd":{"type":"string"}},"additionalProperties":false})")},
     };
 }
 
@@ -181,6 +185,21 @@ ActionResult ExecutionModule::run(const std::string& action, const Json& args) {
     if (action == "pip_list") {
         return pip_list_action();
     }
+    if (action == "run" || action == "execute") {
+        const std::string cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
+        if (args.contains("cmd") || args.contains("command")) {
+            const auto cmd_str = args.value("cmd", args.value("command", ""));
+            auto argv = exec::split_command(cmd_str);
+            return execute(action, std::move(argv), cwd, false, "command_failed");
+        }
+        const std::string script = args.value("script", "");
+        const std::string code = args.value("code", "");
+        std::vector<std::string> sargs;
+        if (args.contains("args") && args["args"].is_array()) {
+            sargs = args["args"].get<std::vector<std::string>>();
+        }
+        return run_python_action(script, code, sargs, cwd);
+    }
     return fail("unknown_action", "ExecutionModule has no action '" + action + "'");
 }
 
@@ -245,11 +264,37 @@ ActionResult ExecutionModule::pip_install_action(const std::vector<std::string>&
     if (!fs::exists(py_exe, ec)) py_exe = "python3";
 #endif
 
+    static const std::unordered_set<std::string> stdlib = {
+        "pdb", "sys", "os", "math", "time", "json", "re", "collections",
+        "itertools", "functools", "pathlib", "threading", "subprocess",
+        "typing", "unittest", "shutil", "glob", "random", "io", "copy",
+        "logging", "argparse", "sqlite3", "http", "urllib", "hashlib",
+        "platform", "datetime", "string", "csv", "tempfile"
+    };
+
+    std::vector<std::string> to_install;
+    std::string skipped_info;
+    for (const auto& pkg : packages) {
+        if (stdlib.count(pkg)) {
+            if (!skipped_info.empty()) skipped_info += ", ";
+            skipped_info += pkg;
+        } else {
+            to_install.push_back(pkg);
+        }
+    }
+
+    if (to_install.empty()) {
+        ActionResult res;
+        res.success = true;
+        res.llm_facing_output = "requested module(s) (" + skipped_info + ") are part of the Python standard library; no pip installation required.";
+        return res;
+    }
+
     std::vector<std::string> argv = {py_exe, "-m", "pip", "install"};
     if (upgrade) {
         argv.push_back("--upgrade");
     }
-    for (const auto& pkg : packages) {
+    for (const auto& pkg : to_install) {
         argv.push_back(pkg);
     }
 
@@ -269,6 +314,9 @@ ActionResult ExecutionModule::pip_install_action(const std::vector<std::string>&
     ActionResult res;
     res.success = true;
     res.llm_facing_output = "packages installed successfully into .venv:\n" + run_res.output;
+    if (!skipped_info.empty()) {
+        res.llm_facing_output += "\n(Note: " + skipped_info + " are built into the standard library and did not need pip installation)";
+    }
     return res;
 }
 
@@ -288,12 +336,48 @@ ActionResult ExecutionModule::run_python_action(const std::string& script, const
     if (!fs::exists(py_exe, ec)) py_exe = "python3";
 #endif
 
+    std::string target_cwd = cwd;
+    if (target_cwd.empty() || target_cwd == "/tmp" || target_cwd == "tmp" ||
+        target_cwd.find("/path/to") != std::string::npos || target_cwd.find("path/to") != std::string::npos) {
+        target_cwd = ".";
+    }
+
+    std::string run_script = script;
+    std::string run_code = code;
+
+    // If script contains code rather than a file path, treat it as code
+    if (run_code.empty() && !run_script.empty()) {
+        const bool has_newline = run_script.find('\n') != std::string::npos;
+        const bool starts_with_py = run_script.rfind("import ", 0) == 0 || run_script.rfind("from ", 0) == 0 ||
+                                   run_script.rfind("def ", 0) == 0 || run_script.rfind("class ", 0) == 0;
+        const bool has_code_tokens = run_script.find(';') != std::string::npos || run_script.find('(') != std::string::npos;
+        const bool not_py_file = !run_script.ends_with(".py") && !run_script.ends_with(".pyw");
+
+        if (has_newline || starts_with_py || (not_py_file && (has_code_tokens || run_script.find(' ') != std::string::npos))) {
+            run_code = run_script;
+            run_script.clear();
+        }
+    }
+
+    // If both script and code were provided, and script is a filename ending in .py
+    if (!run_script.empty() && !run_code.empty()) {
+        const auto target_file = (target_cwd.empty() || target_cwd == "." ? base : fs::path(target_cwd)) / run_script;
+        std::error_code ec_w;
+        fs::create_directories(target_file.parent_path(), ec_w);
+        std::ofstream out(target_file, std::ios::binary | std::ios::trunc);
+        if (out.is_open()) {
+            out.write(run_code.data(), static_cast<std::streamsize>(run_code.size()));
+            out.close();
+        }
+        run_code.clear();
+    }
+
     std::vector<std::string> argv = {py_exe};
-    if (!code.empty()) {
+    if (!run_code.empty()) {
         argv.push_back("-c");
-        argv.push_back(code);
-    } else if (!script.empty()) {
-        argv.push_back(script);
+        argv.push_back(run_code);
+    } else if (!run_script.empty()) {
+        argv.push_back(run_script);
         for (const auto& a : script_args) {
             argv.push_back(a);
         }
@@ -301,7 +385,6 @@ ActionResult ExecutionModule::run_python_action(const std::string& script, const
         return fail("invalid_args", "run_python requires either 'script' or 'code'");
     }
 
-    const auto target_cwd = cwd.empty() ? cwd_ : cwd;
     return execute("run_python", argv, target_cwd, false, "python_execution_failed");
 }
 
@@ -331,21 +414,29 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
                                        "' is not on the allowlist (no shell; allowed: python, pytest, git, cmake, ninja, "
                                        "ctest, cargo, go, npm, npx, flake8, ruff, mypy, plus the recipe's build/test programs)");
     }
+    std::string safe_cwd = cwd;
+    if (safe_cwd.empty() || safe_cwd == "/tmp" || safe_cwd == "tmp" || safe_cwd.find("/path/to") != std::string::npos || safe_cwd.find("path/to") != std::string::npos) {
+        safe_cwd = ".";
+    }
     fs::path dir;
     try {
         const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
-        const auto r = PathFirewall(base).resolve(cwd, Access::read);
+        const auto r = PathFirewall(base).resolve(safe_cwd, Access::read);
         std::error_code ec;
-        if (!fs::is_directory(r.absolute, ec)) return fail("path_invalid", "cwd is not a directory: " + cwd);
+        if (!fs::is_directory(r.absolute, ec)) return fail("path_invalid", "cwd is not a directory: " + safe_cwd);
         dir = r.absolute;
     } catch (const PathDenied& e) {
-        return fail(e.code(), e.what());
+        if (cwd == "/tmp" || cwd == "tmp" || cwd.find("path/to") != std::string::npos) {
+            const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+            dir = base;
+        } else {
+            return fail(e.code(), e.what());
+        }
     } catch (const std::invalid_argument& e) {
         return fail("workspace_unavailable", e.what());
     }
 
     exec::RunOptions opt;
-    opt.argv = argv;
     opt.cwd = dir;
     opt.env = env_;
     opt.timeout_s = timeout_s_;
@@ -362,6 +453,22 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
             const auto it_path = opt.env.find("PATH");
             const std::string existing_path = it_path != opt.env.end() ? it_path->second : "";
             opt.env["PATH"] = path_to_utf8(scripts_dir) + (existing_path.empty() ? "" : ";" + existing_path);
+
+            if (argv.front().find_first_of("/\\") == std::string::npos) {
+                const auto cand_exe = scripts_dir / (argv.front() + ".exe");
+                const auto cand_bat = scripts_dir / (argv.front() + ".bat");
+                const auto cand_cmd = scripts_dir / (argv.front() + ".cmd");
+                const auto cand_bare = scripts_dir / argv.front();
+                if (fs::is_regular_file(cand_exe, ec_v)) {
+                    argv.front() = path_to_utf8(cand_exe);
+                } else if (fs::is_regular_file(cand_bat, ec_v)) {
+                    argv.front() = path_to_utf8(cand_bat);
+                } else if (fs::is_regular_file(cand_cmd, ec_v)) {
+                    argv.front() = path_to_utf8(cand_cmd);
+                } else if (fs::is_regular_file(cand_bare, ec_v)) {
+                    argv.front() = path_to_utf8(cand_bare);
+                }
+            }
         }
 #else
         const auto bin_dir = venv_dir / "bin";
@@ -369,9 +476,17 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
             const auto it_path = opt.env.find("PATH");
             const std::string existing_path = it_path != opt.env.end() ? it_path->second : "";
             opt.env["PATH"] = path_to_utf8(bin_dir) + (existing_path.empty() ? "" : ":" + existing_path);
+
+            if (argv.front().find_first_of("/\\") == std::string::npos) {
+                const auto cand = bin_dir / argv.front();
+                if (fs::is_regular_file(cand, ec_v)) {
+                    argv.front() = path_to_utf8(cand);
+                }
+            }
         }
 #endif
     }
+    opt.argv = argv;
     const auto res = exec::run(opt);
     if (!res.started) return fail("spawn_failed", res.error);
 
@@ -406,8 +521,20 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
             const auto tail = res.output.size() > 1500 ? res.output.substr(res.output.size() - 1500) : res.output;
             text += "no recognized diagnostics; last output:\n" + tail;
         }
+        if (action == "run_test_suite" && res.exit_code == 5 && d.tests.failed == 0) {
+            text += "\n[NOTE: pytest exit code 5 indicates NO test files were found. If your task is implementing a script or application, verify execution with ExecutionModule::run_python and call OrchestratorModule.complete_recipe to finish.]\n";
+        }
+        if (action == "run_test_suite" && !ok_exit && text.find("NameError: name '") != std::string::npos) {
+            text += "\n[HINT: A NameError indicates that a module or function is not imported in the test file. Ensure the test file explicitly imports the module under test (e.g. 'import math_utils') using WorkspaceModule.create_file.]\n";
+        }
+        if (action == "run_test_suite" && ok_exit) {
+            text += "\n[SUCCESS: All tests in the test suite passed! Now call OrchestratorModule.complete_recipe to finish the task.]\n";
+        }
     } else {
         text += res.output;
+    }
+    if (action == "run_python" && ok_exit) {
+        text += "\n[SUCCESS: Script executed successfully with exit code 0! If execution verification is complete, call OrchestratorModule.complete_recipe to finish the task.]\n";
     }
     history_.push_back(std::move(rec));
     while (history_.size() > kHistory) history_.pop_front();

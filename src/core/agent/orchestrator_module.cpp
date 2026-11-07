@@ -21,7 +21,7 @@ std::vector<ActionSchema> OrchestratorModule::get_actions() const {
     return {
         {"checkpoint_notes",
          "Save progress into the scratchpad. Required fields must be non-empty before a context wipe.",
-         schema(R"({"type":"object","properties":{"active_objective":{"type":"string"},"current_hypothesis":{"type":"string"},"verified_facts":{"type":"array","items":{"type":"string"}},"failed_approaches_do_not_repeat":{"type":"array","items":{"type":"string"}},"next_immediate_action":{"type":"string"}},"additionalProperties":false})")},
+         schema(R"({"type":"object","properties":{"active_objective":{"type":"string"},"current_hypothesis":{"type":"string"},"verified_facts":{"type":"array","items":{"type":"string"}},"failed_approaches_do_not_repeat":{"type":"array","items":{"type":"string"}},"next_immediate_action":{"type":"string"},"checklist":{"type":"array"},"notes":{"type":"object"}},"additionalProperties":true})")},
         {"trigger_context_condense",
          "Request a context condense (wipe) once the scratchpad is saved and valid.",
          schema(R"({"type":"object","properties":{},"additionalProperties":false})")},
@@ -106,31 +106,31 @@ bool OrchestratorModule::field_nonempty(const AgentScratchpad& pad,
     return false;  // unknown field names never satisfy a required-field check
 }
 
-ActionResult OrchestratorModule::checkpoint_notes(const Json& args) {
-    // Req 3.2 / Property 11: merge the supplied subset of scratchpad fields, then
-    // require every recipe-required field to be non-empty. On failure the stored
-    // scratchpad must be unchanged, so we merge into a copy and only commit when
-    // validation passes. args keys were already restricted to this schema's
-    // properties by ModuleBase, so each present key is one of the five below.
+ActionResult OrchestratorModule::checkpoint_notes(const Json& raw_args) {
     AgentScratchpad merged = pad_;
-    if (args.contains("active_objective")) {
-        merged.active_objective = read_string(args["active_objective"], "/active_objective");
+    auto extract_fields = [&](const Json& src) {
+        if (!src.is_object()) return;
+        if (src.contains("active_objective") && src["active_objective"].is_string()) {
+            merged.active_objective = src["active_objective"].get<std::string>();
+        }
+        if (src.contains("current_hypothesis") && src["current_hypothesis"].is_string()) {
+            merged.current_hypothesis = src["current_hypothesis"].get<std::string>();
+        }
+        if (src.contains("verified_facts") && src["verified_facts"].is_array()) {
+            merged.verified_facts = read_string_array(src["verified_facts"], "/verified_facts");
+        }
+        if (src.contains("failed_approaches_do_not_repeat") && src["failed_approaches_do_not_repeat"].is_array()) {
+            merged.failed_approaches_do_not_repeat = read_string_array(
+                src["failed_approaches_do_not_repeat"], "/failed_approaches_do_not_repeat");
+        }
+        if (src.contains("next_immediate_action") && src["next_immediate_action"].is_string()) {
+            merged.next_immediate_action = src["next_immediate_action"].get<std::string>();
+        }
+    };
+    if (raw_args.contains("notes") && raw_args["notes"].is_object()) {
+        extract_fields(raw_args["notes"]);
     }
-    if (args.contains("current_hypothesis")) {
-        merged.current_hypothesis =
-            read_string(args["current_hypothesis"], "/current_hypothesis");
-    }
-    if (args.contains("verified_facts")) {
-        merged.verified_facts = read_string_array(args["verified_facts"], "/verified_facts");
-    }
-    if (args.contains("failed_approaches_do_not_repeat")) {
-        merged.failed_approaches_do_not_repeat = read_string_array(
-            args["failed_approaches_do_not_repeat"], "/failed_approaches_do_not_repeat");
-    }
-    if (args.contains("next_immediate_action")) {
-        merged.next_immediate_action =
-            read_string(args["next_immediate_action"], "/next_immediate_action");
-    }
+    extract_fields(raw_args);
 
     std::vector<std::string> missing;
     for (const std::string& name : required_fields_) {

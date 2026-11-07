@@ -45,6 +45,10 @@ public:
     // evicted (Req 2.1). Schema text is the rendered action schema for the recipe.
     void set_pinned_prefix(std::string system_prompt, std::string recipe_schema);
 
+    // Initial user prompt (primary task objective), persisted across turns and condensation.
+    void set_initial_user_prompt(std::string prompt) { user_prompt_ = std::move(prompt); }
+    [[nodiscard]] const std::string& initial_user_prompt() const noexcept { return user_prompt_; }
+
     // Anchored block [P+1..S]: a snapshot of the scratchpad + module state snapshots.
     // Refreshed on wipe; otherwise stable (Req 2.1, 2.4).
     void set_anchored(const AgentScratchpad& scratchpad,
@@ -58,6 +62,7 @@ public:
     // Appends a corrective/guidance user message to the tail region without a tool
     // cycle (parse-failure recovery and hook on_failure_instruction).
     void push_guidance(std::string text);
+    void clear_guidance();
 
     // Assembles the prompt: pinned prefix, then anchored block, then rolling tail,
     // in that order (Req 2.1).
@@ -87,6 +92,7 @@ private:
 
     TierLimits limits_;
     CondenserStrategy strategy_ = CondenserStrategy::sac;
+    std::string user_prompt_;
     std::string running_summary_;
     std::string system_prompt_;
     std::string recipe_schema_;

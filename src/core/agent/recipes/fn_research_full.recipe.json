@@ -41,8 +41,8 @@
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Search local documentation and corpus for relevant material",
-    "Store key verified findings into long-term knowledge memory",
-    "Summarize final synthesis into report file",
-    "Call complete_recipe"
+    "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
+    "Summarize final synthesis into report file using WorkspaceModule create_file",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }

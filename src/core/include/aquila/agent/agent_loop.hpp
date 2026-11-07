@@ -52,6 +52,7 @@ struct LoopConfig {
     std::string instance_id;
     Json ground_truth = Json::object();
     CondenserStrategy context_strategy = CondenserStrategy::sac;
+    std::uint32_t max_repeated_calls = 0;
 
     // M8 Streaming, Progress & Cancellation Callbacks:
     TokenCallback on_token = {};
@@ -73,15 +74,15 @@ public:
     TerminalResult run(const RecipeCartridge& recipe, const std::string& user_request,
                        const LoopConfig& config);
 
+    // The {thought, module, action, args} JSON Schema the backend enforces,
+    // matching M1 ActionCall (required, additionalProperties:false).
+    [[nodiscard]] static Json action_call_schema(const RecipeCartridge* recipe = nullptr);
+
 private:
     // Deterministic generation parameters: a fixed low temperature plus a
     // max_thought_tokens-derived output budget, constrained to the action-call
     // JSON schema (R14).
     [[nodiscard]] GenerationParams generation_params(const TierLimits& limits, const RecipeCartridge* recipe = nullptr) const;
-
-    // The {thought, module, action, args} JSON Schema the backend enforces,
-    // matching M1 ActionCall (required, additionalProperties:false).
-    [[nodiscard]] static Json action_call_schema(const RecipeCartridge* recipe = nullptr);
 
     // Runs the recipe's deterministic exit gate (Req 5) when complete_recipe is
     // requested. With no post_llm_validation_hook, completion succeeds immediately

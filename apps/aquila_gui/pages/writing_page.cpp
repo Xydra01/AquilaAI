@@ -1,5 +1,6 @@
 // apps/aquila_gui/pages/writing_page.cpp
 #include "writing_page.hpp"
+#include "theme/markdown_renderer.hpp"
 
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -114,7 +115,7 @@ QString WritingPage::currentSectionContent() const {
 }
 
 void WritingPage::updatePreview(const QString& markdown) {
-    markdownPreview_->setMarkdown(markdown);
+    markdownPreview_->setHtml(MarkdownRenderer::toHtml(markdown));
 }
 
 void WritingPage::updateWordCount() {

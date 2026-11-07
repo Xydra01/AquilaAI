@@ -17,6 +17,7 @@
         "root_dir": "."
       },
       "expose_actions": [
+        "create_file",
         "read_region",
         "outline"
       ]
@@ -37,8 +38,8 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Examine local docs and files",
-    "Record verified facts",
-    "Conclude findings"
+    "Examine local docs and files using KnowledgeModule search_local_docs or WorkspaceModule outline",
+    "Record verified facts using KnowledgeModule store_fact",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }

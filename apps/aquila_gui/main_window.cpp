@@ -378,16 +378,30 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
     statusBarLabel_->setText(QStringLiteral("Thinking..."));
 
     activeWorker_ = new AgentWorker(activeBackend_, recipe, fullPrompt.toStdString(), config, workspaceRoot_.toStdString(), this);
+    activeWorker_->setChatHistory(chatHistory_);
 
     connect(activeWorker_, &AgentWorker::tokenStreamed, chatPage_, &ChatPage::appendToken);
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
         statusBarLabel_->setText(status);
         chatPage_->setStatus(status);
     });
-    connect(activeWorker_, &AgentWorker::finished, this, [this](bool success, const QString& /* output */) {
+
+    const std::string promptStd = fullPrompt.toStdString();
+    connect(activeWorker_, &AgentWorker::finished, this, [this, promptStd](bool success, const QString& output) {
         chatPage_->setRunning(false);
         chatPage_->finalizeAssistantMessage();
         statusBarLabel_->setText(success ? QStringLiteral("Ready") : QStringLiteral("Task terminated"));
+        if (success) {
+            Message user_m;
+            user_m.role = Role::user;
+            user_m.content = promptStd;
+            chatHistory_.push_back(std::move(user_m));
+
+            Message ass_m;
+            ass_m.role = Role::assistant;
+            ass_m.content = output.toStdString();
+            chatHistory_.push_back(std::move(ass_m));
+        }
     });
 
     activeWorker_->start();

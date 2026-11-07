@@ -33,11 +33,16 @@ void AgentWorker::run() {
     if (config_.mode == "chat") {
         emit statusChanged(QStringLiteral("Generating response..."));
         try {
-            if (backend_->mark_checkpoint() == 0) {
-                Message sys_msg;
-                sys_msg.role = Role::system;
-                sys_msg.content = "You are Aquila, an autonomous, highly capable AI assistant and software engineering partner. Provide clear, direct, and insightful responses in markdown format.";
-                backend_->append(sys_msg);
+            backend_->rollback_to(0);
+            Message sys_msg;
+            sys_msg.role = Role::system;
+            sys_msg.content = "You are Aquila, an autonomous, highly capable AI assistant and software engineering partner. "
+                              "Provide clear, direct, and insightful responses formatted with markdown. "
+                              "Do NOT format responses as JSON ActionCall objects unless specifically requested.";
+            backend_->append(sys_msg);
+
+            for (const auto& msg : chat_history_) {
+                backend_->append(msg);
             }
 
             Message user_msg;
@@ -62,11 +67,6 @@ void AgentWorker::run() {
                 emit statusChanged(QStringLiteral("Error: %1").arg(QString::fromStdString(err)));
                 emit finished(false, QString::fromStdString(err));
             } else {
-                Message ass_msg;
-                ass_msg.role = Role::assistant;
-                ass_msg.content = res.content;
-                backend_->append(ass_msg);
-
                 emit statusChanged(QStringLiteral("Ready"));
                 emit finished(true, QString::fromStdString(res.content));
             }
@@ -164,6 +164,7 @@ void AgentWorker::run() {
                                {}, initChecklist);
 
         emit statusChanged(QStringLiteral("Running recipe '%1'...").arg(QString::fromStdString(recipe_.recipe_id)));
+        config_.max_repeated_calls = 4;
         AgentLoop loop(*backend_, registry, ctx);
         const auto res = loop.run(recipe_, user_request_, config_);
 

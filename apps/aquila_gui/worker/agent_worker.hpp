@@ -29,6 +29,7 @@ public:
 
     void cancel();
     void deliverUserResponse(const QString& text);
+    void setChatHistory(std::vector<Message> history) { chat_history_ = std::move(history); }
 
 signals:
     void tokenStreamed(const QString& token);
@@ -48,6 +49,7 @@ private:
     RecipeCartridge recipe_;
     std::string user_request_;
     LoopConfig config_;
+    std::vector<Message> chat_history_;
     std::filesystem::path workspace_root_;
 
     std::atomic<bool> cancel_flag_{false};

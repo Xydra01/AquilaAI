@@ -17,6 +17,10 @@
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -50,8 +54,8 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Formulate and test experimental hypotheses",
-    "Capture experimental outputs and verify facts",
-    "Complete research investigation"
+    "Search local documentation or investigate question using KnowledgeModule search_local_docs",
+    "Store verified findings into knowledge memory using KnowledgeModule store_fact",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }

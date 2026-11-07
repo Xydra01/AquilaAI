@@ -37,8 +37,8 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Scan source files and header definitions",
-    "Document architecture, modules, and APIs",
-    "Complete documentation task"
+    "Scan source files and header definitions using WorkspaceModule outline",
+    "Document architecture, modules, and APIs into ARCHITECTURE.md using WorkspaceModule create_file",
+    "Call OrchestratorModule complete_recipe"
   ]
 }

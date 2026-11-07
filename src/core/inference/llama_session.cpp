@@ -62,6 +62,8 @@ LlamaSession::LlamaSession(const std::string& model_path, const LlamaConfig& cfg
     // --- create the inference context honoring n_ctx (and n_threads) (Req 2.1, 2.4) ---
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx = cfg.n_ctx;
+    cparams.n_batch = std::min<uint32_t>(cfg.n_ctx, 2048);
+    cparams.n_ubatch = 512;
     if (cfg.n_threads.has_value()) {
         const auto threads = static_cast<std::int32_t>(*cfg.n_threads);
         cparams.n_threads = threads;
@@ -104,34 +106,52 @@ constexpr llama_seq_id kSeqId = 0;
 int decode_span(llama_context* ctx, const llama_token* tokens, std::size_t n,
                 std::size_t base_pos) {
     assert(n > 0 && "decode_span requires a non-empty span");
-    const auto n_tok = static_cast<std::int32_t>(n);
+    const std::size_t max_batch = static_cast<std::size_t>(llama_n_batch(ctx));
 
-    // embd = 0 (we supply token ids, not embeddings); n_seq_max = 1 (single seq).
-    LlamaBatch batch(n_tok, /*embd=*/0, /*n_seq_max=*/1);
-    llama_batch& b = batch.get();
+    int last_idx = 0;
+    std::size_t current_pos = base_pos;
 
-    for (std::int32_t i = 0; i < n_tok; ++i) {
-        b.token[i] = tokens[i];
-        b.pos[i] = static_cast<llama_pos>(base_pos) + i;
-        b.n_seq_id[i] = 1;
-        b.seq_id[i][0] = kSeqId;
-        b.logits[i] = 0;  // logits not needed for interior prefill tokens
+    for (std::size_t offset = 0; offset < n; ) {
+        const std::size_t chunk_len = std::min(n - offset, max_batch);
+        const auto chunk_tok = static_cast<std::int32_t>(chunk_len);
+
+        // embd = 0 (we supply token ids, not embeddings); n_seq_max = 1 (single seq).
+        LlamaBatch batch(chunk_tok, /*embd=*/0, /*n_seq_max=*/1);
+        llama_batch& b = batch.get();
+
+        for (std::int32_t i = 0; i < chunk_tok; ++i) {
+            b.token[i] = tokens[offset + i];
+            b.pos[i] = static_cast<llama_pos>(current_pos + i);
+            b.n_seq_id[i] = 1;
+            b.seq_id[i][0] = kSeqId;
+            b.logits[i] = 0;  // logits not needed for interior prefill tokens
+        }
+        b.n_tokens = chunk_tok;
+
+        // Request logits only for the final token of the entire decoded span
+        const bool is_final_chunk = (offset + chunk_len == n);
+        if (is_final_chunk) {
+            const std::int32_t last = chunk_tok - 1;
+            b.logits[last] = 1;
+            last_idx = last;
+        }
+
+        const std::int32_t rc = llama_decode(ctx, b);
+        if (rc != 0) {
+            // rc > 0 is a non-fatal warning (e.g. could not find a KV slot), rc < 0 is
+            // a hard failure; either way the append did not land cleanly, so surface a
+            // typed decode_failed rather than advancing the position past a bad decode.
+            throw aquila::LlamaError(
+                "decode_failed",
+                "llama_decode returned " + std::to_string(rc) + " for a " +
+                    std::to_string(chunk_tok) + "-token batch");
+        }
+
+        offset += chunk_len;
+        current_pos += chunk_len;
     }
-    b.n_tokens = n_tok;
-    const std::int32_t last = n_tok - 1;
-    b.logits[last] = 1;  // request logits for the final token only
 
-    const std::int32_t rc = llama_decode(ctx, b);
-    if (rc != 0) {
-        // rc > 0 is a non-fatal warning (e.g. could not find a KV slot), rc < 0 is
-        // a hard failure; either way the append did not land cleanly, so surface a
-        // typed decode_failed rather than advancing the position past a bad decode.
-        throw aquila::LlamaError(
-            "decode_failed",
-            "llama_decode returned " + std::to_string(rc) + " for a " +
-                std::to_string(n_tok) + "-token batch");
-    }
-    return last;
+    return last_idx;
 }
 
 }  // namespace

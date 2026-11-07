@@ -444,7 +444,7 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         out.close();
 
         clear_active_draft();
-        return ok("✅ SUCCESS: Final document compiled and saved to " + save_path.generic_string());
+        return ok("✅ SUCCESS: Final document compiled and saved to " + save_path.generic_string() + ". The manuscript is compiled; now call OrchestratorModule.complete_recipe to finish the recipe.");
     }
 
     if (action_name == "get_draft_state") {

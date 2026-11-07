@@ -6,6 +6,8 @@
       "module": "LearnModule",
       "initial_state": {},
       "expose_actions": [
+        "create_or_load_course",
+        "create_course",
         "write_syllabus",
         "finalize_course",
         "generate_assessment",

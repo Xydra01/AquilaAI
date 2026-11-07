@@ -221,6 +221,8 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
         out.flush();
     };
 
+    config.max_repeated_calls = 4;
+
     ModuleRegistry registry = ModuleRegistry::builtin();
     ModuleContext mod_ctx;
     mod_ctx.workspace_root = opts.workspace_root;
@@ -247,7 +249,7 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
         }
         LlamaConfig lcfg;
         lcfg.model_path = opts.model_name;
-        lcfg.n_ctx = static_cast<std::uint32_t>(config.tier.limits.max_rolling_tools * 1024U);
+        lcfg.n_ctx = (opts.tier_name == "gpu") ? 8192 : 2048;
         if (opts.tier_name == "gpu") {
             lcfg.n_gpu_layers = 999;
         }
@@ -446,6 +448,12 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
         mod_ctx.workspace_root = opts.workspace_root;
 
         LoopConfig config;
+        if (opts.tier_name == "gpu") {
+            config.tier = RuntimeTierConfig::for_profile(ComputeProfile::gpu_high_vram);
+            config.tier.limits.max_turns = 24;
+        } else {
+            config.tier = RuntimeTierConfig::default_config();
+        }
         config.task_id = "live-eval-" + recipe.recipe_id;
         config.mode = "task";
         config.context_strategy = CondenserStrategy::sac;
@@ -526,6 +534,8 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
 
             dissections.push_back(std::move(d));
         };
+
+        config.max_repeated_calls = 4;
 
         AgentLoop loop(*active_be, registry, mod_ctx);
         const auto res = loop.run(recipe, goal, config);

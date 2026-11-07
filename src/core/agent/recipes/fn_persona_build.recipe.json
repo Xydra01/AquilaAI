@@ -41,6 +41,7 @@
   "scratchpad_checklist": [
     "Craft rich initialization profile (>=800 characters)",
     "Write initialization and configure preferences",
-    "Finalize persona profile"
+    "Finalize persona profile",
+    "Call OrchestratorModule complete_recipe"
   ]
 }

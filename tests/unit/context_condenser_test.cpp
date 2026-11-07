@@ -172,10 +172,10 @@ TEST_CASE("Property 6: segment ordering", "[rapidcheck][context_condenser]") {
         RC_ASSERT(tail_msgs == kept * 2);
         for (std::size_t i = 0; i < kept; ++i) {
             const ToolInteraction& it = interactions[interactions.size() - kept + i];
-            const Message& user = messages[kPrefixAndAnchor + i * 2];
+            const Message& asst = messages[kPrefixAndAnchor + i * 2];
             const Message& tool = messages[kPrefixAndAnchor + i * 2 + 1];
-            RC_ASSERT(user.role == Role::user);
-            RC_ASSERT(user.content == expected_call_json(it));
+            RC_ASSERT(asst.role == Role::assistant);
+            RC_ASSERT(asst.content == expected_call_json(it));
             RC_ASSERT(tool.role == Role::tool);
             RC_ASSERT(tool.content == it.result.llm_facing_output);
         }
@@ -480,7 +480,7 @@ TEST_CASE("SAC strategy: single turn tail with running summary accumulation",
     auto msgs = condenser.build_messages();
     // Prefix (2) + Anchor (1) + Tail (2) = 5 messages
     REQUIRE(msgs.size() == 5);
-    CHECK(msgs[3].role == Role::user);
+    CHECK(msgs[3].role == Role::assistant);
     CHECK(msgs[4].role == Role::tool);
     CHECK(msgs[4].content == "file1.txt\nfile2.txt");
 
@@ -506,7 +506,7 @@ TEST_CASE("SAC strategy: single turn tail with running summary accumulation",
     CHECK(msgs[2].role == Role::system); // anchored
     CHECK(msgs[3].role == Role::system); // summary
     CHECK(msgs[3].content.rfind("State so far:\n", 0) == 0);
-    CHECK(msgs[4].role == Role::user);   // it2
+    CHECK(msgs[4].role == Role::assistant);   // it2
     CHECK(msgs[5].role == Role::tool);   // it2 output
     CHECK(msgs[5].content == "Build complete");
 

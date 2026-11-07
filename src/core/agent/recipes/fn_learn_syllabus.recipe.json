@@ -6,6 +6,8 @@
       "module": "LearnModule",
       "initial_state": {},
       "expose_actions": [
+        "create_or_load_course",
+        "create_course",
         "write_syllabus",
         "finalize_course",
         "generate_assessment",
@@ -42,6 +44,7 @@
   "scratchpad_checklist": [
     "Formulate hierarchical syllabus with >=8 units and >=5 sub-units",
     "Validate and write syllabus structure",
-    "Finalize course and verify archive readiness"
+    "Finalize course and verify archive readiness",
+    "Call OrchestratorModule complete_recipe"
   ]
 }

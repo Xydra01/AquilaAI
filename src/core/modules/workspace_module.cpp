@@ -107,7 +107,7 @@ std::vector<ActionSchema> WorkspaceModule::get_actions() const {
         {"surgical_edit", "Replace one exact, unique block of text in a file. The edit is rejected if it breaks the file's syntax.",
          schema(R"({"type":"object","properties":{"file":{"type":"string"},"search_block":{"type":"string"},"replace_block":{"type":"string"}},"required":["file","search_block","replace_block"],"additionalProperties":false})")},
         {"create_file", "Create a new file with the given content.",
-         schema(R"({"type":"object","properties":{"file":{"type":"string"},"content":{"type":"string"}},"required":["file","content"],"additionalProperties":false})")},
+         schema(R"({"type":"object","properties":{"file":{"type":"string"},"file_name":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"}},"additionalProperties":true})")},
         {"revert_file", "Restore a file to its content when it was first opened.",
          schema(R"({"type":"object","properties":{"file":{"type":"string"}},"required":["file"],"additionalProperties":false})")},
     };
@@ -184,7 +184,10 @@ ActionResult WorkspaceModule::run(const std::string& action, const Json& args) {
 ActionResult WorkspaceModule::outline(const Json& args) {
     auto& c = canvas();
     const auto& fw = c.firewall();
-    const std::string sub = args.contains("path") ? args["path"].get<std::string>() : ".";
+    std::string sub = args.contains("path") ? args["path"].get<std::string>() : ".";
+    if (sub.empty() || sub == "/tmp" || sub == "tmp" || sub.find("/path/to") != std::string::npos || sub.find("path/to") != std::string::npos) {
+        sub = ".";
+    }
     const auto start = fw.resolve(sub, Access::read);
 
     std::vector<std::string> files;
@@ -351,12 +354,34 @@ ActionResult WorkspaceModule::surgical_edit(const Json& args) {
 }
 
 ActionResult WorkspaceModule::create_file(const Json& args) {
-    const auto& d = canvas().create(args["file"].get<std::string>());
-    const std::string path = d.path;
-    const auto content = args["content"].get<std::string>();
-    auto r = submit(path, "", content, "created " + path + " (" + std::to_string(lines_of(content).size()) + " lines)");
-    if (!r.success) canvas_->discard(path);  // validation failed: forget the empty document
-    return r;
+    std::string file_param;
+    if (args.contains("file") && args["file"].is_string()) {
+        file_param = args["file"].get<std::string>();
+    } else if (args.contains("file_name") && args["file_name"].is_string()) {
+        file_param = args["file_name"].get<std::string>();
+    } else if (args.contains("path") && args["path"].is_string()) {
+        file_param = args["path"].get<std::string>();
+    } else {
+        return fail("invalid_args", "/file: missing required key ('file', 'file_name', or 'path')");
+    }
+    const auto content = args.value("content", std::string{});
+
+    if (args.contains("overwrite") && args["overwrite"].is_boolean() && args["overwrite"].get<bool>()) {
+        canvas().discard(file_param);
+        std::error_code ec;
+        const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+        fs::remove(base / file_param, ec);
+    }
+
+    try {
+        const auto& d = canvas().create(file_param);
+        const std::string path = d.path;
+        auto r = submit(path, "", content, "created " + path + " (" + std::to_string(lines_of(content).size()) + " lines)");
+        if (!r.success) canvas_->discard(path);  // validation failed: forget the empty document
+        return r;
+    } catch (const CanvasError& ce) {
+        return fail(ce.code(), ce.what());
+    }
 }
 
 ActionResult WorkspaceModule::revert_file(const Json& args) {

@@ -20,6 +20,10 @@
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -43,9 +47,10 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Create failing test reproducing target requirement",
-    "Verify test fails on ExecutionModule",
-    "Implement minimal code to pass test",
-    "Verify test passes cleanly and complete"
+    "Ensure workspace virtualenv and test framework is ready",
+    "Create test file with pytest test cases (remember to import the module under test)",
+    "Implement code in target file to satisfy tests using WorkspaceModule create_file",
+    "Run ExecutionModule run_test_suite to verify all tests pass",
+    "Call OrchestratorModule complete_recipe"
   ]
 }

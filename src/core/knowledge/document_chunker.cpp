@@ -375,7 +375,7 @@ std::vector<DocSearchResult> LocalDocIndex::search_hybrid(
 
 std::string LocalDocIndex::format_search_results(const std::vector<DocSearchResult>& results) const {
     if (results.empty()) {
-        return "No relevant local documents found for the given query.";
+        return "No relevant local documents found for the given query. If you have enough background knowledge, store key facts using KnowledgeModule::store_fact, write the synthesis file, and complete the recipe.";
     }
 
     std::ostringstream oss;

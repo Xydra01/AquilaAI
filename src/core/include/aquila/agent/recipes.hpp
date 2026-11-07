@@ -158,9 +158,9 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Search local documentation and corpus for relevant material",
-    "Store key verified findings into long-term knowledge memory",
-    "Summarize final synthesis into report file",
-    "Call complete_recipe"
+    "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
+    "Summarize final synthesis into report file using WorkspaceModule create_file",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }
 )AQ";
@@ -185,6 +185,10 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -218,9 +222,9 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Formulate and test experimental hypotheses",
-    "Capture experimental outputs and verify facts",
-    "Complete research investigation"
+    "Search local documentation or investigate question using KnowledgeModule search_local_docs",
+    "Store verified findings into knowledge memory using KnowledgeModule store_fact",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }
 )AQ";
@@ -245,6 +249,7 @@ inline constexpr std::string_view kFnResearchOfflineRecipeJson = R"AQ({
         "root_dir": "."
       },
       "expose_actions": [
+        "create_file",
         "read_region",
         "outline"
       ]
@@ -265,9 +270,9 @@ inline constexpr std::string_view kFnResearchOfflineRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Examine local docs and files",
-    "Record verified facts",
-    "Conclude findings"
+    "Examine local docs and files using KnowledgeModule search_local_docs or WorkspaceModule outline",
+    "Record verified facts using KnowledgeModule store_fact",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }
 )AQ";
@@ -282,6 +287,7 @@ inline constexpr std::string_view kFnResearchChatLightRecipeJson = R"AQ({
       "initial_state": {},
       "expose_actions": [
         "search_local_docs",
+        "store_fact",
         "get_all_facts"
       ]
     },
@@ -293,6 +299,7 @@ inline constexpr std::string_view kFnResearchChatLightRecipeJson = R"AQ({
         ]
       },
       "expose_actions": [
+        "checkpoint_notes",
         "complete_recipe"
       ]
     }
@@ -300,7 +307,7 @@ inline constexpr std::string_view kFnResearchChatLightRecipeJson = R"AQ({
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Answer user query with verified citations",
-    "Complete recipe"
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }
 )AQ";
@@ -471,6 +478,8 @@ inline constexpr std::string_view kFnLearnSyllabusRecipeJson = R"AQ({
       "module": "LearnModule",
       "initial_state": {},
       "expose_actions": [
+        "create_or_load_course",
+        "create_course",
         "write_syllabus",
         "finalize_course",
         "generate_assessment",
@@ -507,7 +516,8 @@ inline constexpr std::string_view kFnLearnSyllabusRecipeJson = R"AQ({
   "scratchpad_checklist": [
     "Formulate hierarchical syllabus with >=8 units and >=5 sub-units",
     "Validate and write syllabus structure",
-    "Finalize course and verify archive readiness"
+    "Finalize course and verify archive readiness",
+    "Call OrchestratorModule complete_recipe"
   ]
 }
 )AQ";
@@ -521,6 +531,8 @@ inline constexpr std::string_view kFnLearnSyllabusWebRecipeJson = R"AQ({
       "module": "LearnModule",
       "initial_state": {},
       "expose_actions": [
+        "create_or_load_course",
+        "create_course",
         "write_syllabus",
         "finalize_course",
         "generate_assessment",
@@ -615,7 +627,8 @@ inline constexpr std::string_view kFnPersonaBuildRecipeJson = R"AQ({
   "scratchpad_checklist": [
     "Craft rich initialization profile (>=800 characters)",
     "Write initialization and configure preferences",
-    "Finalize persona profile"
+    "Finalize persona profile",
+    "Call OrchestratorModule complete_recipe"
   ]
 }
 )AQ";
@@ -658,9 +671,9 @@ inline constexpr std::string_view kFnPersonaLoreRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Load persona and inspect lore",
-    "Roleplay dialogue and update lore knowledge",
-    "Complete recipe"
+    "Load persona using PersonaModule load_persona or inspect world lore",
+    "Record lore facts into knowledge memory using KnowledgeModule store_fact",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }
 )AQ";
@@ -763,9 +776,9 @@ inline constexpr std::string_view kFnDevDocumentationRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Scan source files and header definitions",
-    "Document architecture, modules, and APIs",
-    "Complete documentation task"
+    "Scan source files and header definitions using WorkspaceModule outline",
+    "Document architecture, modules, and APIs into ARCHITECTURE.md using WorkspaceModule create_file",
+    "Call OrchestratorModule complete_recipe"
   ]
 }
 )AQ";
@@ -793,6 +806,10 @@ inline constexpr std::string_view kFnDevTddRecipeJson = R"AQ({
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -816,10 +833,11 @@ inline constexpr std::string_view kFnDevTddRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Create failing test reproducing target requirement",
-    "Verify test fails on ExecutionModule",
-    "Implement minimal code to pass test",
-    "Verify test passes cleanly and complete"
+    "Ensure workspace virtualenv and test framework is ready",
+    "Create test file with pytest test cases (remember to import the module under test)",
+    "Implement code in target file to satisfy tests using WorkspaceModule create_file",
+    "Run ExecutionModule run_test_suite to verify all tests pass",
+    "Call OrchestratorModule complete_recipe"
   ]
 }
 )AQ";
@@ -827,7 +845,7 @@ inline constexpr std::string_view kFnDevTddRecipeJson = R"AQ({
 // src/core/agent/recipes/fn_dev_dynamic.recipe.json, verbatim.
 inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
   "recipe_id": "fn_dev_dynamic",
-  "goal_template": "Perform dynamic debugging, profiling, and iterative refactoring: {{user_instructions}}",
+  "goal_template": "Implement, debug, and verify execution: {{user_instructions}}",
   "load_modules": [
     {
       "module": "WorkspaceModule",
@@ -847,6 +865,10 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -880,10 +902,10 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Reproduce issue and record hypotheses",
-    "Run diagnostic commands and analyze output",
-    "Apply surgical fixes and re-verify",
-    "Complete recipe"
+    "Write the script or implementation file using WorkspaceModule create_file or ExecutionModule run_python",
+    "Install any required third-party packages using ExecutionModule pip_install",
+    "Run and verify execution using ExecutionModule run_python",
+    "Call OrchestratorModule complete_recipe"
   ]
 }
 )AQ";

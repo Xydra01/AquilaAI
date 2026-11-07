@@ -132,7 +132,7 @@ void KnowledgeModule::configure(const Json& initial_state) {
 
 Json KnowledgeModule::export_state_snapshot() const {
     Json facts_arr = Json::array();
-    auto fact_stmt = fact_store_->db().prepare("SELECT topic, fact FROM facts ORDER BY topic ASC, id ASC");
+    auto fact_stmt = fact_store_->db().prepare("SELECT topic, fact FROM facts ORDER BY id DESC LIMIT 15");
     while (fact_stmt.step()) {
         facts_arr.push_back(Json{
             {"topic", std::string(fact_stmt.column_text(0))},
@@ -141,7 +141,7 @@ Json KnowledgeModule::export_state_snapshot() const {
     }
 
     Json notes_arr = Json::array();
-    auto note_stmt = fact_store_->db().prepare("SELECT task_name, note FROM scratchpad ORDER BY id ASC");
+    auto note_stmt = fact_store_->db().prepare("SELECT task_name, note FROM scratchpad ORDER BY id DESC LIMIT 10");
     while (note_stmt.step()) {
         notes_arr.push_back(Json{
             {"task_name", std::string(note_stmt.column_text(0))},
@@ -213,7 +213,7 @@ ActionResult KnowledgeModule::run(const std::string& action_name, const Json& ar
         const auto topic = args.at("topic").get<std::string>();
         const auto fact = args.at("fact").get<std::string>();
         auto confirm = fact_store_->store_fact(topic, fact);
-        return ok(confirm);
+        return ok(confirm + " Once key findings are stored and report files are written, call OrchestratorModule.complete_recipe to finish.");
     }
 
     if (action_name == "recall_experiences") {

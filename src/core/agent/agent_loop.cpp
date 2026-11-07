@@ -18,28 +18,81 @@ AgentLoop::AgentLoop(IInferenceBackend& backend, const ModuleRegistry& registry,
 
 namespace {
 
-std::string build_recipe_system_prompt(const RecipeCartridge& recipe, const std::string& custom_prompt) {
+std::string build_recipe_system_prompt(const RecipeCartridge& recipe,
+                                       const std::vector<std::unique_ptr<IAgentModule>>& modules,
+                                       const std::string& custom_prompt,
+                                       const std::string& user_request) {
     std::string prompt = custom_prompt;
     if (prompt.empty()) {
         prompt = "You are Aquila, an autonomous software engineering and research agent.\n"
                  "You solve complex technical tasks systematically by selecting and executing module actions.\n";
     }
     prompt += "\nACTIVE RECIPE: " + recipe.recipe_id + "\n";
-    if (!recipe.goal_template.empty()) {
-        prompt += "RECIPE OBJECTIVE: " + recipe.goal_template + "\n";
+    std::string goal = recipe.goal_template;
+    const std::string needle = "{{user_instructions}}";
+    if (auto pos = goal.find(needle); pos != std::string::npos) {
+        goal.replace(pos, needle.size(), user_request);
+    } else if (!user_request.empty()) {
+        goal += " (" + user_request + ")";
+    }
+    if (!goal.empty()) {
+        prompt += "RECIPE OBJECTIVE: " + goal + "\n";
+    }
+    if (!recipe.scratchpad_checklist.empty()) {
+        prompt += "\nRECIPE STEP CHECKLIST (Execute in order):\n";
+        for (std::size_t i = 0; i < recipe.scratchpad_checklist.size(); ++i) {
+            prompt += std::to_string(i + 1) + ". " + recipe.scratchpad_checklist[i] + "\n";
+        }
     }
     prompt += "\nLOADED MODULES & EXPOSED ACTIONS (You must ONLY call actions from these modules):\n";
     for (const auto& lm : recipe.load_modules) {
-        prompt += "- " + lm.module + ": ";
-        for (std::size_t i = 0; i < lm.expose_actions.size(); ++i) {
-            prompt += lm.expose_actions[i] + (i + 1 < lm.expose_actions.size() ? ", " : "");
+        prompt += "- " + lm.module + ":\n";
+        const IAgentModule* mod = nullptr;
+        for (const auto& m : modules) {
+            if (m && m->module_id() == lm.module) {
+                mod = m.get();
+                break;
+            }
         }
-        prompt += "\n";
+        std::map<std::string, ActionSchema> schemas;
+        if (mod != nullptr) {
+            for (const auto& act : mod->get_actions()) {
+                schemas[act.action_name] = act;
+            }
+        }
+        for (const auto& act_name : lm.expose_actions) {
+            prompt += "  * " + act_name;
+            auto it = schemas.find(act_name);
+            if (it != schemas.end()) {
+                prompt += ": " + it->second.description;
+                const auto& pschema = it->second.parameters_json_schema;
+                if (!pschema.empty() && pschema.is_object() && pschema.contains("properties") && pschema["properties"].is_object()) {
+                    prompt += " (Args: {";
+                    bool first = true;
+                    for (auto p = pschema["properties"].begin(); p != pschema["properties"].end(); ++p) {
+                        if (!first) prompt += ", ";
+                        std::string type_str = "any";
+                        if (p.value().is_object() && p.value().contains("type")) {
+                            if (p.value()["type"].is_string()) {
+                                type_str = p.value()["type"].get<std::string>();
+                            } else if (p.value()["type"].is_array() && !p.value()["type"].empty() && p.value()["type"][0].is_string()) {
+                                type_str = p.value()["type"][0].get<std::string>();
+                            }
+                        }
+                        prompt += p.key() + ": " + type_str;
+                        first = false;
+                    }
+                    prompt += "})";
+                }
+            }
+            prompt += "\n";
+        }
     }
     prompt += "\nCRITICAL EXECUTION RULES:\n"
-              "1. You must respond ONLY with a single JSON ActionCall object matching the required schema.\n"
+              "1. You must respond ONLY with a single JSON ActionCall object matching the required schema: {\"thought\": \"...\", \"module\": \"...\", \"action\": \"...\", \"args\": {...}}.\n"
               "2. The 'module' field MUST be one of the loaded modules listed above. Never invent or hallucinate unloaded modules.\n"
-              "3. Before completing, verify your work using execution or workspace tools, then call OrchestratorModule.complete_recipe to finish.\n";
+              "3. When writing code, scripts, or files (via WorkspaceModule or ExecutionModule), write complete, syntactically valid code (e.g. in Python, always call functions with parentheses like datetime.now(tz), provide valid arguments, and include needed imports). If an action returns an error or syntax failure, READ the error output, fix the code, and NEVER submit the identical failing code.\n"
+              "4. Task Completion: Once your objective has been met (e.g. script executed, document written, or research facts synthesized), immediately call OrchestratorModule.complete_recipe with a concise summary of what was accomplished to finish the recipe. Do not stay stuck in repetitive loops or rerun completed steps.\n";
     return prompt;
 }
 
@@ -87,10 +140,9 @@ GenerationParams AgentLoop::generation_params(const TierLimits& limits, const Re
     // identical replayed context yields an identical reply.
     params.temperature = 0.0;
     // Output budget derived from the tier's thought cap (R14). The reply carries
-    // the `thought` (bounded by max_thought_tokens) plus the small {module,
-    // action, args} JSON envelope; budget a 4x multiple of the thought cap so the
-    // structural overhead and argument payload fit without clipping the schema.
-    params.max_tokens = static_cast<std::uint32_t>(limits.max_thought_tokens * 4U);
+    // the `thought` plus the {module, action, args} JSON envelope; budget at least
+    // 4096 tokens so script creation, code edits, syllabi, and document writing are not truncated.
+    params.max_tokens = std::max(static_cast<std::uint32_t>(limits.max_thought_tokens * 8U), 4096U);
     params.constraint = OutputConstraint::json_schema(action_call_schema(recipe));
     return params;
 }
@@ -133,12 +185,12 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // the system prompt and the rendered action-call schema that constrains every
     // reply, so it is the natural recipe schema text to pin.
     ContextCondenser condenser(limits, config.context_strategy);
-    const std::string sys_prompt = build_recipe_system_prompt(recipe, config.system_prompt);
+    const std::string sys_prompt = build_recipe_system_prompt(recipe, modules, config.system_prompt, user_request);
     condenser.set_pinned_prefix(sys_prompt,
                                 json_io::canonical_dump(action_call_schema(&recipe)));
 
-    // Open the rolling tail with the user's request so the first turn has context.
-    condenser.push_guidance(user_request);
+    // Pin the user's primary task request so all subsequent turns retain context across condensation.
+    condenser.set_initial_user_prompt(user_request);
 
     // Precompute the deterministic generation parameters the turn cycle uses (R14)
     // and capture the backend's starting context position.
@@ -156,9 +208,13 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     TerminalResult result;
 
     std::string last_call_sig;
+    std::string last_action_sig;
+    std::string second_last_action_sig;
     std::string last_failed_module;
     std::string last_failed_action;
-    int repeat_count = 0;
+    std::uint32_t repeat_count = 0;
+    std::uint32_t oscillation_count = 0;
+    std::uint32_t consecutive_failures = 0;
 
     // The deterministic turn cycle (Req 1.2-1.4). Each iteration builds the prompt,
     // regenerates against the full context, parses the reply, resolves and
@@ -245,39 +301,6 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         interaction.result = action_result;
         condenser.record_tool_cycle(interaction);
 
-        // Anti-repetition detection and loop circuit breaker
-        const std::string current_call_sig = call.module + "::" + call.action + "::" + call.args.dump();
-        if (current_call_sig == last_call_sig ||
-            (!action_result.success && call.module == last_failed_module && call.action == last_failed_action)) {
-            repeat_count++;
-        } else {
-            repeat_count = 0;
-        }
-        last_call_sig = current_call_sig;
-        if (!action_result.success) {
-            last_failed_module = call.module;
-            last_failed_action = call.action;
-        } else {
-            last_failed_module.clear();
-            last_failed_action.clear();
-        }
-
-        if (repeat_count >= 2) {
-            condenser.push_guidance(
-                "[SYSTEM WARNING: Repetition detected! You called '" + call.module + "::" + call.action +
-                "' multiple times without advancing state (result: " + action_result.llm_facing_output +
-                "). You MUST change strategy, use a different loaded module, or call OrchestratorModule.complete_recipe.]"
-            );
-        }
-        if (repeat_count >= 4) {
-            result.outcome = LoopOutcome::turn_limit;
-            result.success = false;
-            result.completion_output = "Task halted by anti-repetition circuit breaker: repeated failing call '" +
-                                       call.module + "::" + call.action + "'";
-            result.run_record = std::move(run_record);
-            return result;
-        }
-
         TurnRecord record;
         record.index = turn;
         record.raw_reply = gen.content;
@@ -287,6 +310,70 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         result.transcript.push_back(std::move(record));
         if (config.on_turn) {
             config.on_turn(result.transcript.back());
+        }
+
+        // Anti-repetition detection and loop circuit breaker
+        const std::string current_call_sig = call.module + "::" + call.action + "::" + call.args.dump();
+        if (current_call_sig == last_call_sig ||
+            (!action_result.success && call.module == last_failed_module && call.action == last_failed_action)) {
+            repeat_count++;
+        } else {
+            repeat_count = 0;
+        }
+
+        const std::string action_sig = call.module + "::" + call.action;
+        if (!second_last_action_sig.empty() && action_sig == second_last_action_sig && action_sig != last_action_sig) {
+            oscillation_count++;
+        } else if (action_sig != last_action_sig) {
+            oscillation_count = 0;
+        }
+
+        second_last_action_sig = last_action_sig;
+        last_action_sig = action_sig;
+        last_call_sig = current_call_sig;
+
+        if (!action_result.success) {
+            last_failed_module = call.module;
+            last_failed_action = call.action;
+            consecutive_failures++;
+            if (consecutive_failures >= 2 && repeat_count < 2) {
+                condenser.push_guidance(
+                    "[SYSTEM NOTICE: The previous action '" + call.module + "::" + call.action +
+                    "' failed (" + action_result.llm_facing_output +
+                    "). Carefully read the error message, correct your code/arguments, and do not repeat the failed action.]"
+                );
+            }
+        } else {
+            last_failed_module.clear();
+            last_failed_action.clear();
+            consecutive_failures = 0;
+            condenser.clear_guidance();
+        }
+
+        if (repeat_count == 1) {
+            condenser.push_guidance(
+                "[SYSTEM NOTICE: You just called '" + call.module + "::" + call.action +
+                "' with identical arguments. Doing this again will trigger the circuit breaker. Change your query/arguments, choose a different module/action, or call OrchestratorModule.complete_recipe to conclude.]"
+            );
+        } else if (repeat_count >= 2) {
+            condenser.push_guidance(
+                "[CRITICAL SYSTEM WARNING: Repetition loop detected! You must NOT call '" + call.module + "::" + call.action +
+                "' again. Immediately call OrchestratorModule.complete_recipe to conclude the task.]"
+            );
+        } else if (oscillation_count >= 2) {
+            condenser.push_guidance(
+                "[SYSTEM WARNING: Oscillation loop detected! You are alternating between '" + call.module + "::" + call.action +
+                "' and the previous action without making new progress. Stop repeating this cycle; proceed to store facts with KnowledgeModule.store_fact, finalize the output file, and call OrchestratorModule.complete_recipe.]"
+            );
+        }
+        if (config.max_repeated_calls > 0 &&
+            (repeat_count >= config.max_repeated_calls || oscillation_count >= config.max_repeated_calls + 2)) {
+            result.outcome = LoopOutcome::turn_limit;
+            result.success = false;
+            result.completion_output = "Task halted by anti-repetition circuit breaker: repeated call '" +
+                                       call.module + "::" + call.action + "'";
+            result.run_record = std::move(run_record);
+            return result;
         }
 
         // 6. Advance the RunRecord (Req 6.2): step_index counts completed turns and

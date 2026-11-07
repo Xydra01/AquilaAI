@@ -1,6 +1,6 @@
 {
   "recipe_id": "fn_dev_dynamic",
-  "goal_template": "Perform dynamic debugging, profiling, and iterative refactoring: {{user_instructions}}",
+  "goal_template": "Implement, debug, and verify execution: {{user_instructions}}",
   "load_modules": [
     {
       "module": "WorkspaceModule",
@@ -20,6 +20,10 @@
         "test_cmd": "pytest"
       },
       "expose_actions": [
+        "ensure_venv",
+        "pip_install",
+        "run_python",
+        "pip_list",
         "exec_sandboxed_cmd",
         "run_test_suite"
       ]
@@ -53,9 +57,9 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Reproduce issue and record hypotheses",
-    "Run diagnostic commands and analyze output",
-    "Apply surgical fixes and re-verify",
-    "Complete recipe"
+    "Write the script or implementation file using WorkspaceModule create_file or ExecutionModule run_python",
+    "Install any required third-party packages using ExecutionModule pip_install",
+    "Run and verify execution using ExecutionModule run_python",
+    "Call OrchestratorModule complete_recipe"
   ]
 }

@@ -53,12 +53,13 @@ namespace {
 // template (llama_model_chat_template), falling back to minimal ChatML framing when
 // the model has no built-in template. add_ass is always false here (see the file
 // header): the assistant-turn opener is 4.2's responsibility.
-std::string frame_message(const llama_model* model, const Message& m) {
+std::string frame_message(const llama_model* model, const Message& m, bool is_first) {
     const std::string role(to_string(m.role));
 
     const llama_chat_message chat{role.c_str(), m.content.c_str()};
     const char* tmpl = llama_model_chat_template(model, /*name=*/nullptr);
 
+    std::string framed;
     if (tmpl != nullptr) {
         // First call sizes the buffer: a return > buffer length means re-alloc and
         // retry (the documented contract). Start at the header's recommended
@@ -73,15 +74,25 @@ std::string frame_message(const llama_model* model, const Message& m) {
                                           buf.data(), static_cast<int32_t>(buf.size()));
         }
         if (n > 0) {
-            return std::string(buf.data(), static_cast<std::size_t>(n));
+            framed.assign(buf.data(), static_cast<std::size_t>(n));
         }
-        // n <= 0: the template could not be applied (unknown/unsupported template).
-        // Fall through to the explicit ChatML framing below.
     }
 
-    // Minimal explicit framing (documented fallback): ChatML / Qwen shape. Matches
-    // the Qwen 3.5 family (R18) when the built-in template is unavailable.
-    return "<|im_start|>" + role + "\n" + m.content + "<|im_end|>\n";
+    if (framed.empty()) {
+        framed = "<|im_start|>" + role + "\n" + m.content + "<|im_end|>\n";
+    }
+
+    if (!is_first) {
+        const std::string_view kBosToken = "<|begin_of_text|>";
+        if (framed.rfind(kBosToken, 0) == 0) {
+            framed = framed.substr(kBosToken.size());
+            if (!framed.empty() && framed.front() == '\n') {
+                framed.erase(0, 1);
+            }
+        }
+    }
+
+    return framed;
 }
 
 // Convert one sampled token to its text piece (UTF-8 bytes). llama_token_to_piece
@@ -147,7 +158,8 @@ LlamaCppBackend::LlamaCppBackend(LlamaConfig cfg)
     : cfg_(std::move(cfg)), session_(cfg_.model_path, cfg_) {}
 
 void LlamaCppBackend::append(const Message& message) {
-    const std::string framed = frame_message(llama_get_model(session_.ctx()), message);
+    const bool is_first = (session_.position() == 0);
+    const std::string framed = frame_message(llama_get_model(session_.ctx()), message, is_first);
     // decode_text advances the KV position; it propagates LlamaError
     // (context_overflow / decode_failed / invalid_request) on a hard failure, which
     // is acceptable for a void append (matches OllamaHttpBackend building context).
@@ -291,7 +303,18 @@ GenerationResult LlamaCppBackend::generate(const GenerationParams& params,
             }
             if (on > 0) opener.assign(obuf.data(), static_cast<std::size_t>(on));
         }
-        if (opener.empty()) opener = "<|im_start|>assistant\n";
+        if (opener.empty()) {
+            opener = "<|im_start|>assistant\n";
+        } else {
+            // Strip BOS token if template prepended it, because opener is at the end of context!
+            const std::string_view kBosToken = "<|begin_of_text|>";
+            if (opener.rfind(kBosToken, 0) == 0) {
+                opener = opener.substr(kBosToken.size());
+                if (!opener.empty() && opener.front() == '\n') {
+                    opener.erase(0, 1);
+                }
+            }
+        }
         try {
             session_.decode_text(opener);
         } catch (const LlamaError&) {

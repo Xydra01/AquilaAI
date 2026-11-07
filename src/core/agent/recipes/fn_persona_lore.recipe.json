@@ -35,8 +35,8 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Load persona and inspect lore",
-    "Roleplay dialogue and update lore knowledge",
-    "Complete recipe"
+    "Load persona using PersonaModule load_persona or inspect world lore",
+    "Record lore facts into knowledge memory using KnowledgeModule store_fact",
+    "Call OrchestratorModule complete_recipe to finish"
   ]
 }
