@@ -1,9 +1,13 @@
 #include "aquila/learn/learn_module.hpp"
+#include "aquila/knowledge/html_cleaner.hpp"
+#include "aquila/knowledge/page_scorer.hpp"
+#include "aquila/knowledge/web_fetcher.hpp"
 
 #include <chrono>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 
 namespace aquila::learn {
@@ -95,6 +99,46 @@ std::string repair_truncated_json(std::string text) {
 }
 
 }  // namespace
+
+Json ArchiveSource::to_json() const {
+    return Json{
+        {"id", id},
+        {"name", name},
+        {"source_type", source_type},
+        {"file_path", file_path},
+        {"token_count", token_count},
+        {"added_at", added_at}
+    };
+}
+
+ArchiveSource ArchiveSource::from_json(const Json& j) {
+    ArchiveSource s;
+    s.id = j.value("id", "");
+    s.name = j.value("name", "");
+    s.source_type = j.value("source_type", "file");
+    s.file_path = j.value("file_path", "");
+    s.token_count = j.value("token_count", static_cast<std::size_t>(0));
+    s.added_at = j.value("added_at", "");
+    return s;
+}
+
+Json ArchiveManifest::to_json() const {
+    Json arr = Json::array();
+    for (const auto& s : sources) {
+        arr.push_back(s.to_json());
+    }
+    return Json{{"sources", std::move(arr)}};
+}
+
+ArchiveManifest ArchiveManifest::from_json(const Json& j) {
+    ArchiveManifest m;
+    if (j.contains("sources") && j["sources"].is_array()) {
+        for (const auto& item : j["sources"]) {
+            m.sources.push_back(ArchiveSource::from_json(item));
+        }
+    }
+    return m;
+}
 
 Json SyllabusNode::to_json() const {
     Json j = Json::object();
@@ -246,6 +290,46 @@ std::filesystem::path LearnModule::assessments_dir() const {
     return course_dir() / "assessments";
 }
 
+std::filesystem::path LearnModule::archive_dir() const {
+    return course_dir() / "archive";
+}
+
+std::filesystem::path LearnModule::archive_manifest_file() const {
+    return archive_dir() / "manifest.json";
+}
+
+std::filesystem::path LearnModule::archive_sources_dir() const {
+    return archive_dir() / "sources";
+}
+
+ArchiveManifest LearnModule::load_manifest() const {
+    const auto file = archive_manifest_file();
+    if (!fs::exists(file)) {
+        return ArchiveManifest{};
+    }
+    std::ifstream in(file, std::ios::binary);
+    if (!in.is_open()) {
+        return ArchiveManifest{};
+    }
+    try {
+        Json j;
+        in >> j;
+        return ArchiveManifest::from_json(j);
+    } catch (...) {
+        return ArchiveManifest{};
+    }
+}
+
+void LearnModule::save_manifest(const ArchiveManifest& manifest) const {
+    std::error_code ec;
+    fs::create_directories(archive_dir(), ec);
+    const auto file = archive_manifest_file();
+    std::ofstream out(file, std::ios::trunc | std::ios::binary);
+    if (out.is_open()) {
+        out << manifest.to_json().dump(2);
+    }
+}
+
 std::vector<ActionSchema> LearnModule::get_actions() const {
     return {
         ActionSchema{
@@ -320,13 +404,57 @@ std::vector<ActionSchema> LearnModule::get_actions() const {
             })
         },
         ActionSchema{
-            "search_archive",
-            "Searches course archive materials.",
+            "add_archive_source",
+            "Adds raw text or markdown content as a reference source to the course archive.",
             Json::object({
                 {"type", "object"},
                 {"properties", Json::object({
-                    {"query", Json::object({{"type", "string"}, {"description", "Search query"}})},
-                    {"archive_id", Json::object({{"type", "string"}, {"description", "Archive ID"}})}
+                    {"name", Json::object({{"type", "string"}, {"description", "Descriptive name of the source (e.g. 'Chapter 1 Notes')"}})},
+                    {"content", Json::object({{"type", "string"}, {"description", "Full text or markdown content of the reference material"}})}
+                })},
+                {"required", Json::array({"name", "content"})}
+            })
+        },
+        ActionSchema{
+            "ingest_archive_file",
+            "Copies a local document/code file from the workspace into the course archive.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"file_path", Json::object({{"type", "string"}, {"description", "Path to the file to ingest into course archive"}})},
+                    {"name", Json::object({{"type", "string"}, {"description", "Optional friendly display name"}})}
+                })},
+                {"required", Json::array({"file_path"})}
+            })
+        },
+        ActionSchema{
+            "ingest_archive_url",
+            "Fetches a web URL, cleans and sanitizes HTML, and stores substantive markdown in the course archive.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"url", Json::object({{"type", "string"}, {"description", "Web URL to scrape and ingest"}})},
+                    {"name", Json::object({{"type", "string"}, {"description", "Optional friendly display name"}})}
+                })},
+                {"required", Json::array({"url"})}
+            })
+        },
+        ActionSchema{
+            "list_archive_sources",
+            "Lists all archived reference sources and token counts for the active course.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object()}
+            })
+        },
+        ActionSchema{
+            "search_archive",
+            "Performs grounded search over course archive materials, returning attributed excerpts with source citations.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"query", Json::object({{"type", "string"}, {"description", "Question or search keywords to find in course sources"}})},
+                    {"max_results", Json::object({{"type", "integer"}, {"description", "Maximum number of excerpts to return"}, {"default", 5}})}
                 })},
                 {"required", Json::array({"query"})}
             })
@@ -677,10 +805,272 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         return fail("node_not_found", "❌ Node '" + node_id + "' not found in syllabus.");
     }
 
+    if (action_name == "add_archive_source") {
+        if (!has_active_course()) {
+            return fail("no_active_course", "❌ Error: No active course loaded. Create or load a course first.");
+        }
+        const std::string name = args.value("name", "Untitled Source");
+        const std::string content = args.value("content", "");
+        if (content.empty()) {
+            return fail("empty_content", "❌ Cannot add empty source to archive.");
+        }
+
+        std::error_code ec;
+        fs::create_directories(archive_sources_dir(), ec);
+        std::string slug = "src_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count() % 1000000);
+        fs::path file_path = archive_sources_dir() / (slug + ".md");
+
+        std::ofstream out(file_path, std::ios::trunc | std::ios::binary);
+        if (!out.is_open()) {
+            return fail("io_error", "❌ Failed to write archive file: " + file_path.string());
+        }
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        out.close();
+
+        ArchiveManifest manifest = load_manifest();
+        ArchiveSource src;
+        src.id = slug;
+        src.name = name;
+        src.source_type = "text";
+        src.file_path = file_path.filename().string();
+        src.token_count = content.size() / 4;
+        src.added_at = now_iso();
+        manifest.sources.push_back(src);
+        save_manifest(manifest);
+
+        return ok("✅ Added source '" + name + "' to course archive (" +
+                  std::to_string(src.token_count) + " tokens, ID: " + slug + ").");
+    }
+
+    if (action_name == "ingest_archive_file") {
+        if (!has_active_course()) {
+            return fail("no_active_course", "❌ Error: No active course loaded. Create or load a course first.");
+        }
+        const std::string rel_path = args.value("file_path", "");
+        if (rel_path.empty()) {
+            return fail("missing_path", "❌ file_path is required.");
+        }
+        fs::path target_file = ctx_.workspace_root.empty() ? fs::path(rel_path) : ctx_.workspace_root / rel_path;
+        if (!fs::exists(target_file)) {
+            return fail("file_not_found", "❌ File not found: " + target_file.string());
+        }
+
+        std::ifstream in(target_file, std::ios::binary);
+        if (!in.is_open()) {
+            return fail("read_error", "❌ Failed to read file: " + target_file.string());
+        }
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+
+        std::string name = args.value("name", target_file.filename().string());
+        std::error_code ec;
+        fs::create_directories(archive_sources_dir(), ec);
+        std::string slug = "file_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count() % 1000000);
+        fs::path dest_file = archive_sources_dir() / (slug + target_file.extension().string());
+
+        std::ofstream out(dest_file, std::ios::trunc | std::ios::binary);
+        if (!out.is_open()) {
+            return fail("write_error", "❌ Failed to write into archive: " + dest_file.string());
+        }
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        out.close();
+
+        ArchiveManifest manifest = load_manifest();
+        ArchiveSource src;
+        src.id = slug;
+        src.name = name;
+        src.source_type = "file";
+        src.file_path = dest_file.filename().string();
+        src.token_count = content.size() / 4;
+        src.added_at = now_iso();
+        manifest.sources.push_back(src);
+        save_manifest(manifest);
+
+        return ok("✅ Ingested file '" + name + "' into course archive (" +
+                  std::to_string(src.token_count) + " tokens, ID: " + slug + ").");
+    }
+
+    if (action_name == "ingest_archive_url") {
+        if (!has_active_course()) {
+            return fail("no_active_course", "❌ Error: No active course loaded. Create or load a course first.");
+        }
+        const std::string url = args.value("url", "");
+        if (url.empty()) {
+            return fail("missing_url", "❌ URL is required.");
+        }
+
+        try {
+            knowledge::WebFetcher fetcher;
+            auto resp = fetcher.fetch(url);
+            auto cleaned = knowledge::HtmlCleaner::clean(resp.body);
+            auto analysis = knowledge::PageScorer::analyze_page(url, cleaned.text, resp.body);
+            if (analysis.quality == knowledge::PageQuality::challenge_blocked) {
+                return fail("challenge_blocked", "⚠️ URL blocked by anti-bot verification challenge. Scraping withheld.");
+            }
+            if (analysis.quality == knowledge::PageQuality::paywall) {
+                return fail("paywall_blocked", "⚠️ URL classified as academic paywall. Use an open-access source instead.");
+            }
+
+            std::string content = !analysis.sanitized_text.empty() ? analysis.sanitized_text : cleaned.text;
+            std::string name = args.value("name", cleaned.title.empty() ? url : cleaned.title);
+
+            std::error_code ec;
+            fs::create_directories(archive_sources_dir(), ec);
+            std::string slug = "url_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count() % 1000000);
+            fs::path dest_file = archive_sources_dir() / (slug + ".md");
+
+            std::ofstream out(dest_file, std::ios::trunc | std::ios::binary);
+            if (!out.is_open()) {
+                return fail("write_error", "❌ Failed to write into archive: " + dest_file.string());
+            }
+            out.write(content.data(), static_cast<std::streamsize>(content.size()));
+            out.close();
+
+            ArchiveManifest manifest = load_manifest();
+            ArchiveSource src;
+            src.id = slug;
+            src.name = name;
+            src.source_type = "url";
+            src.file_path = dest_file.filename().string();
+            src.token_count = content.size() / 4;
+            src.added_at = now_iso();
+            manifest.sources.push_back(src);
+            save_manifest(manifest);
+
+            return ok("✅ Ingested URL '" + name + "' into course archive (" +
+                      std::to_string(src.token_count) + " tokens, ID: " + slug + ").");
+        } catch (const std::exception& e) {
+            return fail("fetch_error", "❌ Failed to fetch and ingest URL: " + std::string(e.what()));
+        }
+    }
+
+    if (action_name == "list_archive_sources") {
+        if (!has_active_course()) {
+            return fail("no_active_course", "❌ Error: No active course loaded.");
+        }
+        ArchiveManifest manifest = load_manifest();
+        Json j = Json::object();
+        j["course_id"] = active_course_id_;
+        j["sources_count"] = manifest.sources.size();
+        std::size_t total_tokens = 0;
+        Json list = Json::array();
+        for (const auto& s : manifest.sources) {
+            total_tokens += s.token_count;
+            list.push_back(s.to_json());
+        }
+        j["total_tokens"] = total_tokens;
+        j["sources"] = std::move(list);
+        return ok(j.dump(2));
+    }
+
     if (action_name == "search_archive") {
+        if (!has_active_course()) {
+            return fail("no_active_course", "❌ Error: No active course loaded.");
+        }
         const std::string query = args.value("query", "");
-        const std::string archive_id = args.value("archive_id", "default");
-        return ok("Archive search for '" + query + "' in " + archive_id + ": 0 matches found.");
+        const int max_results = args.value("max_results", 5);
+        if (query.empty()) {
+            return fail("missing_query", "❌ query parameter is required.");
+        }
+
+        ArchiveManifest manifest = load_manifest();
+        if (manifest.sources.empty()) {
+            return ok("Archive search for '" + query + "': Course archive is empty. Add files or URLs using 'add_archive_source', 'ingest_archive_file', or 'ingest_archive_url'.");
+        }
+
+        // Split query into lowercase search keywords (len >= 3)
+        std::vector<std::string> query_words;
+        std::string cur;
+        for (char c : query) {
+            if (std::isalnum(static_cast<unsigned char>(c))) {
+                cur.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            } else if (!cur.empty()) {
+                if (cur.size() >= 3) query_words.push_back(std::move(cur));
+                cur.clear();
+            }
+        }
+        if (cur.size() >= 3) query_words.push_back(std::move(cur));
+
+        struct MatchPassage {
+            std::string source_name;
+            std::string header;
+            std::string text;
+            int score = 0;
+        };
+        std::vector<MatchPassage> matches;
+
+        for (const auto& src : manifest.sources) {
+            fs::path src_file = archive_sources_dir() / src.file_path;
+            if (!fs::exists(src_file)) continue;
+
+            std::ifstream in(src_file, std::ios::binary);
+            if (!in.is_open()) continue;
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            in.close();
+
+            // Split content into paragraphs or sections
+            std::istringstream stream(text);
+            std::string line;
+            std::string current_header = src.name;
+            std::string current_block;
+
+            auto flush_block = [&]() {
+                if (current_block.empty()) return;
+                std::string lower_block;
+                lower_block.reserve(current_block.size());
+                for (char ch : current_block) {
+                    lower_block.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                }
+
+                int score = 0;
+                for (const auto& w : query_words) {
+                    if (lower_block.find(w) != std::string::npos) {
+                        score += 10;
+                    }
+                }
+                if (score > 0) {
+                    matches.push_back(MatchPassage{
+                        .source_name = src.name,
+                        .header = current_header,
+                        .text = current_block.substr(0, 1000),
+                        .score = score
+                    });
+                }
+                current_block.clear();
+            };
+
+            while (std::getline(stream, line)) {
+                if (line.starts_with("# ") || line.starts_with("## ") || line.starts_with("### ")) {
+                    flush_block();
+                    current_header = line;
+                } else if (line.empty()) {
+                    flush_block();
+                } else {
+                    if (!current_block.empty()) current_block += "\n";
+                    current_block += line;
+                }
+            }
+            flush_block();
+        }
+
+        if (matches.empty()) {
+            return ok("Archive search for '" + query + "': 0 matching passages found in " +
+                      std::to_string(manifest.sources.size()) + " archived documents.");
+        }
+
+        // Sort by relevance score descending
+        std::sort(matches.begin(), matches.end(), [](const MatchPassage& a, const MatchPassage& b) {
+            return a.score > b.score;
+        });
+
+        std::ostringstream ss;
+        ss << "Found " << matches.size() << " grounded archive passages for query '" << query << "':\n\n";
+        for (std::size_t i = 0; i < matches.size() && static_cast<int>(i) < max_results; ++i) {
+            const auto& m = matches[i];
+            ss << "[" << (i + 1) << "] Source: " << m.source_name << " (" << m.header << ")\n"
+               << m.text << "\n\n";
+        }
+        return ok(ss.str());
     }
 
     if (action_name == "get_course_info") {

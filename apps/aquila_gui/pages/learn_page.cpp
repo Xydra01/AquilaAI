@@ -1,163 +1,278 @@
 // apps/aquila_gui/pages/learn_page.cpp
 #include "learn_page.hpp"
-#include "../theme/markdown_renderer.hpp"
 
+#include <QCoreApplication>
+#include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QInputDialog>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageBox>
+#include <QVBoxLayout>
 
 namespace aquila::gui {
 
 LearnPage::LearnPage(QWidget* parent)
     : BasePage(QStringLiteral("Learn & Classroom"),
-               QStringLiteral("Hierarchical Curriculum Building, Mastery Progression (0-5), and Interactive Quizzes"),
+               QStringLiteral("NotebookLM Course Archive, Hierarchical Syllabus, and Adaptive Assessment"),
                QStringLiteral("🎓"), parent) {
     auto* layout = contentLayout();
 
-    // Top Controls
-    auto* topBar = new QHBoxLayout();
-    topBar->setSpacing(8);
+    // Top Row: Course Selector & Generate
+    auto* topRow = new QHBoxLayout();
+    topRow->setSpacing(8);
 
-    auto* lblCourse = new QLabel(QStringLiteral("Active Course:"), this);
-    lblCourse->setStyleSheet(QStringLiteral("font-weight:bold;"));
-    topBar->addWidget(lblCourse);
+    auto* courseLabel = new QLabel(QStringLiteral("Active Course:"), this);
+    topRow->addWidget(courseLabel);
 
     courseCombo_ = new QComboBox(this);
-    courseCombo_->setMinimumWidth(220);
+    courseCombo_->setMinimumWidth(240);
     connect(courseCombo_, &QComboBox::currentTextChanged, this, &LearnPage::courseSelected);
-    topBar->addWidget(courseCombo_);
+    topRow->addWidget(courseCombo_, 1);
 
-    generateBtn_ = new QPushButton(QStringLiteral("📝 Generate Quiz / Assessment"), this);
+    generateBtn_ = new QPushButton(QStringLiteral("⚡ Generate Assessment"), this);
     generateBtn_->setProperty("accent", true);
     connect(generateBtn_, &QPushButton::clicked, this, &LearnPage::onGenerateAssessmentClicked);
-    topBar->addWidget(generateBtn_);
-    topBar->addStretch(1);
+    topRow->addWidget(generateBtn_);
 
-    layout->addLayout(topBar);
+    layout->addLayout(topRow);
 
-    // Splitter: Left = Syllabus Hierarchy, Right = Assessment & Mastery
+    // Main Splitter: Left (Syllabus & Archive Sources), Right (Archive Q&A & Assessments)
     auto* splitter = new QSplitter(Qt::Horizontal, this);
 
-    // Left: Syllabus Tree
-    auto* treeGroup = new QGroupBox(QStringLiteral("Course Curriculum Hierarchy (≥ 8 Units, ≥ 5 Sub-units)"), splitter);
-    auto* treeLayout = new QVBoxLayout(treeGroup);
-    treeLayout->setContentsMargins(4, 8, 4, 4);
+    // Left Container
+    auto* leftWidget = new QWidget(splitter);
+    auto* leftLayout = new QVBoxLayout(leftWidget);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
 
-    syllabusTree_ = new QTreeWidget(treeGroup);
-    syllabusTree_->setColumnCount(2);
-    syllabusTree_->setHeaderLabels({QStringLiteral("Curriculum Topic / Unit"), QStringLiteral("Mastery")});
+    // Syllabus Hierarchy Group
+    auto* sylGroup = new QGroupBox(QStringLiteral("Course Syllabus Hierarchy & Progress"), leftWidget);
+    auto* sylLayout = new QVBoxLayout(sylGroup);
+    sylLayout->setContentsMargins(4, 8, 4, 4);
+
+    syllabusTree_ = new QTreeWidget(sylGroup);
+    syllabusTree_->setColumnCount(3);
+    syllabusTree_->setHeaderLabels({QStringLiteral("Unit / Lesson"), QStringLiteral("ID"), QStringLiteral("Mastery")});
     syllabusTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     syllabusTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    treeLayout->addWidget(syllabusTree_);
-    splitter->addWidget(treeGroup);
+    syllabusTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    sylLayout->addWidget(syllabusTree_);
 
-    // Right: Assessment & Mastery Gauge
-    auto* quizGroup = new QGroupBox(QStringLiteral("Assessment & Mastery Progression"), splitter);
-    auto* quizLayout = new QVBoxLayout(quizGroup);
-    quizLayout->setContentsMargins(8, 10, 8, 8);
-    quizLayout->setSpacing(8);
+    auto* masteryRow = new QHBoxLayout();
+    masteryLabel_ = new QLabel(QStringLiteral("Mastery Progress: 0%"), sylGroup);
+    masteryRow->addWidget(masteryLabel_);
 
-    // Mastery Progress
-    auto* masteryHeader = new QHBoxLayout();
-    masteryLabel_ = new QLabel(QStringLiteral("Mastery Level: 0 / 5 (Novice)"), quizGroup);
-    masteryLabel_->setStyleSheet(QStringLiteral("font-weight: bold; color: #79c0ff; font-size: 13px;"));
-    masteryHeader->addWidget(masteryLabel_);
-    masteryHeader->addStretch(1);
-    quizLayout->addLayout(masteryHeader);
-
-    masteryBar_ = new QProgressBar(quizGroup);
-    masteryBar_->setRange(0, 5);
+    masteryBar_ = new QProgressBar(sylGroup);
+    masteryBar_->setRange(0, 100);
     masteryBar_->setValue(0);
-    masteryBar_->setFixedHeight(10);
-    masteryBar_->setTextVisible(false);
-    quizLayout->addWidget(masteryBar_);
+    masteryRow->addWidget(masteryBar_, 1);
+    sylLayout->addLayout(masteryRow);
 
-    // Question Box
-    auto* lblQ = new QLabel(QStringLiteral("Active Assessment Question:"), quizGroup);
-    lblQ->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 11px;"));
-    quizLayout->addWidget(lblQ);
+    leftLayout->addWidget(sylGroup, 3);
+
+    // NotebookLM Course Archive Dock
+    auto* archGroup = new QGroupBox(QStringLiteral("Course Archive & Reference Sources (NotebookLM)"), leftWidget);
+    auto* archLayout = new QVBoxLayout(archGroup);
+    archLayout->setContentsMargins(4, 8, 4, 4);
+
+    archiveTree_ = new QTreeWidget(archGroup);
+    archiveTree_->setColumnCount(4);
+    archiveTree_->setHeaderLabels({QStringLiteral("Source Name"), QStringLiteral("Type"), QStringLiteral("Tokens"), QStringLiteral("Added")});
+    archiveTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    archiveTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    archiveTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    archiveTree_->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    archLayout->addWidget(archiveTree_);
+
+    auto* archBtnRow = new QHBoxLayout();
+    archBtnRow->setSpacing(6);
+
+    addTextBtn_ = new QPushButton(QStringLiteral("➕ Add Note"), archGroup);
+    connect(addTextBtn_, &QPushButton::clicked, this, &LearnPage::onAddTextSourceClicked);
+    archBtnRow->addWidget(addTextBtn_);
+
+    addFileBtn_ = new QPushButton(QStringLiteral("📁 Add File"), archGroup);
+    connect(addFileBtn_, &QPushButton::clicked, this, &LearnPage::onAddFileSourceClicked);
+    archBtnRow->addWidget(addFileBtn_);
+
+    addUrlBtn_ = new QPushButton(QStringLiteral("🌐 Ingest URL"), archGroup);
+    connect(addUrlBtn_, &QPushButton::clicked, this, &LearnPage::onAddUrlSourceClicked);
+    archBtnRow->addWidget(addUrlBtn_);
+
+    buildFromSourcesBtn_ = new QPushButton(QStringLiteral("⚡ Build Syllabus"), archGroup);
+    connect(buildFromSourcesBtn_, &QPushButton::clicked, this, &LearnPage::buildFromSourcesRequested);
+    archBtnRow->addWidget(buildFromSourcesBtn_);
+
+    archLayout->addLayout(archBtnRow);
+    leftLayout->addWidget(archGroup, 2);
+    splitter->addWidget(leftWidget);
+
+    // Right Container: Archive Q&A + Assessment Practice
+    auto* rightWidget = new QWidget(splitter);
+    auto* rightLayout = new QVBoxLayout(rightWidget);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+
+    // Grounded Archive Q&A Group
+    auto* qaGroup = new QGroupBox(QStringLiteral("Grounded Archive Q&A (NotebookLM Citations)"), rightWidget);
+    auto* qaLayout = new QVBoxLayout(qaGroup);
+    qaLayout->setContentsMargins(4, 8, 4, 4);
+
+    auto* qaInputRow = new QHBoxLayout();
+    askInput_ = new QLineEdit(qaGroup);
+    askInput_->setPlaceholderText(QStringLiteral("Ask a question grounded in course sources..."));
+    connect(askInput_, &QLineEdit::returnPressed, this, &LearnPage::onAskArchiveClicked);
+    qaInputRow->addWidget(askInput_, 1);
+
+    askBtn_ = new QPushButton(QStringLiteral("Ask Archive"), qaGroup);
+    connect(askBtn_, &QPushButton::clicked, this, &LearnPage::onAskArchiveClicked);
+    qaInputRow->addWidget(askBtn_);
+    qaLayout->addLayout(qaInputRow);
+
+    askAnswerViewer_ = new QTextEdit(qaGroup);
+    askAnswerViewer_->setReadOnly(true);
+    askAnswerViewer_->setPlaceholderText(QStringLiteral("Answers citing archived documents and section headings will appear here..."));
+    qaLayout->addWidget(askAnswerViewer_, 1);
+
+    rightLayout->addWidget(qaGroup, 2);
+
+    // Assessment Question Group
+    auto* quizGroup = new QGroupBox(QStringLiteral("Interactive Knowledge Assessment"), rightWidget);
+    auto* quizLayout = new QVBoxLayout(quizGroup);
+    quizLayout->setContentsMargins(4, 8, 4, 4);
 
     questionViewer_ = new QTextEdit(quizGroup);
     questionViewer_->setReadOnly(true);
-    questionViewer_->setMaximumHeight(140);
-    questionViewer_->setStyleSheet(QStringLiteral(
-        "background-color: #1e1e1e; border: 1px solid #3c3c3c; border-radius: 6px; padding: 8px;"
-    ));
-    quizLayout->addWidget(questionViewer_);
+    questionViewer_->setPlaceholderText(QStringLiteral("Select a lesson node and click 'Generate Assessment'..."));
+    quizLayout->addWidget(questionViewer_, 2);
 
-    // Multiple Choice Answer Selector
-    auto* lblAns = new QLabel(QStringLiteral("Select Your Answer:"), quizGroup);
-    lblAns->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 11px;"));
-    quizLayout->addWidget(lblAns);
+    auto* ansRow = new QHBoxLayout();
+    ansRow->setSpacing(8);
 
     answerCombo_ = new QComboBox(quizGroup);
-    quizLayout->addWidget(answerCombo_);
+    ansRow->addWidget(answerCombo_, 1);
 
     submitAnswerBtn_ = new QPushButton(QStringLiteral("Submit Answer"), quizGroup);
     submitAnswerBtn_->setProperty("accent", true);
     connect(submitAnswerBtn_, &QPushButton::clicked, this, &LearnPage::onSubmitAnswerClicked);
-    quizLayout->addWidget(submitAnswerBtn_);
+    ansRow->addWidget(submitAnswerBtn_);
 
-    quizLayout->addStretch(1);
-    splitter->addWidget(quizGroup);
+    quizLayout->addLayout(ansRow);
+    rightLayout->addWidget(quizGroup, 2);
 
-    splitter->setSizes({550, 450});
+    splitter->addWidget(rightWidget);
+    splitter->setSizes({550, 650});
     layout->addWidget(splitter, 1);
-
-    setCourseList({QStringLiteral("cpp20_systems_architecture"), QStringLiteral("compiler_design_internals")});
-    setMasteryLevel(1);
-
-    // Populate a sample standard curriculum
-    auto* root = new QTreeWidgetItem(syllabusTree_, {QStringLiteral("C++20 Systems Architecture (Root)"), QStringLiteral("1/5")});
-    root->setExpanded(true);
-    for (int i = 1; i <= 8; ++i) {
-        auto* unit = new QTreeWidgetItem(root, {QStringLiteral("Unit %1: Core Concept %1").arg(i), QStringLiteral("0/5")});
-        for (int j = 1; j <= 5; ++j) {
-            new QTreeWidgetItem(unit, {QStringLiteral("Topic %1.%2: Details").arg(i).arg(j), QStringLiteral("0/5")});
-        }
-    }
 }
 
 void LearnPage::setCourseList(const QStringList& courses) {
     courseCombo_->clear();
-    for (const auto& c : courses) {
-        courseCombo_->addItem(c);
+    courseCombo_->addItems(courses);
+}
+
+void LearnPage::setSyllabusTree(const QString& courseJson) {
+    syllabusTree_->clear();
+    QJsonDocument doc = QJsonDocument::fromJson(courseJson.toUtf8());
+    if (!doc.isObject()) return;
+
+    QJsonObject obj = doc.object();
+    QJsonArray nodes = obj.value(QStringLiteral("nodes")).toArray();
+
+    int totalMastery = 0;
+    for (const auto& val : nodes) {
+        QJsonObject n = val.toObject();
+        auto* item = new QTreeWidgetItem(syllabusTree_);
+        item->setText(0, n.value(QStringLiteral("title")).toString());
+        item->setText(1, n.value(QStringLiteral("id")).toString());
+        int mastery = n.value(QStringLiteral("mastery_tier")).toInt(0);
+        item->setText(2, QStringLiteral("Tier %1/5").arg(mastery));
+        totalMastery += mastery;
+    }
+
+    if (!nodes.isEmpty()) {
+        int maxPossible = nodes.size() * 5;
+        int pct = (totalMastery * 100) / maxPossible;
+        setMasteryLevel(pct);
     }
 }
 
-void LearnPage::setSyllabusTree(const QString& /* courseJson */) {
-    // Dynamically populates syllabus from JSON
+void LearnPage::setArchiveSources(const QJsonArray& sources) {
+    archiveTree_->clear();
+    for (const auto& s : sources) {
+        QJsonObject obj = s.toObject();
+        addArchiveSourceItem(
+            obj.value(QStringLiteral("name")).toString(),
+            obj.value(QStringLiteral("source_type")).toString(),
+            obj.value(QStringLiteral("token_count")).toInt(),
+            obj.value(QStringLiteral("added_at")).toString().left(10)
+        );
+    }
+}
+
+void LearnPage::addArchiveSourceItem(const QString& name, const QString& type, int tokens, const QString& date) {
+    auto* item = new QTreeWidgetItem(archiveTree_);
+    item->setText(0, name);
+    item->setText(1, type);
+    item->setText(2, QStringLiteral("%1 tok").arg(tokens));
+    item->setText(3, date);
+}
+
+void LearnPage::setArchiveAnswer(const QString& answer) {
+    askAnswerViewer_->setMarkdown(answer);
+}
+
+void LearnPage::onAddTextSourceClicked() {
+    bool ok = false;
+    QString name = QInputDialog::getText(this, QStringLiteral("Add Note Source"), QStringLiteral("Source title:"), QLineEdit::Normal, QStringLiteral("Lecture Notes"), &ok);
+    if (!ok || name.trimmed().isEmpty()) return;
+
+    QString content = QInputDialog::getMultiLineText(this, QStringLiteral("Source Content"), QStringLiteral("Enter markdown notes:"), QString(), &ok);
+    if (!ok || content.trimmed().isEmpty()) return;
+
+    emit addTextSourceRequested(name.trimmed(), content);
+}
+
+void LearnPage::onAddFileSourceClicked() {
+    QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Ingest File into Archive"), QString(), QStringLiteral("Documents (*.md *.txt *.pdf *.py *.cpp *.h *.json);;All Files (*.*)"));
+    if (!file.isEmpty()) {
+        emit addFileSourceRequested(file);
+    }
+}
+
+void LearnPage::onAddUrlSourceClicked() {
+    bool ok = false;
+    QString url = QInputDialog::getText(this, QStringLiteral("Ingest Web URL"), QStringLiteral("Enter URL to scrape into archive:"), QLineEdit::Normal, QStringLiteral("https://"), &ok);
+    if (ok && !url.trimmed().isEmpty()) {
+        emit addUrlSourceRequested(url.trimmed());
+    }
+}
+
+void LearnPage::onAskArchiveClicked() {
+    const QString q = askInput_->text().trimmed();
+    if (q.isEmpty()) return;
+    setStatus(QStringLiteral("Searching course archive for '%1'...").arg(q));
+    emit askArchiveRequested(q);
 }
 
 void LearnPage::setAssessmentQuestion(const QString& question, const QStringList& options) {
     questionViewer_->setText(question);
     answerCombo_->clear();
-    for (const auto& opt : options) {
-        answerCombo_->addItem(opt);
-    }
+    answerCombo_->addItems(options);
 }
 
 void LearnPage::showAssessmentResult(bool correct, const QString& explanation) {
-    const QString formattedHtml = MarkdownRenderer::toHtml(explanation);
-    const QString resultHtml = QStringLiteral(
-        "<div style='margin-top:12px; padding:10px; border-radius:6px; background-color:%1; color:#ffffff;'>"
-        "  <b>%2</b><br>%3"
-        "</div>"
-    ).arg(
-        correct ? QStringLiteral("#2ea043") : QStringLiteral("#da3633"),
-        correct ? QStringLiteral("✓ Correct!") : QStringLiteral("✗ Incorrect"),
-        formattedHtml
-    );
-    questionViewer_->append(resultHtml);
+    if (!isVisible() || qgetenv("QT_QPA_PLATFORM") == "offscreen" || QCoreApplication::arguments().contains(QStringLiteral("--test-headless"))) {
+        return;
+    }
+    QMessageBox::information(this,
+        correct ? QStringLiteral("Correct!") : QStringLiteral("Needs Review"),
+        QStringLiteral("%1\n\n%2").arg(correct ? QStringLiteral("✅ Well done!") : QStringLiteral("❌ Not quite."), explanation));
 }
 
 void LearnPage::setMasteryLevel(int level) {
     masteryBar_->setValue(level);
-    const char* titles[] = {"0 / 5 (Uninitiated)", "1 / 5 (Novice)", "2 / 5 (Competent)",
-                            "3 / 5 (Proficient)", "4 / 5 (Expert)", "5 / 5 (Master)"};
-    if (level >= 0 && level <= 5) {
-        masteryLabel_->setText(QString::fromUtf8(titles[level]));
-    }
+    masteryLabel_->setText(QStringLiteral("Mastery Progress: %1%").arg(level));
 }
 
 int LearnPage::masteryLevel() const {
@@ -173,19 +288,13 @@ int LearnPage::answerOptionCount() const {
 }
 
 void LearnPage::onGenerateAssessmentClicked() {
-    auto* cur = syllabusTree_->currentItem();
-    const QString node = cur ? cur->text(0) : QStringLiteral("root");
-    setStatus(QStringLiteral("Generating quiz for node '%1'...").arg(node));
-    emit generateAssessmentRequested(node);
+    auto* item = syllabusTree_->currentItem();
+    const QString nodeId = item ? item->text(1) : QStringLiteral("root");
+    emit generateAssessmentRequested(nodeId);
 }
 
 void LearnPage::onSubmitAnswerClicked() {
-    const int idx = answerCombo_->currentIndex();
-    if (idx >= 0) {
-        setStatus(QStringLiteral("Submitting answer option %1...").arg(idx + 1));
-        emit submitAnswerRequested(idx);
-    }
+    emit submitAnswerRequested(answerCombo_->currentIndex());
 }
 
 }  // namespace aquila::gui
-

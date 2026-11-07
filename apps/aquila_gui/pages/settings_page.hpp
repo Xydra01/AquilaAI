@@ -24,6 +24,9 @@ public:
     int contextWindow() const;
     double temperature() const;
     QString workspacePath() const;
+    QString searchProvider() const;
+    QString searxngEndpoint() const;
+    bool autoScrapeEnabled() const;
 
     void setModelName(const QString& name);
     void setWorkspacePath(const QString& path);
@@ -56,6 +59,11 @@ private:
     QComboBox* themeCombo_ = nullptr;
     QLineEdit* workspaceInput_ = nullptr;
     QPushButton* browseWsBtn_ = nullptr;
+
+    QComboBox* searchProviderCombo_ = nullptr;
+    QLineEdit* searxngEndpointInput_ = nullptr;
+    QCheckBox* autoScrapeCheck_ = nullptr;
+
     QPushButton* saveBtn_ = nullptr;
 };
 

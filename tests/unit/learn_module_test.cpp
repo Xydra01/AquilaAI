@@ -138,3 +138,63 @@ TEST_CASE("learn: full course and mastery workflow", "[learn]") {
     CHECK(mod2.syllabus().nodes[3].mastery_tier == 1);
 }
 
+TEST_CASE("learn: notebooklm archive ingestion and grounded search", "[learn]") {
+    test::TempDir tmp;
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+
+    LearnModule mod(ctx);
+
+    // 1. Create a course
+    auto res = mod.execute_action("create_or_load_course", Json::object({
+        {"course_id", "ai-systems-2026"},
+        {"title", "Autonomous AI Systems Architecture"},
+        {"topic", "Agent loops and deterministic state"}
+    }));
+    REQUIRE(res.success);
+
+    // 2. Add text source directly
+    res = mod.execute_action("add_archive_source", Json::object({
+        {"name", "Architecture Design Doc"},
+        {"content", "# Core Loop\n\nThe agent uses a deterministic exit gate protocol.\n\n## KV Cache Management\n\nKV rollback preserves token KV slots to prevent latency spikes."}
+    }));
+    REQUIRE(res.success);
+    CHECK(res.llm_facing_output.find("Added source 'Architecture Design Doc'") != std::string::npos);
+
+    // 3. Ingest a workspace file
+    const auto file_path = tmp.path() / "syllabus_notes.txt";
+    {
+        std::ofstream out(file_path);
+        out << "Module 1 covers memory models.\nModule 2 covers concurrent execution pipelines.";
+    }
+    res = mod.execute_action("ingest_archive_file", Json::object({
+        {"file_path", "syllabus_notes.txt"},
+        {"name", "Syllabus Notes"}
+    }));
+    REQUIRE(res.success);
+    CHECK(res.llm_facing_output.find("Ingested file 'Syllabus Notes'") != std::string::npos);
+
+    // 4. List archive sources
+    res = mod.execute_action("list_archive_sources", Json::object());
+    REQUIRE(res.success);
+    Json list_json = Json::parse(res.llm_facing_output);
+    CHECK(list_json["sources_count"] == 2);
+    CHECK(list_json["total_tokens"] > 0);
+
+    // 5. Grounded archive search
+    res = mod.execute_action("search_archive", Json::object({
+        {"query", "KV rollback cache"}
+    }));
+    REQUIRE(res.success);
+    CHECK(res.llm_facing_output.find("Source: Architecture Design Doc") != std::string::npos);
+    CHECK(res.llm_facing_output.find("KV rollback preserves token KV slots") != std::string::npos);
+
+    // 6. Grounded search for non-matching query
+    res = mod.execute_action("search_archive", Json::object({
+        {"query", "astrophysics quantum tunneling"}
+    }));
+    REQUIRE(res.success);
+    CHECK(res.llm_facing_output.find("0 matching passages found") != std::string::npos);
+}
+
+

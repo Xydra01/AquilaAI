@@ -33,6 +33,8 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_LINKER": "F:/PROGRA~2/MICROS~3/2022/BUILDT~1/VC/Tools/MSVC/1444~1.352/bin/Hostx64/x64/link.exe",
+        "CMAKE_AR": "F:/PROGRA~2/MICROS~3/2022/BUILDT~1/VC/Tools/MSVC/1444~1.352/bin/Hostx64/x64/lib.exe",
         "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
         "AQUILA_BUILD_GUI": "ON"
       }

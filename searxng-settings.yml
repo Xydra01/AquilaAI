@@ -1,0 +1,47 @@
+# Local SearXNG Settings for Aquila AI Framework (No Docker Required)
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Aquila Local SearXNG"
+
+server:
+  port: 8888
+  bind_address: "127.0.0.1"
+  secret_key: "aquila_local_searxng_secret_key_aquilacpp"
+  base_url: "http://127.0.0.1:8888/"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  formats:
+    - html
+    - json
+
+engines:
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    disabled: false
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+

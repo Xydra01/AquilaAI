@@ -5,7 +5,14 @@ rem Override the Visual Studio location with AQUILA_VSDEVCMD=<path to VsDevCmd.b
 setlocal
 set "VSDEVCMD=%AQUILA_VSDEVCMD%"
 if not defined VSDEVCMD (
-    for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDEVCMD=%%i\Common7\Tools\VsDevCmd.bat"
+    if exist "F:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" (
+        set "VSDEVCMD=F:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"
+    ) else (
+        for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDEVCMD=%%i\Common7\Tools\VsDevCmd.bat"
+    )
+)
+if not defined QT_ROOT_DIR (
+    if exist "F:\Qt\6.11.3\msvc2022_64" set "QT_ROOT_DIR=F:\Qt\6.11.3\msvc2022_64"
 )
 if not exist "%VSDEVCMD%" (
     echo msvc-dev: VsDevCmd.bat not found. Set AQUILA_VSDEVCMD. 1>&2

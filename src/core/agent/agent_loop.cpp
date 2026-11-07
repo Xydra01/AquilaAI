@@ -122,6 +122,19 @@ Json AgentLoop::action_call_schema(const RecipeCartridge* recipe) {
 
     Json action = Json::object();
     action["type"] = "string";
+    if (recipe != nullptr && !recipe->load_modules.empty()) {
+        std::vector<std::string> allowed_actions;
+        for (const auto& lm : recipe->load_modules) {
+            for (const auto& act : lm.expose_actions) {
+                if (std::find(allowed_actions.begin(), allowed_actions.end(), act) == allowed_actions.end()) {
+                    allowed_actions.push_back(act);
+                }
+            }
+        }
+        if (!allowed_actions.empty()) {
+            action["enum"] = allowed_actions;
+        }
+    }
     properties["action"] = std::move(action);
 
     Json args = Json::object();
@@ -570,7 +583,12 @@ ActionResult AgentLoop::resolve_and_dispatch(
         ActionResult synthetic;
         synthetic.success = false;
         synthetic.error_code = "unknown_module";
-        synthetic.llm_facing_output = "no module named '" + call.module + "' is loaded";
+        std::string loaded;
+        for (std::size_t i = 0; i < modules.size(); ++i) {
+            if (i > 0) loaded += ", ";
+            loaded += modules[i]->module_id();
+        }
+        synthetic.llm_facing_output = "no module named '" + call.module + "' is loaded. Loaded modules are: [" + loaded + "]. Only invoke loaded modules.";
         return synthetic;
     }
 
@@ -589,8 +607,14 @@ ActionResult AgentLoop::resolve_and_dispatch(
             ActionResult synthetic;
             synthetic.success = false;
             synthetic.error_code = "action_not_exposed";
+            std::string exp;
+            for (std::size_t i = 0; i < load.expose_actions.size(); ++i) {
+                if (i > 0) exp += ", ";
+                exp += load.expose_actions[i];
+            }
             synthetic.llm_facing_output =
-                "action '" + call.action + "' is not exposed by module '" + call.module + "'";
+                "action '" + call.action + "' is not exposed by module '" + call.module +
+                "'. Exposed actions are: [" + exp + "].";
             return synthetic;
         }
         break;

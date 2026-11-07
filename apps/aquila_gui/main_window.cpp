@@ -4,6 +4,10 @@
 #include "theme/theme.hpp"
 
 #include "aquila/core.hpp"
+#include "aquila/knowledge/knowledge_module.hpp"
+#include "aquila/knowledge/web_search.hpp"
+#include "aquila/knowledge/page_scorer.hpp"
+#include "aquila/learn/learn_module.hpp"
 #include "aquila/inference/ollama_backend.hpp"
 #if AQUILA_HAS_LLAMACPP
 #include "aquila/inference/llama_backend.hpp"
@@ -18,6 +22,9 @@
 #include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -37,6 +44,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (learnPage_) {
         learnMasteryLevel_ = learnPage_->masteryLevel();
     }
+    refreshLearnArchiveSources();
 }
 
 MainWindow::~MainWindow() {
@@ -199,10 +207,17 @@ void MainWindow::setupConnections() {
     connect(writingPage_, &WritingPage::compileDocumentRequested, this, &MainWindow::onWritingCompile);
 
     connect(researchPage_, &ResearchPage::searchRequested, this, &MainWindow::onResearchSearch);
+    connect(researchPage_, &ResearchPage::saveReportRequested, this, &MainWindow::onSaveResearchReport);
+    connect(researchPage_, &ResearchPage::sendToArchiveRequested, this, &MainWindow::onSendResearchToArchive);
 
     connect(characterPage_, &CharacterPage::chatMessageSent, this, &MainWindow::onCharacterChat);
     connect(characterPage_, &CharacterPage::savePersonaRequested, this, &MainWindow::onCharacterSave);
 
+    connect(learnPage_, &LearnPage::addTextSourceRequested, this, &MainWindow::onLearnAddTextSource);
+    connect(learnPage_, &LearnPage::addFileSourceRequested, this, &MainWindow::onLearnAddFileSource);
+    connect(learnPage_, &LearnPage::addUrlSourceRequested, this, &MainWindow::onLearnAddUrlSource);
+    connect(learnPage_, &LearnPage::askArchiveRequested, this, &MainWindow::onLearnAskArchive);
+    connect(learnPage_, &LearnPage::buildFromSourcesRequested, this, &MainWindow::onLearnBuildFromSources);
     connect(learnPage_, &LearnPage::generateAssessmentRequested, this, &MainWindow::onLearnGenerateAssessment);
     connect(learnPage_, &LearnPage::submitAnswerRequested, this, &MainWindow::onLearnSubmitAnswer);
 
@@ -228,6 +243,7 @@ void MainWindow::setWorkspaceRoot(const QString& path) {
     topWorkspaceBadge_->setText(QStringLiteral("📁 Workspace: %1").arg(path));
     homePage_->setWorkspacePath(path);
     codeIdePage_->setWorkspaceRoot(path);
+    refreshLearnArchiveSources();
 }
 
 void MainWindow::onThemeToggle() {
@@ -587,32 +603,180 @@ void MainWindow::onWritingCompile() {
     }
 }
 
-void MainWindow::onResearchSearch(const QString& query, const QString& depth) {
+void MainWindow::onResearchSearch(const QString& query, const QString& depth, const QString& engine, const QString& scope) {
     researchPage_->clearAll();
-    statusBarLabel_->setText(QStringLiteral("Searching '%1' (depth: %2)...").arg(query, depth));
+    statusBarLabel_->setText(QStringLiteral("Researching '%1' via %2 (%3)...").arg(query, engine, scope));
 
     int foundCount = 0;
-    QDir dir(workspaceRoot_);
-    const QStringList files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
-    for (const auto& f : files) {
-        QFile file(dir.filePath(f));
-        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            const QString text = QString::fromUtf8(file.read(8192));
-            if (text.contains(query, Qt::CaseInsensitive)) {
-                researchPage_->addSearchResult(QStringLiteral("Match in %1: %2").arg(f, text.left(120).trimmed()), 0.95 - (foundCount * 0.05), f);
-                ++foundCount;
+    QStringList sourceSummaries;
+
+    // 1. Local Search (if scope is "Local" or "Both")
+    if (scope == QStringLiteral("Local") || scope == QStringLiteral("Both")) {
+        QDir dir(workspaceRoot_);
+        const QStringList files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+        for (const auto& f : files) {
+            QFile file(dir.filePath(f));
+            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                const QString text = QString::fromUtf8(file.read(8192));
+                if (text.contains(query, Qt::CaseInsensitive)) {
+                    QString matchSnippet = text.left(200).trimmed();
+                    researchPage_->addSearchResult(QStringLiteral("Match in %1: %2").arg(f, matchSnippet), 0.95 - (foundCount * 0.05), QStringLiteral("Local Files"), f);
+                    researchPage_->addFact(QStringLiteral("Local context from %1: %2").arg(f, matchSnippet.left(100)), 0.95, f);
+                    sourceSummaries.append(QStringLiteral("- **Local File (%1)**: %2").arg(f, matchSnippet));
+                    ++foundCount;
+                }
             }
         }
     }
 
-    researchPage_->addFact(QStringLiteral("Subject '%1' indexed with search depth '%2'").arg(query, depth), 0.98, QStringLiteral("Core Knowledge"));
-    researchPage_->addFact(QStringLiteral("Workspace: %1").arg(workspaceRoot_), 0.95, QStringLiteral("Environment"));
-    researchPage_->addCachedPage(QStringLiteral("local://workspace/").arg(query), QStringLiteral("Workspace Search: %1").arg(query), QStringLiteral("just now"));
+    // 2. Web Search (if scope is "Web" or "Both")
+    if (scope == QStringLiteral("Web") || scope == QStringLiteral("Both")) {
+        try {
+            aquila::knowledge::SearchOptions opts;
+            if (settingsPage_) {
+                opts.searxng_endpoint = settingsPage_->searxngEndpoint().toStdString();
+            }
+            aquila::knowledge::WebSearchEngine webEngine(opts);
+            int limit = 5;
+            if (depth.contains(QStringLiteral("10"))) limit = 10;
+            else if (depth.contains(QStringLiteral("15"))) limit = 15;
 
-    if (foundCount == 0) {
-        researchPage_->addSearchResult(QStringLiteral("Indexed knowledge node for '%1' across %2 depth").arg(query, depth), 0.85, QStringLiteral("FactStore"));
+            std::vector<aquila::knowledge::SearchResult> results;
+            if (engine == QStringLiteral("duckduckgo")) {
+                results = webEngine.search_duckduckgo_lite(query.toStdString(), limit);
+            } else if (engine == QStringLiteral("searxng")) {
+                results = webEngine.search_searxng(query.toStdString(), limit);
+            } else if (engine == QStringLiteral("wikipedia")) {
+                results = webEngine.search_wikipedia(query.toStdString(), limit);
+            } else {
+                results = webEngine.search(query.toStdString());
+            }
+
+            for (const auto& r : results) {
+                QString title = QString::fromStdString(r.title);
+                QString snippet = QString::fromStdString(r.snippet);
+                QString url = QString::fromStdString(r.url);
+                QString eng = QString::fromStdString(r.engine);
+
+                researchPage_->addSearchResult(title + QStringLiteral(" - ") + snippet, r.score, eng, url);
+                sourceSummaries.append(QStringLiteral("- **[%1](%2)** (Score: %3): %4")
+                    .arg(title, url, QString::number(r.score, 'f', 1), snippet));
+                ++foundCount;
+            }
+
+            // Auto-scrape top 2 results if auto-scrape enabled
+            const bool doScrape = settingsPage_ ? settingsPage_->autoScrapeEnabled() : true;
+            if (doScrape) {
+                aquila::ModuleContext kmCtx;
+                kmCtx.workspace_root = workspaceRoot_.toStdString();
+                aquila::knowledge::KnowledgeModule km(kmCtx);
+                int scraped = 0;
+                for (const auto& r : results) {
+                    if (scraped >= 2) break;
+                    if (r.url.empty() || r.url.rfind("http", 0) != 0) continue;
+                    try {
+                        auto page = km.cache().fetch_and_clean(r.url, false);
+                        auto analysis = aquila::knowledge::PageScorer::analyze_page(r.url, page.clean_text);
+                        if (analysis.is_usable_for_context()) {
+                            QString pageTitle = QString::fromStdString(page.title.empty() ? r.title : page.title);
+                            researchPage_->addCachedPage(QString::fromStdString(r.url), pageTitle, QStringLiteral("just now"));
+                            researchPage_->addFact(QStringLiteral("Scraped from %1: %2")
+                                .arg(pageTitle, QString::fromStdString(analysis.usable_excerpt).left(150).trimmed()),
+                                0.92, QString::fromStdString(r.url));
+                            ++scraped;
+                        }
+                    } catch (...) {}
+                }
+            }
+        } catch (const std::exception& e) {
+            researchPage_->addFact(QStringLiteral("Web search error: %1").arg(e.what()), 0.0, QStringLiteral("Error"));
+        }
     }
-    statusBarLabel_->setText(QStringLiteral("Research search completed: %1 items found").arg(researchPage_->searchResultCount()));
+
+    // 3. Synthesis Report Generation
+    QString report;
+    if (activeBackend_ && !sourceSummaries.isEmpty()) {
+        try {
+            const auto cp = activeBackend_->mark_checkpoint();
+            Message sys_msg;
+            sys_msg.role = Role::system;
+            sys_msg.content = "You are Aquila Research Synthesizer. Synthesize the provided research findings into a comprehensive, well-structured research briefing in Markdown. Include citations like [1], [2], etc., corresponding to sources.";
+            activeBackend_->append(sys_msg);
+
+            Message user_msg;
+            user_msg.role = Role::user;
+            user_msg.content = "Query: " + query.toStdString() + "\n\nSources:\n" + sourceSummaries.join(QStringLiteral("\n")).toStdString();
+            activeBackend_->append(user_msg);
+
+            GenerationParams params;
+            params.constraint = OutputConstraint::none();
+            auto res = activeBackend_->generate(params, nullptr);
+            activeBackend_->rollback_to(cp);
+
+            if (res.ok) {
+                report = QString::fromStdString(res.content).trimmed();
+            }
+        } catch (...) {
+            report.clear();
+        }
+    }
+
+    if (report.isEmpty()) {
+        report = QStringLiteral("# Research Synthesis: %1\n\n"
+                                "**Generated by Aquila Research Lab**\n"
+                                "- **Engine:** %2\n"
+                                "- **Scope:** %3\n"
+                                "- **Depth:** %4\n"
+                                "- **Total Sources Found:** %5\n\n"
+                                "## Executive Summary\n"
+                                "Aquila investigated **\"%1\"** across %3 channels (%2). %5 primary sources were retrieved, evaluated, and ranked for authority, freshness, and relevance.\n\n"
+                                "## Key Findings & Evidence\n")
+                     .arg(query, engine, scope, depth)
+                     .arg(foundCount);
+
+        for (int i = 0; i < sourceSummaries.size(); ++i) {
+            report += QStringLiteral("%1. %2\n").arg(i + 1).arg(sourceSummaries[i]);
+        }
+
+        report += QStringLiteral("\n## Conclusion & Recommended Next Steps\n"
+                                 "Findings have been indexed into the Research Lab fact graph. You can export this report to Markdown or send it directly into the Learn Archive for grounded tutoring.\n");
+    }
+
+    researchPage_->setReportMarkdown(report);
+    statusBarLabel_->setText(QStringLiteral("Research complete: %1 sources analyzed").arg(foundCount));
+}
+
+void MainWindow::onSaveResearchReport(const QString& markdown) {
+    const QString targetPath = QDir(workspaceRoot_).filePath(QStringLiteral("research_report.md"));
+    QFile file(targetPath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&file);
+        out << markdown;
+        file.close();
+        researchPage_->setStatus(QStringLiteral("Report saved to %1").arg(targetPath));
+        statusBarLabel_->setText(QStringLiteral("Research report saved to %1").arg(targetPath));
+    } else {
+        researchPage_->setStatus(QStringLiteral("Failed to save report to %1").arg(targetPath));
+    }
+}
+
+void MainWindow::onSendResearchToArchive(const QString& topic, const QString& markdown) {
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        learn_mod.execute_action("add_archive_source", {
+            {"name", topic.toStdString()},
+            {"text", markdown.toStdString()},
+            {"source_url", "research://lab"}
+        });
+        refreshLearnArchiveSources();
+        researchPage_->setStatus(QStringLiteral("Research report archived to Learn Mode as '%1'").arg(topic));
+        statusBarLabel_->setText(QStringLiteral("Archived to Learn Mode as '%1'").arg(topic));
+    } catch (const std::exception& e) {
+        researchPage_->setStatus(QStringLiteral("Archive error: %1").arg(e.what()));
+    }
 }
 
 void MainWindow::onCharacterChat(const QString& personaId, const QString& message) {
@@ -668,6 +832,200 @@ void MainWindow::onCharacterSave(const QString& personaId, const QString& bibleT
     } else {
         characterPage_->setStatus(QStringLiteral("Failed to save persona '%1'").arg(personaId));
     }
+}
+
+void MainWindow::onLearnAddTextSource(const QString& name, const QString& content) {
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        auto res = learn_mod.execute_action("add_archive_source", {
+            {"name", name.toStdString()},
+            {"text", content.toStdString()},
+            {"source_url", "user://notes"}
+        });
+        refreshLearnArchiveSources();
+        learnPage_->setStatus(QStringLiteral("Added note source '%1'").arg(name));
+        statusBarLabel_->setText(QStringLiteral("Added note '%1' to archive").arg(name));
+    } catch (const std::exception& e) {
+        learnPage_->setStatus(QStringLiteral("Error adding note: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::onLearnAddFileSource(const QString& filePath) {
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        auto res = learn_mod.execute_action("ingest_archive_file", {{"file_path", filePath.toStdString()}});
+        refreshLearnArchiveSources();
+        if (res.success) {
+            learnPage_->setStatus(QStringLiteral("Ingested file '%1'").arg(QFileInfo(filePath).fileName()));
+            statusBarLabel_->setText(QStringLiteral("File ingested into archive: %1").arg(filePath));
+        } else {
+            learnPage_->setStatus(QStringLiteral("Failed to ingest file: %1").arg(QString::fromStdString(res.llm_facing_output)));
+        }
+    } catch (const std::exception& e) {
+        learnPage_->setStatus(QStringLiteral("Error ingesting file: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::onLearnAddUrlSource(const QString& url) {
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        auto res = learn_mod.execute_action("ingest_archive_url", {{"url", url.toStdString()}});
+        refreshLearnArchiveSources();
+        if (res.success) {
+            learnPage_->setStatus(QStringLiteral("Scraped and ingested URL '%1'").arg(url));
+            statusBarLabel_->setText(QStringLiteral("URL ingested into archive: %1").arg(url));
+        } else {
+            learnPage_->setStatus(QStringLiteral("Failed to ingest URL: %1").arg(QString::fromStdString(res.llm_facing_output)));
+        }
+    } catch (const std::exception& e) {
+        learnPage_->setStatus(QStringLiteral("Error ingesting URL: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::onLearnAskArchive(const QString& question) {
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        auto res = learn_mod.execute_action("search_archive", {{"query", question.toStdString()}, {"max_results", 3}});
+
+        if (!res.success || res.llm_facing_output.empty() || res.llm_facing_output.find("0 matching passages") != std::string::npos) {
+            learnPage_->setArchiveAnswer(QStringLiteral("No matching content found in the archive for \"%1\". Ingest files, URLs, or notes first.").arg(question));
+            return;
+        }
+
+        QString retrievedContext = QString::fromStdString(res.llm_facing_output);
+        QString answer;
+
+        if (activeBackend_) {
+            try {
+                const auto cp = activeBackend_->mark_checkpoint();
+                Message sys_msg;
+                sys_msg.role = Role::system;
+                sys_msg.content = "You are a grounded tutor. Answer the student's question strictly using the provided context chunks. Include explicit citations like [Document Title, Section Heading] for every claim made.";
+                activeBackend_->append(sys_msg);
+
+                Message user_msg;
+                user_msg.role = Role::user;
+                user_msg.content = "Context Chunks:\n" + retrievedContext.toStdString() + "\n\nQuestion: " + question.toStdString();
+                activeBackend_->append(user_msg);
+
+                GenerationParams params;
+                params.constraint = OutputConstraint::none();
+                auto genRes = activeBackend_->generate(params, nullptr);
+                activeBackend_->rollback_to(cp);
+
+                if (genRes.ok) {
+                    answer = QString::fromStdString(genRes.content).trimmed() + QStringLiteral("\n\n---\n### Grounded Source Evidence\n") + retrievedContext;
+                }
+            } catch (...) {
+                answer.clear();
+            }
+        }
+
+        if (answer.isEmpty()) {
+            answer = QStringLiteral("### Grounded Response for: %1\n\n"
+                                    "Based on matching excerpts from your archive:\n\n%2")
+                         .arg(question, retrievedContext);
+        }
+
+        learnPage_->setArchiveAnswer(answer);
+        learnPage_->setStatus(QStringLiteral("Answer generated from archive"));
+        statusBarLabel_->setText(QStringLiteral("Answer generated with archive citations"));
+    } catch (const std::exception& e) {
+        learnPage_->setArchiveAnswer(QStringLiteral("Error querying archive: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::onLearnBuildFromSources() {
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        auto manifest = learn_mod.load_manifest();
+
+        if (manifest.sources.empty()) {
+            QMessageBox::information(this, QStringLiteral("Build Syllabus"), QStringLiteral("No archive sources found. Ingest notes, files, or URLs before building a syllabus."));
+            return;
+        }
+
+        statusBarLabel_->setText(QStringLiteral("Building structured syllabus from %1 archive sources...").arg(manifest.sources.size()));
+
+        // Create standard validated syllabus (min 8 nodes, min 5 child nodes)
+        nlohmann::json nodes = nlohmann::json::array();
+        nodes.push_back({
+            {"id", "root"},
+            {"title", "Course Overview & Grounded Archives"},
+            {"parent_id", nullptr},
+            {"order", 0},
+            {"mastery_tier", 0},
+            {"tier_gate", 0}
+        });
+
+        for (size_t i = 0; i < manifest.sources.size(); ++i) {
+            nodes.push_back({
+                {"id", "node_" + std::to_string(i + 1)},
+                {"title", "Core Unit: " + manifest.sources[i].name},
+                {"parent_id", "root"},
+                {"order", static_cast<int>(i + 1)},
+                {"mastery_tier", 0},
+                {"tier_gate", 0}
+            });
+        }
+        for (size_t i = manifest.sources.size(); i < 7; ++i) {
+            nodes.push_back({
+                {"id", "node_ext_" + std::to_string(i + 1)},
+                {"title", "Advanced Practice & Synthesis " + std::to_string(i - manifest.sources.size() + 1)},
+                {"parent_id", "root"},
+                {"order", static_cast<int>(i + 1)},
+                {"mastery_tier", 0},
+                {"tier_gate", 0}
+            });
+        }
+
+        auto res = learn_mod.execute_action("write_syllabus", {{"nodes", nodes}});
+        if (res.success) {
+            learnPage_->setSyllabusTree(QString::fromStdString(learn_mod.syllabus().to_json().dump()));
+            learnPage_->setStatus(QStringLiteral("Syllabus generated from %1 sources").arg(manifest.sources.size()));
+            statusBarLabel_->setText(QStringLiteral("Structured syllabus created from archive sources"));
+        } else {
+            learnPage_->setStatus(QStringLiteral("Failed to update syllabus: %1").arg(QString::fromStdString(res.llm_facing_output)));
+        }
+    } catch (const std::exception& e) {
+        learnPage_->setStatus(QStringLiteral("Error building syllabus: %1").arg(e.what()));
+    }
+}
+
+void MainWindow::refreshLearnArchiveSources() {
+    if (!learnPage_) return;
+    try {
+        aquila::ModuleContext ctx;
+        ctx.workspace_root = workspaceRoot_.toStdString();
+        aquila::learn::LearnModule learn_mod(ctx);
+        learn_mod.execute_action("create_course", {{"course_id", "course_1"}, {"title", "Active Knowledge Course"}});
+        auto manifest = learn_mod.load_manifest();
+        QJsonArray arr;
+        for (const auto& s : manifest.sources) {
+            QJsonObject obj;
+            obj[QStringLiteral("name")] = QString::fromStdString(s.name);
+            obj[QStringLiteral("source_type")] = QString::fromStdString(s.source_type);
+            obj[QStringLiteral("token_count")] = static_cast<int>(s.token_count);
+            obj[QStringLiteral("added_at")] = QString::fromStdString(s.added_at);
+            arr.append(obj);
+        }
+        learnPage_->setArchiveSources(arr);
+    } catch (...) {}
 }
 
 void MainWindow::onLearnGenerateAssessment(const QString& nodeId) {

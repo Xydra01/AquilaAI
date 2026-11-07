@@ -46,6 +46,8 @@ add_executable(aquila_unit_tests
     html_cleaner_test.cpp
     page_cache_test.cpp
     document_chunker_test.cpp
+    page_scorer_test.cpp
+    web_search_test.cpp
     knowledge_module_test.cpp
     knowledge_recipe_test.cpp
     document_module_test.cpp

@@ -31,6 +31,10 @@ FetchContent_Declare(rapidcheck
 
 FetchContent_MakeAvailable(rapidcheck)
 
+if(TARGET rapidcheck AND MSVC)
+    target_compile_options(rapidcheck PRIVATE /EHsc)
+endif()
+
 # Catch2 integration target, assembled here instead of via RapidCheck's own
 # rapidcheck_catch (see note above). The include is SYSTEM so RapidCheck's
 # templates never trip our /W4 /WX or -Wall -Wextra -Wpedantic -Werror lanes

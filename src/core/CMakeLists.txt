@@ -64,6 +64,8 @@ add_library(aquila_core STATIC
     knowledge/sha256.cpp
     knowledge/page_cache.cpp
     knowledge/document_chunker.cpp
+    knowledge/page_scorer.cpp
+    knowledge/web_search.cpp
     knowledge/knowledge_module.cpp)
 add_library(aquila::core ALIAS aquila_core)
 

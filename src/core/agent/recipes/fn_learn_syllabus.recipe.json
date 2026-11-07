@@ -12,6 +12,10 @@
         "finalize_course",
         "generate_assessment",
         "record_result",
+        "add_archive_source",
+        "ingest_archive_file",
+        "ingest_archive_url",
+        "list_archive_sources",
         "search_archive",
         "get_course_info"
       ]

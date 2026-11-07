@@ -56,6 +56,25 @@ struct Syllabus {
 
 [[nodiscard]] std::pair<bool, std::string> validate_syllabus_structure(const std::vector<SyllabusNode>& nodes);
 
+struct ArchiveSource {
+    std::string id;
+    std::string name;
+    std::string source_type;  // "file", "url", "text"
+    std::string file_path;    // relative or absolute path
+    std::size_t token_count = 0;
+    std::string added_at;
+
+    [[nodiscard]] Json to_json() const;
+    static ArchiveSource from_json(const Json& j);
+};
+
+struct ArchiveManifest {
+    std::vector<ArchiveSource> sources;
+
+    [[nodiscard]] Json to_json() const;
+    static ArchiveManifest from_json(const Json& j);
+};
+
 // LearnModule (Classroom & Archives domain, 5.2):
 // Owns courses, syllabus hierarchy validation, mastery progression, and archive retrieval.
 class LearnModule final : public ModuleBase {
@@ -79,6 +98,11 @@ public:
     [[nodiscard]] std::filesystem::path course_dir() const;
     [[nodiscard]] std::filesystem::path syllabus_file() const;
     [[nodiscard]] std::filesystem::path assessments_dir() const;
+    [[nodiscard]] std::filesystem::path archive_dir() const;
+    [[nodiscard]] std::filesystem::path archive_manifest_file() const;
+    [[nodiscard]] std::filesystem::path archive_sources_dir() const;
+    [[nodiscard]] ArchiveManifest load_manifest() const;
+    void save_manifest(const ArchiveManifest& manifest) const;
 
 protected:
     ActionResult run(const std::string& action_name, const Json& args) override;

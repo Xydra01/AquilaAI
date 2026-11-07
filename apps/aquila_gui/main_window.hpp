@@ -55,9 +55,16 @@ public slots:
     void onCodeIdeInlineEdit(const QString& prompt, const QString& selectedText, const QString& filePath);
     void onWritingSectionRevise(const QString& sectionContent, const QString& instruction);
     void onWritingCompile();
-    void onResearchSearch(const QString& query, const QString& depth);
+    void onResearchSearch(const QString& query, const QString& depth = QStringLiteral("Standard (5 sources)"), const QString& engine = QStringLiteral("duckduckgo"), const QString& scope = QStringLiteral("Both"));
+    void onSaveResearchReport(const QString& markdown);
+    void onSendResearchToArchive(const QString& topic, const QString& markdown);
     void onCharacterChat(const QString& personaId, const QString& message);
     void onCharacterSave(const QString& personaId, const QString& bibleText);
+    void onLearnAddTextSource(const QString& name, const QString& content);
+    void onLearnAddFileSource(const QString& filePath);
+    void onLearnAddUrlSource(const QString& url);
+    void onLearnAskArchive(const QString& question);
+    void onLearnBuildFromSources();
     void onLearnGenerateAssessment(const QString& nodeId);
     void onLearnSubmitAnswer(int selectedOption);
     void onOpenSetupWizard();
@@ -65,6 +72,7 @@ public slots:
 private:
     void setupUi();
     void setupConnections();
+    void refreshLearnArchiveSources();
     std::shared_ptr<aquila::IInferenceBackend> createBackend();
 
     NavRailWidget* navRail_ = nullptr;

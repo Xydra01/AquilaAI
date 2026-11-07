@@ -3,14 +3,17 @@
 #include "aquila/knowledge/document_chunker.hpp"
 #include "aquila/knowledge/embedding.hpp"
 #include "aquila/knowledge/page_cache.hpp"
+#include "aquila/knowledge/page_scorer.hpp"
 #include "aquila/knowledge/vector_index.hpp"
 #include "aquila/knowledge/web_fetcher.hpp"
+#include "aquila/knowledge/web_search.hpp"
 #include "aquila/modules/module.hpp"
 #include "aquila/storage/fact_store.hpp"
 #include "aquila/storage/sqlite_db.hpp"
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace aquila::knowledge {
@@ -35,6 +38,7 @@ public:
     PageCache& cache() noexcept { return *page_cache_; }
     LocalDocIndex& doc_index() noexcept { return *doc_index_; }
     WebFetcher& fetcher() noexcept { return page_cache_->fetcher(); }
+    WebSearchEngine& search_engine() noexcept { return search_engine_; }
     storage::SqliteDb& db() noexcept { return fact_store_->db(); }
 
 protected:
@@ -51,6 +55,8 @@ private:
     std::unique_ptr<VectorIndex> vector_index_;
     std::unique_ptr<PageCache> page_cache_;
     std::unique_ptr<LocalDocIndex> doc_index_;
+    WebSearchEngine search_engine_;
+    std::unordered_map<std::string, int> host_visits_;
 };
 
 } // namespace aquila::knowledge

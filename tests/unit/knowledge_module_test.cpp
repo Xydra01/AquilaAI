@@ -19,7 +19,7 @@ TEST_CASE("KnowledgeModule registration and action dispatch", "[knowledge_module
     REQUIRE(km != nullptr);
 
     auto actions = km->get_actions();
-    CHECK(actions.size() == 5);
+    CHECK(actions.size() == 6);
 
     SECTION("store_fact and get_all_facts lifecycle") {
         auto res1 = km->execute_action("store_fact", Json{

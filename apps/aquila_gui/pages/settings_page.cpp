@@ -106,6 +106,28 @@ SettingsPage::SettingsPage(QWidget* parent)
 
     layout->addWidget(appGroup);
 
+    // Group 4: Web Search & Knowledge Ingestion Settings
+    auto* searchGroup = new QGroupBox(QStringLiteral("Web Search & Knowledge Ingestion Settings"), container);
+    auto* searchForm = new QFormLayout(searchGroup);
+
+    searchProviderCombo_ = new QComboBox(searchGroup);
+    searchProviderCombo_->addItems({
+        QStringLiteral("DuckDuckGo Lite (Free / Zero Docker / Built-in)"),
+        QStringLiteral("Local SearXNG (http://127.0.0.1:8888)"),
+        QStringLiteral("Wikipedia OpenSearch")
+    });
+    searchForm->addRow(QStringLiteral("Default Search Engine:"), searchProviderCombo_);
+
+    searxngEndpointInput_ = new QLineEdit(searchGroup);
+    searxngEndpointInput_->setText(QStringLiteral("http://127.0.0.1:8888"));
+    searchForm->addRow(QStringLiteral("SearXNG Endpoint:"), searxngEndpointInput_);
+
+    autoScrapeCheck_ = new QCheckBox(QStringLiteral("Auto-scrape and extract clean text from top-ranked authoritative pages"), searchGroup);
+    autoScrapeCheck_->setChecked(true);
+    searchForm->addRow(QStringLiteral("Smart Scraping:"), autoScrapeCheck_);
+
+    layout->addWidget(searchGroup);
+
     // Save Button
     saveBtn_ = new QPushButton(QStringLiteral("✓ Save & Apply Settings"), container);
     saveBtn_->setProperty("accent", true);
@@ -203,6 +225,20 @@ double SettingsPage::temperature() const {
 
 QString SettingsPage::workspacePath() const {
     return workspaceInput_->text();
+}
+
+QString SettingsPage::searchProvider() const {
+    if (searchProviderCombo_->currentIndex() == 1) return QStringLiteral("searxng");
+    if (searchProviderCombo_->currentIndex() == 2) return QStringLiteral("wikipedia");
+    return QStringLiteral("duckduckgo");
+}
+
+QString SettingsPage::searxngEndpoint() const {
+    return searxngEndpointInput_->text().trimmed();
+}
+
+bool SettingsPage::autoScrapeEnabled() const {
+    return autoScrapeCheck_->isChecked();
 }
 
 void SettingsPage::setModelName(const QString& name) {

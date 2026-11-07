@@ -58,6 +58,19 @@ void KnowledgeModule::init_db(const std::string& db_path_str) {
 std::vector<ActionSchema> KnowledgeModule::get_actions() const {
     return {
         ActionSchema{
+            .action_name = "web_search",
+            .description = "Search the web using DuckDuckGo, SearXNG, or Wikipedia, with automatic relevance and authority scoring, anti-trap defense, and deep page scraping",
+            .parameters_json_schema = Json{
+                {"type", "object"},
+                {"properties", {
+                    {"query", {{"type", "string"}, {"description", "Search query or natural language research topic"}}},
+                    {"max_results", {{"type", "integer"}, {"description", "Maximum number of search results to return"}, {"default", 5}}},
+                    {"auto_scrape", {{"type", "boolean"}, {"description", "Automatically scrape and extract clean substantive markdown from top authoritative results"}, {"default", true}}}
+                }},
+                {"required", {"query"}}
+            }
+        },
+        ActionSchema{
             .action_name = "search_local_docs",
             .description = "Search local repository markdown documentation using hybrid dense vector and sparse lexical retrieval",
             .parameters_json_schema = Json{
@@ -187,6 +200,67 @@ void KnowledgeModule::restore_state_snapshot(const Json& snapshot) {
 }
 
 ActionResult KnowledgeModule::run(const std::string& action_name, const Json& args) {
+    if (action_name == "web_search") {
+        const auto query = args.at("query").get<std::string>();
+        const int max_results = args.value("max_results", 5);
+        const bool auto_scrape = args.value("auto_scrape", true);
+
+        auto results = search_engine_.search(query);
+        if (results.empty()) {
+            return ok("No search results found for query: '" + query + "'.");
+        }
+
+        std::ostringstream ss;
+        ss << "Web Search Results for '" << query << "':\n\n";
+        for (std::size_t i = 0; i < results.size() && static_cast<int>(i) < max_results; ++i) {
+            const auto& res = results[i];
+            ss << (i + 1) << ". " << res.title << "\n";
+            ss << "   URL: " << res.url << "\n";
+            ss << "   Engine: " << res.engine << " (Relevance & Authority: " << std::fixed << std::setprecision(1) << res.score << ")\n";
+            if (!res.snippet.empty()) {
+                ss << "   Snippet: " << res.snippet << "\n";
+            }
+            ss << "\n";
+        }
+
+        if (auto_scrape) {
+            int scraped_count = 0;
+            for (std::size_t i = 0; i < results.size() && scraped_count < 2; ++i) {
+                const auto& res = results[i];
+                std::string host;
+                auto scheme_pos = res.url.find("://");
+                if (scheme_pos != std::string::npos) {
+                    auto rest = res.url.substr(scheme_pos + 3);
+                    auto slash = rest.find('/');
+                    host = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+                } else {
+                    host = res.url;
+                }
+
+                if (host_visits_[host] >= 3) {
+                    ss << "(OS Note: Host budget reached for " << host << " [3 visits]. Skipping deep scrape.)\n\n";
+                    continue;
+                }
+                ++host_visits_[host];
+
+                try {
+                    auto page = page_cache_->fetch_and_clean(res.url, false);
+                    auto analysis = PageScorer::analyze_page(res.url, page.clean_text);
+                    std::string formatted = PageScorer::format_tool_result_for_quality(res.url, page.clean_text, analysis);
+                    ss << "--- OS SMART-SCRAPED PAGE: " << res.url << " ---\n"
+                       << "Title: " << page.title << "\n"
+                       << formatted << "\n"
+                       << "--- END SMART-SCRAPE ---\n\n";
+                    ++scraped_count;
+                } catch (const std::exception& e) {
+                    ss << "(OS Note: Auto-scrape failed for " << res.url << ": " << e.what() << ")\n\n";
+                }
+            }
+        }
+
+        return capped(ok(ss.str()));
+    }
+
     if (action_name == "search_local_docs") {
         const auto query = args.at("query").get<std::string>();
         const int max_results = args.value("max_results", 5);
@@ -197,10 +271,28 @@ ActionResult KnowledgeModule::run(const std::string& action_name, const Json& ar
     if (action_name == "fetch_and_clean_url") {
         const auto url = args.at("url").get<std::string>();
         const bool bypass = args.value("bypass_cache", false);
+
+        std::string host;
+        auto scheme_pos = url.find("://");
+        if (scheme_pos != std::string::npos) {
+            auto rest = url.substr(scheme_pos + 3);
+            auto slash = rest.find('/');
+            host = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+        } else {
+            host = url;
+        }
+
+        if (host_visits_[host] >= 3) {
+            return ok("⚠️ OS Note: Host visit cap (3 visits) reached for " + host + " to prevent crawler traps. Full body withheld.");
+        }
+        ++host_visits_[host];
+
         try {
             auto page = page_cache_->fetch_and_clean(url, bypass);
+            auto analysis = PageScorer::analyze_page(url, page.clean_text);
+            std::string formatted = PageScorer::format_tool_result_for_quality(url, page.clean_text, analysis);
             std::string out = "Title: " + page.title + "\nSource: " + page.url +
-                              (page.from_cache ? " (cached)\n\n" : "\n\n") + page.clean_text;
+                              (page.from_cache ? " (cached)\n\n" : "\n\n") + formatted;
             return capped(ok(out));
         } catch (const FetchError& e) {
             return fail("fetch_error", e.what());

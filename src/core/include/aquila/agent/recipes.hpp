@@ -123,6 +123,8 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
+        "web_search",
+        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
         "get_all_facts"
@@ -157,7 +159,7 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Search local documentation and corpus for relevant material",
+    "Search web or local documentation for relevant material using KnowledgeModule web_search",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
     "Summarize final synthesis into report file using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
@@ -174,6 +176,8 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
+        "web_search",
+        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
         "get_all_facts"
@@ -286,6 +290,8 @@ inline constexpr std::string_view kFnResearchChatLightRecipeJson = R"AQ({
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
+        "web_search",
+        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
         "get_all_facts"
@@ -484,6 +490,10 @@ inline constexpr std::string_view kFnLearnSyllabusRecipeJson = R"AQ({
         "finalize_course",
         "generate_assessment",
         "record_result",
+        "add_archive_source",
+        "ingest_archive_file",
+        "ingest_archive_url",
+        "list_archive_sources",
         "search_archive",
         "get_course_info"
       ]
@@ -537,6 +547,10 @@ inline constexpr std::string_view kFnLearnSyllabusWebRecipeJson = R"AQ({
         "finalize_course",
         "generate_assessment",
         "record_result",
+        "add_archive_source",
+        "ingest_archive_file",
+        "ingest_archive_url",
+        "list_archive_sources",
         "search_archive",
         "get_course_info"
       ]
@@ -545,6 +559,8 @@ inline constexpr std::string_view kFnLearnSyllabusWebRecipeJson = R"AQ({
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
+        "web_search",
+        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact"
       ]

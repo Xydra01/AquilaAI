@@ -6,6 +6,8 @@
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
+        "web_search",
+        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
         "get_all_facts"
@@ -40,7 +42,7 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Search local documentation and corpus for relevant material",
+    "Search web or local documentation for relevant material using KnowledgeModule web_search",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
     "Summarize final synthesis into report file using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"

@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.28)
 
 project(AquilaCpp VERSION 0.0.1 LANGUAGES C CXX)
 
+if(MSVC)
+    find_program(MSVC_LIB_TOOL NAMES lib.exe REQUIRED)
+    set(CMAKE_AR "${MSVC_LIB_TOOL}" CACHE FILEPATH "Archiver" FORCE)
+    set(CMAKE_C_COMPILER_AR "${MSVC_LIB_TOOL}" CACHE FILEPATH "C Archiver" FORCE)
+    set(CMAKE_CXX_COMPILER_AR "${MSVC_LIB_TOOL}" CACHE FILEPATH "CXX Archiver" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -11,6 +18,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 if(WIN32)
     # Windows 10 is the minimum target (cpp-httplib requires it; llvm-mingw defaults lower).
     add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+    endif()
 endif()
 
 option(AQUILA_BUILD_GUI "Build the Qt 6 Widgets GUI (requires the Qt MSVC SDK)" OFF)
