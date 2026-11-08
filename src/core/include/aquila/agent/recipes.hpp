@@ -454,7 +454,8 @@ inline constexpr std::string_view kFnWritingSourcesRecipeJson = R"AQ({
       "expose_actions": [
         "init_document",
         "write_section",
-        "compile_document"
+        "compile_document",
+        "verify_manuscript_quality"
       ]
     },
     {
@@ -470,7 +471,7 @@ inline constexpr std::string_view kFnWritingSourcesRecipeJson = R"AQ({
       "initial_state": {
         "required_fields": [
           "active_objective",
-          "verified_facts"
+          "next_immediate_action"
         ]
       },
       "expose_actions": [
@@ -481,10 +482,18 @@ inline constexpr std::string_view kFnWritingSourcesRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Search reference documents for quotes and sources",
-    "Write sourced sections",
-    "Compile finished document"
-  ]
+    "Initialize document canvas with target title via DocumentModule.init_document",
+    "Search reference documents or record key background facts via KnowledgeModule",
+    "Draft multiple sourced sections with detailed paragraphs (minimum 250 words total across at least 2 sections) via DocumentModule.write_section",
+    "Compile finished document via DocumentModule.compile_document",
+    "Call OrchestratorModule complete_recipe"
+  ],
+  "post_llm_validation_hook": {
+    "module": "DocumentModule",
+    "action": "verify_manuscript_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Manuscript verification failed. Ensure your draft contains at least 2 distinct sections, has at least 250 words total, has no placeholder tokens, and has substantive prose before completing."
+  }
 }
 )AQ";
 
@@ -919,7 +928,8 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
         "run_python",
         "pip_list",
         "exec_sandboxed_cmd",
-        "run_test_suite"
+        "run_test_suite",
+        "verify_implementation"
       ]
     },
     {
@@ -936,9 +946,6 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
       "initial_state": {
         "required_fields": [
           "active_objective",
-          "current_hypothesis",
-          "verified_facts",
-          "failed_approaches_do_not_repeat",
           "next_immediate_action"
         ]
       },
@@ -951,11 +958,17 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Write the script or implementation file using WorkspaceModule create_file or ExecutionModule run_python",
-    "Install any required third-party packages using ExecutionModule pip_install",
+    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility)",
     "Run and verify execution using ExecutionModule run_python",
+    "Verify implementation quality via ExecutionModule verify_implementation",
     "Call OrchestratorModule complete_recipe"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "ExecutionModule",
+    "action": "verify_implementation",
+    "must_succeed": true,
+    "on_failure_instruction": "Implementation verification failed. Ensure you have written a complete, substantive script without stub bodies (no pass or TODO), and that it executes cleanly with exit code 0."
+  }
 }
 )AQ";
 

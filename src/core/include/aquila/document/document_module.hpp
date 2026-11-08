@@ -58,6 +58,7 @@ protected:
 private:
     void save_active_draft();
     bool load_active_draft();
+    bool load_from_compiled_file();
     void clear_active_draft();
 
     ModuleContext ctx_;

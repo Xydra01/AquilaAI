@@ -307,6 +307,60 @@ bool DocumentModule::load_active_draft() {
     }
 }
 
+bool DocumentModule::load_from_compiled_file() {
+    std::error_code ec;
+    if (!std::filesystem::exists(drafts_dir(), ec)) return false;
+    std::filesystem::path newest_file;
+    std::filesystem::file_time_type newest_time;
+    for (const auto& entry : std::filesystem::directory_iterator(drafts_dir(), ec)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".md") {
+            if (newest_file.empty() || entry.last_write_time() > newest_time) {
+                newest_file = entry.path();
+                newest_time = entry.last_write_time();
+            }
+        }
+    }
+    if (newest_file.empty()) return false;
+    std::ifstream in(newest_file, std::ios::binary);
+    if (!in.is_open()) return false;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    const std::string content = ss.str();
+    if (content.empty()) return false;
+
+    draft_ = DraftState{};
+    draft_.title = newest_file.stem().string();
+
+    std::istringstream stream(content);
+    std::string line;
+    std::string current_header;
+    std::string current_body;
+    while (std::getline(stream, line)) {
+        const std::size_t first = line.find_first_not_of(" \t\r\n");
+        if (first != std::string::npos && line[first] == '#') {
+            const bool is_h1 = (line.size() >= first + 2 && line[first + 1] == ' ');
+            if (is_h1 && draft_.sections.empty() && current_header.empty()) {
+                draft_.title = trim(line.substr(first + 2));
+                continue;
+            }
+            if (!current_header.empty()) {
+                draft_.sections.push_back(DocumentSection{current_header, trim(current_body)});
+                current_body.clear();
+            }
+            current_header = normalize_section_header(line.substr(first));
+        } else {
+            current_body += line + "\n";
+        }
+    }
+    if (!current_header.empty()) {
+        draft_.sections.push_back(DocumentSection{current_header, trim(current_body)});
+    }
+    draft_.word_count = draft_.compute_word_count();
+    active_ = true;
+    save_active_draft();
+    return true;
+}
+
 void DocumentModule::clear_active_draft() {
     std::error_code ec;
     std::filesystem::remove(active_draft_file(), ec);
@@ -356,7 +410,10 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         if (!active_) {
             load_active_draft();
             if (!active_) {
-                return fail("no_active_document", "❌ Error: No active document found. Use init_document first.");
+                load_from_compiled_file();
+                if (!active_) {
+                    return fail("no_active_document", "❌ Error: No active document found. Use init_document first.");
+                }
             }
         }
         const std::string raw_header = args.value("section_header", "");
@@ -379,6 +436,29 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         draft_.word_count = draft_.compute_word_count();
         save_active_draft();
 
+        // Keep compiled markdown file on disk synchronized
+        if (!draft_.title.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(drafts_dir(), ec);
+            const auto save_path = drafts_dir() / (draft_.title + ".md");
+            std::string md = "# " + draft_.title + "\n\n";
+            if (!draft_.synopsis.empty()) {
+                md += draft_.synopsis + "\n\n";
+            }
+            for (const auto& sec : draft_.sections) {
+                const auto norm_h = normalize_section_header(sec.header);
+                const auto clean_body = strip_redundant_leading_heading(sec.content, norm_h);
+                md += "## " + norm_h + "\n\n";
+                if (!clean_body.empty()) {
+                    md += clean_body + "\n\n";
+                }
+            }
+            std::ofstream out(save_path, std::ios::trunc | std::ios::binary);
+            if (out.is_open()) {
+                out.write(md.data(), static_cast<std::streamsize>(md.size()));
+            }
+        }
+
         const std::size_t sec_words = count_words(body);
         const std::size_t total_words = draft_.word_count;
         if (exists) {
@@ -394,6 +474,9 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
     if (action_name == "read_outline") {
         if (!active_) {
             load_active_draft();
+            if (!active_) {
+                load_from_compiled_file();
+            }
         }
         if (!active_ || draft_.sections.empty()) {
             return ok("Document canvas is currently empty. Use write_section to add sections.");
@@ -411,7 +494,10 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         if (!active_) {
             load_active_draft();
             if (!active_) {
-                return fail("no_active_document", "❌ Error: No active document found. Use init_document or write_section first.");
+                load_from_compiled_file();
+                if (!active_) {
+                    return fail("no_active_document", "❌ Error: No active document found. Use init_document or write_section first.");
+                }
             }
         }
         const std::string raw_header = args.value("section_header", "");
@@ -462,16 +548,18 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         out.write(md.data(), static_cast<std::streamsize>(md.size()));
         out.close();
 
+        const std::size_t final_words = draft_.word_count;
+        const std::size_t final_sections = draft_.sections.size();
         clear_active_draft();
         std::string res_msg = "✅ SUCCESS: Final document compiled and saved to " + save_path.generic_string() + " (" +
-                              std::to_string(draft_.word_count) + " words across " +
-                              std::to_string(draft_.sections.size()) + " sections).";
-        if (draft_.word_count < 250 || draft_.sections.size() < 2) {
-            res_msg += "\n⚠️ Note: The document currently has " + std::to_string(draft_.word_count) +
-                       " words and " + std::to_string(draft_.sections.size()) +
-                       " sections. The quality gate requires at least 250 words across 2 sections. Add more substantive sections with write_section before completing.";
+                              std::to_string(final_words) + " words across " +
+                              std::to_string(final_sections) + " sections).";
+        if (final_words < 250 || final_sections < 2) {
+            res_msg += "\n⚠️ Quality Gate Warning: The manuscript has only " + std::to_string(final_words) +
+                       " words across " + std::to_string(final_sections) +
+                       " sections. The final quality gate requires at least 250 words across at least 2 sections. Do NOT call complete_recipe yet; call DocumentModule.write_section to add more detailed paragraphs first.";
         } else {
-            res_msg += " Quality criteria satisfied; now call OrchestratorModule.complete_recipe to conclude.";
+            res_msg += " Quality criteria satisfied! Now call OrchestratorModule.complete_recipe to conclude.";
         }
         return ok(res_msg);
     }
@@ -564,8 +652,10 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
                             " sections (minimum " + std::to_string(min_sections) + " required).");
             }
             if (static_cast<int>(total_words) < min_words) {
+                const int needed = min_words - static_cast<int>(total_words);
                 return fail("insufficient_words", "❌ Manuscript has only " + std::to_string(total_words) +
-                            " words (minimum " + std::to_string(min_words) + " required). Provide substantive, detailed paragraphs.");
+                            " words (minimum " + std::to_string(min_words) + " required). Add " +
+                            std::to_string(needed) + " more words via DocumentModule.write_section before completing.");
             }
             for (std::size_t i = 0; i < sections.size(); ++i) {
                 const auto stripped = trim(sections[i]);
