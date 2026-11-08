@@ -74,6 +74,7 @@ private:
     void setupConnections();
     void refreshLearnArchiveSources();
     std::shared_ptr<aquila::IInferenceBackend> createBackend();
+    bool ensureBackendReady();
 
     NavRailWidget* navRail_ = nullptr;
     QStackedWidget* pageStack_ = nullptr;

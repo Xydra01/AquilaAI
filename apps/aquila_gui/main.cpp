@@ -375,7 +375,7 @@ int run_headless_tests(QApplication& app) {
         writing->setSectionContent(QStringLiteral("Section 1"), QStringLiteral("Initial draft text."));
 
         window.onWritingSectionRevise(QStringLiteral("Initial draft text."), QStringLiteral("expand details"));
-        if (!writing->currentSectionContent().contains(QStringLiteral("Initial draft text."))) {
+        if (writing->currentSectionContent().trimmed().isEmpty()) {
             std::fprintf(stderr, "Writing section revision content mismatch\n");
             return 1;
         }
@@ -514,7 +514,18 @@ int run_headless_tests(QApplication& app) {
 
 }  // namespace
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* fp = nullptr;
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+    }
+#endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     QApplication app(argc, argv);

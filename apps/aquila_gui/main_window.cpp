@@ -41,6 +41,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     setupUi();
     setupConnections();
+    onSettingsApplied();
     if (learnPage_) {
         learnMasteryLevel_ = learnPage_->masteryLevel();
     }
@@ -317,6 +318,10 @@ std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
             lcfg.model_path = m.toStdString();
         }
 
+        if (!std::filesystem::exists(lcfg.model_path)) {
+            throw std::runtime_error("GGUF model file not found: '" + lcfg.model_path + "'. Please check the path in Settings.");
+        }
+
         lcfg.profile = isGpu ? ComputeProfile::gpu_high_vram : ComputeProfile::cpu_low_spec_edge;
         lcfg.n_ctx = static_cast<std::uint32_t>(settingsPage_->contextWindow());
         lcfg.n_gpu_layers = isGpu ? 999 : 0;
@@ -325,8 +330,30 @@ std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
 #endif
     OllamaConfig cfg;
     cfg.base_url = settingsPage_->ollamaHost().toStdString();
-    cfg.model = settingsPage_->modelName().toStdString();
+    QString m = settingsPage_->modelName().trimmed();
+    if (m.isEmpty() || m == QStringLiteral("aquila")) {
+        cfg.model = "llama3.2:latest";
+    } else {
+        cfg.model = m.toStdString();
+    }
     return std::make_shared<OllamaHttpBackend>(cfg);
+}
+
+bool MainWindow::ensureBackendReady() {
+    if (activeBackend_) return true;
+
+    statusBarLabel_->setText(QStringLiteral("Loading model weights into VRAM..."));
+    qApp->processEvents();
+    try {
+        activeBackend_ = createBackend();
+        statusBarLabel_->setText(QStringLiteral("Model weights loaded successfully."));
+        return true;
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, QStringLiteral("Backend Error"),
+                              QStringLiteral("Failed to initialize inference backend:\n%1").arg(QString::fromUtf8(e.what())));
+        statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
+        return false;
+    }
 }
 
 void MainWindow::onChatSend(const QString& prompt, const QStringList& attachments) {
@@ -337,16 +364,9 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
         activeWorker_->wait();
     }
 
-    if (!activeBackend_) {
-        statusBarLabel_->setText(QStringLiteral("Loading model weights..."));
-        qApp->processEvents();
-        try {
-            activeBackend_ = createBackend();
-        } catch (const std::exception& e) {
-            chatPage_->appendAssistantMessage(QStringLiteral("❌ Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
-            statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
-            return;
-        }
+    if (!ensureBackendReady()) {
+        chatPage_->appendAssistantMessage(QStringLiteral("❌ Failed to initialize backend. Please configure model settings in the Settings page."));
+        return;
     }
 
     QString fullPrompt = prompt;
@@ -429,17 +449,9 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         activeWorker_->wait();
     }
 
-    if (!activeBackend_) {
-        statusBarLabel_->setText(QStringLiteral("Loading model weights..."));
-        qApp->processEvents();
-        try {
-            activeBackend_ = createBackend();
-        } catch (const std::exception& e) {
-            QMessageBox::critical(this, QStringLiteral("Backend Error"),
-                                  QStringLiteral("Failed to initialize backend:\n%1").arg(QString::fromUtf8(e.what())));
-            statusBarLabel_->setText(QStringLiteral("Backend initialization failed"));
-            return;
-        }
+    if (!ensureBackendReady()) {
+        taskPage_->setRunning(false);
+        return;
     }
 
     RecipeCartridge recipe = fn_dev_implement_recipe();
@@ -454,11 +466,22 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
     config.task_id = "gui-task-" + recipe.recipe_id;
     config.mode = "task";
     config.context_strategy = CondenserStrategy::sac;
+    if (activeBackend_) {
+        config.tier = RuntimeTierConfig::for_profile(activeBackend_->active_profile());
+    }
 
     taskPage_->setRunning(true);
     statusBarLabel_->setText(QStringLiteral("Running %1...").arg(recipeId));
 
-    const std::string goal = prompt.isEmpty() ? recipe.goal_template : prompt.toStdString();
+    std::string goal = prompt.toStdString();
+    if (goal.empty()) {
+        goal = recipe.goal_template;
+        const std::string marker = "{{user_instructions}}";
+        const auto pos = goal.find(marker);
+        if (pos != std::string::npos) {
+            goal.replace(pos, marker.length(), "technical overview and key architectural findings");
+        }
+    }
     activeWorker_ = new AgentWorker(activeBackend_, recipe, goal, config, workspaceRoot_.toStdString(), this);
 
     connect(activeWorker_, &AgentWorker::turnCompleted, taskPage_,
@@ -470,11 +493,23 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         statusBarLabel_->setText(status);
         taskPage_->setStatus(status);
     });
-    connect(activeWorker_, &AgentWorker::finished, this, [this](bool success, const QString& output) {
+    connect(activeWorker_, &AgentWorker::finished, this, [this, recipeId](bool success, const QString& output) {
         taskPage_->setRunning(false);
         statusBarLabel_->setText(success ? QStringLiteral("Task Succeeded") : QStringLiteral("Task Failed"));
         if (!output.isEmpty()) {
             taskPage_->setStatus(QStringLiteral("Completed: %1").arg(output));
+        }
+        if (success) {
+            const QDir dir(workspaceRoot_);
+            if (recipeId.contains(QStringLiteral("research")) && dir.exists(QStringLiteral("research_report.md"))) {
+                QMessageBox::information(this, QStringLiteral("Research Complete"),
+                    QStringLiteral("Research deliverable successfully generated at:\n%1")
+                    .arg(dir.filePath(QStringLiteral("research_report.md"))));
+            } else if (recipeId.contains(QStringLiteral("writing")) && dir.exists(QStringLiteral("compiled_document.md"))) {
+                QMessageBox::information(this, QStringLiteral("Writing Complete"),
+                    QStringLiteral("Document deliverable successfully compiled at:\n%1")
+                    .arg(dir.filePath(QStringLiteral("compiled_document.md"))));
+            }
         }
     });
 
@@ -510,7 +545,7 @@ void MainWindow::onBrowseWorkspace() {
 void MainWindow::onCodeIdeInlineEdit(const QString& prompt, const QString& selectedText, const QString& filePath) {
     statusBarLabel_->setText(QStringLiteral("Generating inline refactor..."));
     QString replacement;
-    if (activeBackend_) {
+    if (ensureBackendReady()) {
         try {
             const auto cp = activeBackend_->mark_checkpoint();
             Message sys_msg;
@@ -550,7 +585,7 @@ void MainWindow::onCodeIdeInlineEdit(const QString& prompt, const QString& selec
 void MainWindow::onWritingSectionRevise(const QString& sectionContent, const QString& instruction) {
     statusBarLabel_->setText(QStringLiteral("Revising section..."));
     QString revised;
-    if (activeBackend_) {
+    if (ensureBackendReady()) {
         try {
             const auto cp = activeBackend_->mark_checkpoint();
             Message sys_msg;
@@ -695,7 +730,9 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
 
     // 3. Synthesis Report Generation
     QString report;
-    if (activeBackend_ && !sourceSummaries.isEmpty()) {
+    if (ensureBackendReady() && !sourceSummaries.isEmpty()) {
+        statusBarLabel_->setText(QStringLiteral("Synthesizing research briefing with model in VRAM..."));
+        qApp->processEvents();
         try {
             const auto cp = activeBackend_->mark_checkpoint();
             Message sys_msg;
@@ -710,36 +747,45 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
 
             GenerationParams params;
             params.constraint = OutputConstraint::none();
+            params.temperature = 0.3;
+            params.max_tokens = 2048;
             auto res = activeBackend_->generate(params, nullptr);
             activeBackend_->rollback_to(cp);
 
-            if (res.ok) {
+            if (res.ok && !res.content.empty()) {
                 report = QString::fromStdString(res.content).trimmed();
+            } else if (!res.ok) {
+                researchPage_->addFact(QStringLiteral("LLM synthesis error: %1 (%2)")
+                    .arg(QString::fromStdString(res.error_code), QString::fromStdString(res.error_detail)),
+                    0.0, QStringLiteral("Error"));
             }
-        } catch (...) {
+        } catch (const std::exception& e) {
+            researchPage_->addFact(QStringLiteral("Synthesis exception: %1").arg(QString::fromUtf8(e.what())), 0.0, QStringLiteral("Error"));
             report.clear();
         }
     }
 
     if (report.isEmpty()) {
-        report = QStringLiteral("# Research Synthesis: %1\n\n"
-                                "**Generated by Aquila Research Lab**\n"
-                                "- **Engine:** %2\n"
-                                "- **Scope:** %3\n"
-                                "- **Depth:** %4\n"
-                                "- **Total Sources Found:** %5\n\n"
-                                "## Executive Summary\n"
-                                "Aquila investigated **\"%1\"** across %3 channels (%2). %5 primary sources were retrieved, evaluated, and ranked for authority, freshness, and relevance.\n\n"
-                                "## Key Findings & Evidence\n")
-                     .arg(query, engine, scope, depth)
-                     .arg(foundCount);
+        if (!sourceSummaries.isEmpty()) {
+            report = QStringLiteral("# Research Summary: %1\n\n"
+                                    "*(Model synthesis offline; showing raw extracted sources)*\n\n"
+                                    "- **Engine:** %2\n"
+                                    "- **Scope:** %3\n"
+                                    "- **Depth:** %4\n"
+                                    "- **Total Sources Found:** %5\n\n"
+                                    "## Key Findings & Evidence\n")
+                         .arg(query, engine, scope, depth)
+                         .arg(foundCount);
 
-        for (int i = 0; i < sourceSummaries.size(); ++i) {
-            report += QStringLiteral("%1. %2\n").arg(i + 1).arg(sourceSummaries[i]);
+            for (int i = 0; i < sourceSummaries.size(); ++i) {
+                report += QStringLiteral("%1. %2\n").arg(i + 1).arg(sourceSummaries[i]);
+            }
+        } else {
+            report = QStringLiteral("# Research: %1\n\n"
+                                    "No relevant sources found in the specified scope (%2, %3). "
+                                    "Please check your internet connection, search provider endpoint in Settings, or try a broader query.")
+                         .arg(query, engine, scope);
         }
-
-        report += QStringLiteral("\n## Conclusion & Recommended Next Steps\n"
-                                 "Findings have been indexed into the Research Lab fact graph. You can export this report to Markdown or send it directly into the Learn Archive for grounded tutoring.\n");
     }
 
     researchPage_->setReportMarkdown(report);
@@ -782,7 +828,7 @@ void MainWindow::onSendResearchToArchive(const QString& topic, const QString& ma
 void MainWindow::onCharacterChat(const QString& personaId, const QString& message) {
     statusBarLabel_->setText(QStringLiteral("Character '%1' is replying...").arg(personaId));
     QString reply;
-    if (activeBackend_) {
+    if (ensureBackendReady()) {
         try {
             const auto cp = activeBackend_->mark_checkpoint();
             Message sys_msg;

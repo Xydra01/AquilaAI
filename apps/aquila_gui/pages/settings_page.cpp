@@ -7,6 +7,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QSettings>
 
 namespace aquila::gui {
 
@@ -139,6 +140,8 @@ SettingsPage::SettingsPage(QWidget* parent)
 
     scrollArea->setWidget(container);
     contentLayout()->addWidget(scrollArea);
+
+    loadSettings();
 }
 
 void SettingsPage::onBrowseWorkspace() {
@@ -190,7 +193,61 @@ void SettingsPage::onTierComboChanged(int index) {
     }
 }
 
+void SettingsPage::saveSettings() {
+    QSettings s(QStringLiteral("Aquila"), QStringLiteral("AquilaGui"));
+    s.setValue(QStringLiteral("backendIndex"), backendCombo_->currentIndex());
+    s.setValue(QStringLiteral("ollamaHost"), hostInput_->text());
+    s.setValue(QStringLiteral("modelPath"), modelInput_->text());
+    s.setValue(QStringLiteral("tierIndex"), tierCombo_->currentIndex());
+    s.setValue(QStringLiteral("contextWindow"), contextSpin_->value());
+    s.setValue(QStringLiteral("temperature"), tempSpin_->value());
+    s.setValue(QStringLiteral("gbnf"), gbnfCheck_->isChecked());
+    s.setValue(QStringLiteral("kvRollback"), kvRollbackCheck_->isChecked());
+    s.setValue(QStringLiteral("ngram"), ngramCheck_->isChecked());
+    s.setValue(QStringLiteral("workspacePath"), workspaceInput_->text());
+    s.setValue(QStringLiteral("themeIndex"), themeCombo_->currentIndex());
+    s.setValue(QStringLiteral("searchProviderIndex"), searchProviderCombo_->currentIndex());
+    s.setValue(QStringLiteral("searxngEndpoint"), searxngEndpointInput_->text());
+    s.setValue(QStringLiteral("autoScrape"), autoScrapeCheck_->isChecked());
+}
+
+void SettingsPage::loadSettings() {
+    QSettings s(QStringLiteral("Aquila"), QStringLiteral("AquilaGui"));
+    if (s.contains(QStringLiteral("backendIndex"))) {
+        backendCombo_->setCurrentIndex(s.value(QStringLiteral("backendIndex"), 0).toInt());
+        hostInput_->setText(s.value(QStringLiteral("ollamaHost"), QStringLiteral("http://127.0.0.1:11434")).toString());
+        modelInput_->setText(s.value(QStringLiteral("modelPath")).toString());
+        tierCombo_->setCurrentIndex(s.value(QStringLiteral("tierIndex"), 0).toInt());
+        contextSpin_->setValue(s.value(QStringLiteral("contextWindow"), 2048).toInt());
+        tempSpin_->setValue(s.value(QStringLiteral("temperature"), 0.2).toDouble());
+        gbnfCheck_->setChecked(s.value(QStringLiteral("gbnf"), true).toBool());
+        kvRollbackCheck_->setChecked(s.value(QStringLiteral("kvRollback"), true).toBool());
+        ngramCheck_->setChecked(s.value(QStringLiteral("ngram"), true).toBool());
+        workspaceInput_->setText(s.value(QStringLiteral("workspacePath"), QStringLiteral(".")).toString());
+        themeCombo_->setCurrentIndex(s.value(QStringLiteral("themeIndex"), 0).toInt());
+        searchProviderCombo_->setCurrentIndex(s.value(QStringLiteral("searchProviderIndex"), 0).toInt());
+        searxngEndpointInput_->setText(s.value(QStringLiteral("searxngEndpoint"), QStringLiteral("http://127.0.0.1:8888")).toString());
+        autoScrapeCheck_->setChecked(s.value(QStringLiteral("autoScrape"), true).toBool());
+    } else {
+        // Auto-detect optimal hardware profile on initial run
+        if (std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
+            backendCombo_->setCurrentIndex(1); // Llama.cpp (Direct C++ in-process)
+            tierCombo_->setCurrentIndex(1);    // GPU Boost (RTX 4070 VRAM offload)
+            modelInput_->setText(QStringLiteral("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"));
+            contextSpin_->setValue(8192);
+            saveSettings();
+        } else if (std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
+            backendCombo_->setCurrentIndex(1); // Llama.cpp
+            tierCombo_->setCurrentIndex(0);    // CPU Base
+            modelInput_->setText(QStringLiteral("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+            contextSpin_->setValue(2048);
+            saveSettings();
+        }
+    }
+}
+
 void SettingsPage::onSaveClicked() {
+    saveSettings();
     setStatus(QStringLiteral("Settings saved successfully."));
     emit settingsApplied();
 }

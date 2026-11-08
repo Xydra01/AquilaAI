@@ -31,6 +31,9 @@ public:
     void setModelName(const QString& name);
     void setWorkspacePath(const QString& path);
 
+    void saveSettings();
+    void loadSettings();
+
 signals:
     void settingsApplied();
     void themeChanged(bool isDark);

@@ -698,6 +698,7 @@ CliOptions parse_args(int argc, const char* const* argv) {
         opts.command = "run";
     }
 
+    bool backend_explicitly_set = false;
     for (; i < argc; ++i) {
         std::string_view arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -722,6 +723,7 @@ CliOptions parse_args(int argc, const char* const* argv) {
             opts.tier_name = argv[++i];
         } else if (arg == "--backend" && i + 1 < argc) {
             opts.backend_type = argv[++i];
+            backend_explicitly_set = true;
         } else if ((arg == "--model" || arg == "-m") && i + 1 < argc) {
             opts.model_name = argv[++i];
         } else if (arg == "--host" && i + 1 < argc) {
@@ -730,6 +732,16 @@ CliOptions parse_args(int argc, const char* const* argv) {
             opts.extra_args.emplace_back(arg);
         }
     }
+
+#if AQUILA_HAS_LLAMACPP
+    if (!backend_explicitly_set && opts.backend_type == "ollama") {
+        if (std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
+            opts.backend_type = "llama";
+            opts.tier_name = "gpu";
+            opts.model_name = "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
+        }
+    }
+#endif
 
     return opts;
 }
