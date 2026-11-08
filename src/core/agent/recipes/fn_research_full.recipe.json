@@ -10,7 +10,8 @@
         "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
-        "get_all_facts"
+        "get_all_facts",
+        "verify_research_deliverable"
       ]
     },
     {
@@ -46,5 +47,11 @@
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
     "Summarize final synthesis into report file using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "KnowledgeModule",
+    "action": "verify_research_deliverable",
+    "must_succeed": true,
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and citations like [1] or [Author, Year]) to research_report.md before completing."
+  }
 }

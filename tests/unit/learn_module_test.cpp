@@ -197,4 +197,69 @@ TEST_CASE("learn: notebooklm archive ingestion and grounded search", "[learn]") 
     CHECK(res.llm_facing_output.find("0 matching passages found") != std::string::npos);
 }
 
+TEST_CASE("learn: verify_course_quality utility gates", "[learn]") {
+    test::TempDir tmp;
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+
+    LearnModule mod(ctx);
+
+    // 1. Calling before creating course fails
+    auto res = mod.execute_action("verify_course_quality", Json::object());
+    CHECK_FALSE(res.success);
+    CHECK(res.error_code == "no_active_course");
+
+    mod.execute_action("create_or_load_course", Json::object({
+        {"course_id", "cs102"},
+        {"title", "Data Structures"}
+    }));
+
+    // 2. Calling before finalize fails
+    res = mod.execute_action("verify_course_quality", Json::object({
+        {"require_finalized", true}
+    }));
+    CHECK_FALSE(res.success);
+    CHECK(res.error_code == "course_not_finalized");
+
+    // 3. Write syllabus with duplicate titles
+    std::string dup_syllabus = R"({
+        "nodes": [
+            {"id": "root", "title": "Root Topic", "order": 0},
+            {"id": "u1", "title": "Arrays and Vectors", "parent_id": "root", "order": 1},
+            {"id": "u2", "title": "Arrays and Vectors", "parent_id": "root", "order": 2},
+            {"id": "u3", "title": "Hash Tables", "parent_id": "root", "order": 3},
+            {"id": "u4", "title": "Binary Trees", "parent_id": "root", "order": 4},
+            {"id": "u5", "title": "Graph Algorithms", "parent_id": "root", "order": 5},
+            {"id": "u6", "title": "Dynamic Programming", "parent_id": "root", "order": 6},
+            {"id": "u7", "title": "Disjoint Sets", "parent_id": "root", "order": 7}
+        ]
+    })";
+    mod.execute_action("write_syllabus", Json::object({{"content", dup_syllabus}}));
+    mod.execute_action("finalize_course", Json::object());
+
+    res = mod.execute_action("verify_course_quality", Json::object());
+    CHECK_FALSE(res.success);
+    CHECK(res.error_code == "duplicate_unit_title");
+
+    // 4. Write valid syllabus with distinct titles
+    std::string valid_syllabus = R"({
+        "nodes": [
+            {"id": "root", "title": "Advanced Data Structures and Algorithms", "order": 0},
+            {"id": "u1", "title": "Sequential Containers and Iterators", "parent_id": "root", "order": 1},
+            {"id": "u2", "title": "Associative Maps and Hash Sets", "parent_id": "root", "order": 2},
+            {"id": "u3", "title": "Self-Balancing Search Trees", "parent_id": "root", "order": 3},
+            {"id": "u4", "title": "Priority Queues and Heaps", "parent_id": "root", "order": 4},
+            {"id": "u5", "title": "Shortest Paths and MST Graphs", "parent_id": "root", "order": 5},
+            {"id": "u6", "title": "Dynamic Programming Formulations", "parent_id": "root", "order": 6},
+            {"id": "u7", "title": "Disjoint Set Union Find", "parent_id": "root", "order": 7}
+        ]
+    })";
+    mod.execute_action("write_syllabus", Json::object({{"content", valid_syllabus}}));
+    mod.execute_action("finalize_course", Json::object());
+
+    res = mod.execute_action("verify_course_quality", Json::object());
+    CHECK(res.success);
+    CHECK(res.llm_facing_output.find("verified successfully") != std::string::npos);
+}
+
 

@@ -17,7 +17,8 @@
         "ingest_archive_url",
         "list_archive_sources",
         "search_archive",
-        "get_course_info"
+        "get_course_info",
+        "verify_course_quality"
       ]
     },
     {
@@ -50,5 +51,11 @@
     "Validate and write syllabus structure",
     "Finalize course and verify archive readiness",
     "Call OrchestratorModule complete_recipe"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "LearnModule",
+    "action": "verify_course_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Course verification failed. Ensure you have written a hierarchical syllabus with at least 8 units, at least 5 sub-units with parent_id, distinct non-placeholder titles, and called LearnModule.finalize_course before completing."
+  }
 }

@@ -10,7 +10,8 @@
         "write_initialization",
         "finalize_persona",
         "update_preferences",
-        "chat_as_persona"
+        "chat_as_persona",
+        "verify_persona_quality"
       ]
     },
     {
@@ -39,9 +40,15 @@
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Craft rich initialization profile (>=800 characters)",
-    "Write initialization and configure preferences",
-    "Finalize persona profile",
+    "Load or initialize persona record via PersonaModule.load_persona",
+    "Write rich initialization profile (>=800 characters) with structured headings via PersonaModule.write_initialization",
+    "Finalize persona profile with in-character greeting and tagline via PersonaModule.finalize_persona",
     "Call OrchestratorModule complete_recipe"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "PersonaModule",
+    "action": "verify_persona_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Persona verification failed. Ensure you have written initialization.md with at least 800 characters of rich lore, structured markdown headings, no generic assistant leakage, and called PersonaModule.finalize_persona with an in-character greeting before completing."
+  }
 }

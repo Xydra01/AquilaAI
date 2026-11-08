@@ -247,6 +247,19 @@ std::vector<ActionSchema> DocumentModule::get_actions() const {
                 {"type", "object"},
                 {"properties", Json::object()}
             })
+        },
+        ActionSchema{
+            "verify_manuscript_quality",
+            "Verifies manuscript utility: asserts minimum section count, word count, absence of placeholder tokens (TODO, Lorem ipsum, TBD), and substantive content.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"file_name", Json::object({{"type", "string"}, {"description", "Optional compiled manuscript filename to verify. If omitted, checks active draft or any compiled .md."}})},
+                    {"min_sections", Json::object({{"type", "integer"}, {"description", "Minimum section count (default 2)"}})},
+                    {"min_words", Json::object({{"type", "integer"}, {"description", "Minimum total word count (default 250)"}})},
+                    {"min_chars_per_section", Json::object({{"type", "integer"}, {"description", "Minimum characters per section (default 80)"}})}
+                })}
+            })
         }
     };
 }
@@ -341,7 +354,10 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
 
     if (action_name == "write_section") {
         if (!active_) {
-            return fail("no_active_document", "❌ Error: No active document found. Use init_document first.");
+            load_active_draft();
+            if (!active_) {
+                return fail("no_active_document", "❌ Error: No active document found. Use init_document first.");
+            }
         }
         const std::string raw_header = args.value("section_header", "");
         const std::string raw_content = args.value("content", "");
@@ -377,10 +393,10 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
 
     if (action_name == "read_outline") {
         if (!active_) {
-            return fail("no_active_document", "❌ Error: No active document found.");
+            load_active_draft();
         }
-        if (draft_.sections.empty()) {
-            return ok("Document '" + draft_.title + "' is currently empty.");
+        if (!active_ || draft_.sections.empty()) {
+            return ok("Document canvas is currently empty. Use write_section to add sections.");
         }
         std::string outline = "OUTLINE FOR: " + draft_.title + "\n";
         for (std::size_t i = 0; i < draft_.sections.size(); ++i) {
@@ -393,7 +409,10 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
 
     if (action_name == "revise_selection") {
         if (!active_) {
-            return fail("no_active_document", "❌ Error: No active document found.");
+            load_active_draft();
+            if (!active_) {
+                return fail("no_active_document", "❌ Error: No active document found. Use init_document or write_section first.");
+            }
         }
         const std::string raw_header = args.value("section_header", "");
         const std::string header = normalize_section_header(raw_header);
@@ -444,7 +463,17 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         out.close();
 
         clear_active_draft();
-        return ok("✅ SUCCESS: Final document compiled and saved to " + save_path.generic_string() + ". The manuscript is compiled; now call OrchestratorModule.complete_recipe to finish the recipe.");
+        std::string res_msg = "✅ SUCCESS: Final document compiled and saved to " + save_path.generic_string() + " (" +
+                              std::to_string(draft_.word_count) + " words across " +
+                              std::to_string(draft_.sections.size()) + " sections).";
+        if (draft_.word_count < 250 || draft_.sections.size() < 2) {
+            res_msg += "\n⚠️ Note: The document currently has " + std::to_string(draft_.word_count) +
+                       " words and " + std::to_string(draft_.sections.size()) +
+                       " sections. The quality gate requires at least 250 words across 2 sections. Add more substantive sections with write_section before completing.";
+        } else {
+            res_msg += " Quality criteria satisfied; now call OrchestratorModule.complete_recipe to conclude.";
+        }
+        return ok(res_msg);
     }
 
     if (action_name == "get_draft_state") {
@@ -454,6 +483,152 @@ ActionResult DocumentModule::run(const std::string& action_name, const Json& arg
         auto j = draft_.to_json();
         j["active"] = true;
         return ok(j.dump(2));
+    }
+
+    if (action_name == "verify_manuscript_quality") {
+        const int min_sections = args.value("min_sections", 2);
+        const int min_words = args.value("min_words", 250);
+        const int min_chars_per_section = args.value("min_chars_per_section", 80);
+
+        std::string target_file = args.value("file_name", "");
+        std::filesystem::path file_to_check;
+        std::error_code ec;
+
+        if (!target_file.empty()) {
+            if (target_file.size() < 3 || target_file.substr(target_file.size() - 3) != ".md") {
+                target_file += ".md";
+            }
+            file_to_check = drafts_dir() / target_file;
+            if (!std::filesystem::exists(file_to_check, ec)) {
+                file_to_check = ctx_.workspace_root / target_file;
+            }
+        } else if (std::filesystem::exists(drafts_dir(), ec)) {
+            // Find most recently modified .md in drafts_dir
+            std::filesystem::file_time_type newest_time;
+            for (const auto& entry : std::filesystem::directory_iterator(drafts_dir(), ec)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".md") {
+                    if (file_to_check.empty() || entry.last_write_time() > newest_time) {
+                        file_to_check = entry.path();
+                        newest_time = entry.last_write_time();
+                    }
+                }
+            }
+        }
+
+        // If a file on disk exists, check that file
+        if (!file_to_check.empty() && std::filesystem::is_regular_file(file_to_check, ec)) {
+            std::ifstream in(file_to_check, std::ios::binary);
+            if (!in.is_open()) {
+                return fail("file_read_error", "❌ Failed to read manuscript file: " + file_to_check.generic_string());
+            }
+            std::stringstream ss;
+            ss << in.rdbuf();
+            const std::string content = ss.str();
+
+            // Scan for placeholder tokens
+            static const std::regex placeholder_re(R"(\b(TODO|Lorem ipsum|TBD|placeholder|insert text here)\b)", std::regex::icase);
+            std::smatch m;
+            if (std::regex_search(content, m, placeholder_re)) {
+                return fail("placeholder_detected", "❌ Manuscript contains placeholder token: '" + m.str() + "'. Expand with substantive prose before finishing.");
+            }
+
+            // Parse sections by lines starting with '#'
+            std::istringstream stream(content);
+            std::string line;
+            std::vector<std::string> sections;
+            std::string current_sec_title;
+            std::string current_sec_body;
+            while (std::getline(stream, line)) {
+                if (!line.empty() && line[0] == '#') {
+                    const bool is_h1 = line.size() >= 2 && line[0] == '#' && line[1] == ' ';
+                    if (is_h1 && sections.empty() && current_sec_title.empty()) {
+                        // Skip top-level document title from being treated as a section
+                        continue;
+                    }
+                    if (!current_sec_title.empty()) {
+                        sections.push_back(current_sec_body);
+                        current_sec_body.clear();
+                    }
+                    current_sec_title = line;
+                } else {
+                    current_sec_body += line + "\n";
+                }
+            }
+            if (!current_sec_title.empty()) {
+                sections.push_back(current_sec_body);
+            }
+
+            const std::size_t total_words = count_words(content);
+            if (static_cast<int>(sections.size()) < min_sections) {
+                return fail("insufficient_sections", "❌ Manuscript has only " + std::to_string(sections.size()) +
+                            " sections (minimum " + std::to_string(min_sections) + " required).");
+            }
+            if (static_cast<int>(total_words) < min_words) {
+                return fail("insufficient_words", "❌ Manuscript has only " + std::to_string(total_words) +
+                            " words (minimum " + std::to_string(min_words) + " required). Provide substantive, detailed paragraphs.");
+            }
+            for (std::size_t i = 0; i < sections.size(); ++i) {
+                const auto stripped = trim(sections[i]);
+                if (static_cast<int>(stripped.size()) < min_chars_per_section) {
+                    return fail("shallow_section", "❌ Section " + std::to_string(i + 1) + " is too short (" +
+                                std::to_string(stripped.size()) + " chars, minimum " + std::to_string(min_chars_per_section) + " required).");
+                }
+            }
+
+            Json report = Json::object({
+                {"verified", true},
+                {"source", "file"},
+                {"file", file_to_check.filename().generic_string()},
+                {"sections", sections.size()},
+                {"word_count", total_words}
+            });
+            return ok("✅ Manuscript verified successfully (" + std::to_string(total_words) + " words, " +
+                      std::to_string(sections.size()) + " sections in " + file_to_check.filename().generic_string() + ").\n" + report.dump(2));
+        }
+
+        // If no file on disk, check active in-memory draft
+        if (active_ && !draft_.sections.empty()) {
+            static const std::regex placeholder_re(R"(\b(TODO|Lorem ipsum|TBD|placeholder|insert text here)\b)", std::regex::icase);
+            std::smatch m;
+            if (std::regex_search(draft_.title, m, placeholder_re) ||
+                std::regex_search(draft_.synopsis, m, placeholder_re)) {
+                return fail("placeholder_detected", "❌ Draft metadata contains placeholder token: '" + m.str() + "'.");
+            }
+
+            if (static_cast<int>(draft_.sections.size()) < min_sections) {
+                return fail("insufficient_sections", "❌ Draft has only " + std::to_string(draft_.sections.size()) +
+                            " sections (minimum " + std::to_string(min_sections) + " required).");
+            }
+
+            const std::size_t total_words = draft_.compute_word_count();
+            if (static_cast<int>(total_words) < min_words) {
+                return fail("insufficient_words", "❌ Draft has only " + std::to_string(total_words) +
+                            " words (minimum " + std::to_string(min_words) + " required).");
+            }
+
+            for (const auto& sec : draft_.sections) {
+                if (std::regex_search(sec.header, m, placeholder_re) ||
+                    std::regex_search(sec.content, m, placeholder_re)) {
+                    return fail("placeholder_detected", "❌ Section '" + sec.header + "' contains placeholder token: '" + m.str() + "'.");
+                }
+                const auto stripped = trim(sec.content);
+                if (static_cast<int>(stripped.size()) < min_chars_per_section) {
+                    return fail("shallow_section", "❌ Section '" + sec.header + "' is too short (" +
+                                std::to_string(stripped.size()) + " chars, minimum " + std::to_string(min_chars_per_section) + " required).");
+                }
+            }
+
+            Json report = Json::object({
+                {"verified", true},
+                {"source", "active_draft"},
+                {"sections", draft_.sections.size()},
+                {"word_count", total_words}
+            });
+            return ok("✅ Manuscript verified successfully (" + std::to_string(total_words) + " words, " +
+                      std::to_string(draft_.sections.size()) + " sections in active draft buffer).\n" + report.dump(2));
+        }
+
+        return fail("no_manuscript_found", "❌ No compiled manuscript file or active draft found in " + drafts_dir().generic_string());
     }
 
     return fail("unknown_action", "DocumentModule: unknown action " + action_name);

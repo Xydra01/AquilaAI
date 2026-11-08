@@ -246,7 +246,8 @@ SqliteDb SqliteDb::open(const std::filesystem::path& path, int flags) {
     }
 
     sqlite3* handle = nullptr;
-    const std::string path_str = path.string();
+    const auto u = path.generic_u8string();
+    const std::string path_str(u.begin(), u.end());
     const int rc = sqlite3_open_v2(path_str.c_str(), &handle, flags, nullptr);
     if (rc != SQLITE_OK) {
         const std::string err = handle ? sqlite3_errmsg(handle) : "Cannot allocate sqlite3 handle";

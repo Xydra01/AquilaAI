@@ -55,6 +55,7 @@ private:
     ActionResult run_python_action(const std::string& script, const std::string& code,
                                    const std::vector<std::string>& script_args, const std::string& cwd);
     ActionResult pip_list_action();
+    ActionResult verify_implementation_action(const Json& args);
     [[nodiscard]] std::string program_name(const std::string& argv0) const;
     [[nodiscard]] bool allowed(const std::string& argv0) const;
 

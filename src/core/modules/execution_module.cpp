@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <regex>
 #include <system_error>
 #include <unordered_set>
 
@@ -54,6 +55,8 @@ std::vector<ActionSchema> ExecutionModule::get_actions() const {
          schema(R"({"type":"object","properties":{"script":{"type":"string"},"code":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"additionalProperties":false})")},
         {"pip_list", "List installed Python packages inside the workspace virtual environment.",
          schema(R"({"type":"object","additionalProperties":false})")},
+        {"verify_implementation", "Verify that an implementation script exists, parses without syntax errors, and executes cleanly with exit code 0 in the workspace virtual environment.",
+         schema(R"({"type":"object","properties":{"script":{"type":"string"},"file_path":{"type":"string"}},"additionalProperties":false})")},
         {"run", "Execute a shell command string or Python script inside the workspace.",
          schema(R"({"type":"object","properties":{"cmd":{"type":"string"},"command":{"type":"string"},"script":{"type":"string"},"code":{"type":"string"},"cwd":{"type":"string"}},"additionalProperties":false})")},
     };
@@ -184,6 +187,9 @@ ActionResult ExecutionModule::run(const std::string& action, const Json& args) {
     }
     if (action == "pip_list") {
         return pip_list_action();
+    }
+    if (action == "verify_implementation") {
+        return verify_implementation_action(args);
     }
     if (action == "run" || action == "execute") {
         const std::string cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
@@ -337,9 +343,15 @@ ActionResult ExecutionModule::run_python_action(const std::string& script, const
 #endif
 
     std::string target_cwd = cwd;
+    std::error_code ec_cwd;
     if (target_cwd.empty() || target_cwd == "/tmp" || target_cwd == "tmp" ||
         target_cwd.find("/path/to") != std::string::npos || target_cwd.find("path/to") != std::string::npos) {
         target_cwd = ".";
+    } else {
+        fs::path p_target(target_cwd);
+        if (!fs::is_directory(p_target, ec_cwd) && !fs::is_directory(base / p_target, ec_cwd)) {
+            target_cwd = ".";
+        }
     }
 
     std::string run_script = script;
@@ -356,6 +368,23 @@ ActionResult ExecutionModule::run_python_action(const std::string& script, const
         if (has_newline || starts_with_py || (not_py_file && (has_code_tokens || run_script.find(' ') != std::string::npos))) {
             run_code = run_script;
             run_script.clear();
+        }
+    }
+
+    if (!run_script.empty()) {
+        const auto effective_cwd = (target_cwd.empty() || target_cwd == ".") ? base : (fs::path(target_cwd).is_absolute() ? fs::path(target_cwd) : base / target_cwd);
+        std::error_code ec_s;
+        if (!fs::exists(effective_cwd / run_script, ec_s)) {
+            // Check if script exists in base
+            if (fs::exists(base / run_script, ec_s)) {
+                target_cwd = ".";
+            } else if (run_script.find('/') != std::string::npos || run_script.find('\\') != std::string::npos) {
+                fs::path script_p(run_script);
+                if (fs::exists(base / script_p.filename(), ec_s)) {
+                    run_script = path_to_utf8(script_p.filename());
+                    target_cwd = ".";
+                }
+            }
         }
     }
 
@@ -376,6 +405,9 @@ ActionResult ExecutionModule::run_python_action(const std::string& script, const
     if (!run_code.empty()) {
         argv.push_back("-c");
         argv.push_back(run_code);
+        for (const auto& a : script_args) {
+            argv.push_back(a);
+        }
     } else if (!run_script.empty()) {
         argv.push_back(run_script);
         for (const auto& a : script_args) {
@@ -407,6 +439,116 @@ ActionResult ExecutionModule::pip_list_action() {
     return execute("pip_list", argv, cwd_, false, "pip_list_failed");
 }
 
+ActionResult ExecutionModule::verify_implementation_action(const Json& args) {
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    std::string script_path;
+
+    if (args.contains("script") && args["script"].is_string() && !args["script"].get<std::string>().empty()) {
+        script_path = args["script"].get<std::string>();
+    } else if (args.contains("file_path") && args["file_path"].is_string() && !args["file_path"].get<std::string>().empty()) {
+        script_path = args["file_path"].get<std::string>();
+    } else {
+        // Automatically search workspace for recent non-test, non-venv python scripts
+        std::error_code ec;
+        fs::path best_file;
+        fs::file_time_type best_time;
+        // First check base directory
+        for (const auto& entry : fs::directory_iterator(base, ec)) {
+            if (entry.is_regular_file()) {
+                const auto p = entry.path();
+                if (p.extension() == ".py") {
+                    const auto fname = path_to_utf8(p.filename());
+                    if (fname.find("test_") == std::string::npos && fname != "setup.py" && fname != "conftest.py") {
+                        auto lwt = entry.last_write_time(ec);
+                        if (best_file.empty() || (!ec && lwt > best_time)) {
+                            best_file = p;
+                            best_time = lwt;
+                        }
+                    }
+                }
+            }
+        }
+        // If not in root, search subdirectories excluding build/.git/.venv
+        if (best_file.empty()) {
+            fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (it->is_directory(ec)) {
+                    const auto name = path_to_utf8(it->path().filename());
+                    if (name == ".git" || name == ".venv" || name == "build" || name == "node_modules" ||
+                        name == "__pycache__" || name == "tests") {
+                        it.disable_recursion_pending();
+                        continue;
+                    }
+                }
+                if (it->is_regular_file(ec)) {
+                    const auto p = it->path();
+                    if (p.extension() == ".py") {
+                        const auto fname = path_to_utf8(p.filename());
+                        if (fname.find("test_") == std::string::npos) {
+                            auto lwt = it->last_write_time(ec);
+                            if (best_file.empty() || (!ec && lwt > best_time)) {
+                                best_file = p;
+                                best_time = lwt;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (!best_file.empty()) {
+            script_path = path_to_utf8(fs::relative(best_file, base, ec));
+        }
+    }
+
+    if (script_path.empty()) {
+        return fail("missing_implementation", "❌ No implementation script (.py) was found in the workspace. You must write the implementation script using WorkspaceModule.create_file before completing.");
+    }
+
+    const auto abs_file = base / script_path;
+    std::error_code ec;
+    if (!fs::exists(abs_file, ec)) {
+        return fail("script_not_found", "❌ Specified script '" + script_path + "' does not exist.");
+    }
+
+    // Read and verify substance (not just pass / TODO)
+    std::ifstream in(abs_file, std::ios::binary);
+    if (!in.is_open()) {
+        return fail("unreadable_script", "❌ Could not read script '" + script_path + "'.");
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+
+    // Check size & stubs
+    std::string trimmed = content;
+    trimmed.erase(0, trimmed.find_first_not_of(" \t\n\r"));
+    trimmed.erase(trimmed.find_last_not_of(" \t\n\r") + 1);
+
+    if (trimmed.empty() || trimmed.size() < 20) {
+        return fail("stub_implementation", "❌ Script '" + script_path + "' is too short or empty (" + std::to_string(trimmed.size()) + " bytes). Provide the full functional code.");
+    }
+    static const std::regex stub_re(R"(\b(pass|raise NotImplementedError|TODO)\b)");
+    if (std::regex_search(trimmed, stub_re)) {
+        return fail("stub_implementation", "❌ Script '" + script_path + "' contains placeholder stubs (pass/TODO/NotImplementedError). Implement the actual functional logic.");
+    }
+
+    // Run Python syntax & compile check
+    auto compile_res = run_python_action("", "import py_compile, sys; py_compile.compile(sys.argv[1], doraise=True)", {script_path}, cwd_);
+    if (!compile_res.success) {
+        return fail("syntax_error", "❌ Syntax error in '" + script_path + "':\n" + compile_res.llm_facing_output);
+    }
+
+    // Execute script in venv
+    auto run_res = run_python_action(script_path, "", {}, cwd_);
+    if (!run_res.success) {
+        return fail("execution_failed", "❌ Script '" + script_path + "' failed execution:\n" + run_res.llm_facing_output);
+    }
+    if (run_res.llm_facing_output.empty() || run_res.llm_facing_output == "\n") {
+        return fail("empty_output", "❌ Script '" + script_path + "' ran but produced no stdout. Ensure the script prints results.");
+    }
+
+    return ok("✅ Verified implementation in '" + script_path + "' verified successfully and executed cleanly with exit code 0.\nOutput:\n" + run_res.llm_facing_output);
+}
+
 ActionResult ExecutionModule::execute(const std::string& action, std::vector<std::string> argv, const std::string& cwd,
                                       bool diagnose, const std::string& fail_code) {
     if (!allowed(argv.front())) {
@@ -419,15 +561,21 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
         safe_cwd = ".";
     }
     fs::path dir;
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
     try {
-        const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
         const auto r = PathFirewall(base).resolve(safe_cwd, Access::read);
         std::error_code ec;
-        if (!fs::is_directory(r.absolute, ec)) return fail("path_invalid", "cwd is not a directory: " + safe_cwd);
-        dir = r.absolute;
+        if (!fs::is_directory(r.absolute, ec)) {
+            if (action == "run_python" || action == "run" || action == "execute") {
+                dir = base;
+            } else {
+                return fail("path_invalid", "cwd is not a directory: " + safe_cwd);
+            }
+        } else {
+            dir = r.absolute;
+        }
     } catch (const PathDenied& e) {
-        if (cwd == "/tmp" || cwd == "tmp" || cwd.find("path/to") != std::string::npos) {
-            const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+        if (safe_cwd == "/tmp" || safe_cwd == "tmp" || safe_cwd.find("path/to") != std::string::npos) {
             dir = base;
         } else {
             return fail(e.code(), e.what());

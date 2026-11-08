@@ -124,3 +124,67 @@ TEST_CASE("document: full document module workflow", "[document]") {
     CHECK(content.find("## Memory Architecture") != std::string::npos);
 }
 
+TEST_CASE("document: verify_manuscript_quality utility gates", "[document]") {
+    test::TempDir tmp;
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+
+    DocumentModule doc(ctx);
+
+    // 1. Initializing and writing sections
+    doc.execute_action("init_document", Json::object({
+        {"title", "Neural Compiler Design"},
+        {"synopsis", "An in-depth guide to modern neural compilers."}
+    }));
+
+    // Writing section with placeholder should fail verification
+    doc.execute_action("write_section", Json::object({
+        {"section_header", "Section One"},
+        {"content", "This section has TODO: complete the design here and expand notes."}
+    }));
+    doc.execute_action("write_section", Json::object({
+        {"section_header", "Section Two"},
+        {"content", "Another substantive section detailing intermediate representation passes and graph optimization pipelines."}
+    }));
+
+    auto ver = doc.execute_action("verify_manuscript_quality", Json::object({
+        {"min_sections", 2},
+        {"min_words", 10},
+        {"min_chars_per_section", 10}
+    }));
+    CHECK_FALSE(ver.success);
+    CHECK(ver.error_code == "placeholder_detected");
+
+    // Overwrite section 1 with clean content but too short words
+    doc.execute_action("write_section", Json::object({
+        {"section_header", "Section One"},
+        {"content", "Clean content."}
+    }));
+    ver = doc.execute_action("verify_manuscript_quality", Json::object({
+        {"min_sections", 2},
+        {"min_words", 50},
+        {"min_chars_per_section", 5}
+    }));
+    CHECK_FALSE(ver.success);
+    CHECK(ver.error_code == "insufficient_words");
+
+    // Overwrite with substantive prose
+    std::string rich_text = "Neural intermediate representations bridge high-level domain specific tensor operations down to low-level hardware ISA instructions with automatic memory scheduling, kernel fusion, and vectorized SIMD transformations across heterogeneous compute targets.";
+    doc.execute_action("write_section", Json::object({
+        {"section_header", "Section One"},
+        {"content", rich_text}
+    }));
+    doc.execute_action("write_section", Json::object({
+        {"section_header", "Section Two"},
+        {"content", rich_text}
+    }));
+
+    ver = doc.execute_action("verify_manuscript_quality", Json::object({
+        {"min_sections", 2},
+        {"min_words", 20},
+        {"min_chars_per_section", 50}
+    }));
+    CHECK(ver.success);
+    CHECK(ver.llm_facing_output.find("verified successfully") != std::string::npos);
+}
+

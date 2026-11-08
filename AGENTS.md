@@ -21,3 +21,12 @@ All new features, capabilities, recipes, module actions, prompt templates, and b
 3. **Regression Testing & Quality Gates:**
    - Ensure all Catch2 and RapidCheck property test cases pass (`tests/unit/aquila_unit_tests.exe`).
    - Verify that all affected multi-domain recipes pass without regressions across domains (`dev`, `research`, `writing`, `persona`, `learn`).
+
+4. **Mandatory Live Output Utility & Substance Assessment:**
+   - In addition to zero structural errors (repeats, hallucinations, syntax), you MUST inspect and assess the actual substance, execution, and utility of generated deliverables during every live evaluation or debug run:
+     - **Dev**: Generated scripts must execute cleanly in the workspace virtual environment with exit code 0, have valid ASTs without stub bodies (`pass`, `# TODO`, `raise NotImplementedError`), and fulfill functional requirements.
+     - **Research**: Reports must contain structured sections (Summary, Findings, Citations), substantive length (> 350 chars), and verifiable citations, backed by recorded facts in SQLite `FactStore`.
+     - **Writing**: Manuscripts must meet depth thresholds (> 500 chars/section) with zero unexpanded placeholder tokens (`TODO`, `Lorem ipsum`, `[TBD]`).
+     - **Learn**: Syllabi must have hierarchical depth (>= 8 units, >= 5 sub-units) with unique pedagogical titles; archive Q&A answers must ground claims in cited passages.
+     - **Persona**: Profiles must satisfy the 800+ character depth gate, establish complete voice/lore bibles, and pass anti-assistant leakage screening.
+   - Never accept a run as passed if what the agent created is unusable, superficial, or fails functional execution.

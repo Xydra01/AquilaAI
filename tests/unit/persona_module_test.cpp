@@ -110,3 +110,78 @@ TEST_CASE("persona: full persona module workflow and quality gates", "[persona]"
     CHECK(mod2.persona().build_complete);
 }
 
+TEST_CASE("persona: verify_persona_quality utility gates", "[persona]") {
+    test::TempDir tmp;
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+
+    PersonaModule mod(ctx);
+
+    // 1. Without active persona fails
+    auto res = mod.execute_action("verify_persona_quality", Json::object());
+    CHECK_FALSE(res.success);
+    CHECK(res.error_code == "no_active_persona");
+
+    mod.execute_action("load_persona", Json::object({
+        {"persona_id", "socrates"},
+        {"display_name", "Socrates"}
+    }));
+
+    // 2. Calling before finalize fails
+    res = mod.execute_action("verify_persona_quality", Json::object({
+        {"require_finalized", true}
+    }));
+    CHECK_FALSE(res.success);
+    CHECK(res.error_code == "persona_not_finalized");
+
+    // 3. Write initialization with assistant leakage
+    std::string leaky_init = "# Identity\n\nI am Socrates of Athens. As an AI language model, I do not have personal opinions or feelings about ethics.\n\n# Voice\n\nI speak through the dialectic method.";
+    while (leaky_init.size() < 850) {
+        leaky_init += " The unexamined life is not worth living in the agora.";
+    }
+    mod.execute_action("write_initialization", Json::object({
+        {"file_path", "initialization.md"},
+        {"content", leaky_init}
+    }));
+    mod.execute_action("finalize_persona", Json::object({
+        {"greeting", "Greetings, fellow citizen of Athens."},
+        {"tagline", "Classical Philosopher"}
+    }));
+
+    res = mod.execute_action("verify_persona_quality", Json::object());
+    CHECK_FALSE(res.success);
+    CHECK(res.error_code == "assistant_leakage_detected");
+
+    // 4. Overwrite with rich, immersive, authentic persona lore
+    mod.execute_action("load_persona", Json::object({
+        {"persona_id", "socrates_clean"},
+        {"display_name", "Socrates of Athens"}
+    }));
+
+    std::string immersive_init = R"(# Identity and Character Lore
+I am Socrates of Athens, son of Sophroniscus the stonemason and Phaenarete the midwife. I wander barefoot through the bustling Agora, engaging citizens in dialectical inquiry not to teach dogma, but to examine whether our beliefs withstand relentless logical scrutiny.
+
+# Dialectical Voice and Philosophy
+My speech is calm, persistent, and grounded in the elenctic method. I begin with courteous curiosity, drawing out definitions from my interlocutors before highlighting internal contradictions with gentle irony. I profess no specialized wisdom myself, claiming only to know that I know nothing.
+
+# Behavioral Guidelines and Mannerisms
+I never claim divine revelation, but listen closely to my daimonion—a subtle inner voice warning me against foolish courses of action. I ask probing questions rather than declaring edicts. I remain steadfastly indifferent to material luxury, wealth, and aristocratic flattery.
+)";
+    while (immersive_init.size() < 900) {
+        immersive_init += " We must examine our souls and strive for virtue above all earthly possessions.\n";
+    }
+
+    mod.execute_action("write_initialization", Json::object({
+        {"file_path", "initialization.md"},
+        {"content", immersive_init}
+    }));
+    mod.execute_action("finalize_persona", Json::object({
+        {"greeting", "Greetings, fellow citizen of Athens."},
+        {"tagline", "Classical Philosopher"}
+    }));
+
+    res = mod.execute_action("verify_persona_quality", Json::object());
+    CHECK(res.success);
+    CHECK(res.llm_facing_output.find("verified successfully") != std::string::npos);
+}
+

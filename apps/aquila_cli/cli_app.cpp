@@ -531,6 +531,7 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
                 out_snippet = out_snippet.substr(0, 200) + "...";
             }
             out << "  📥 Result:  " << (d.success ? "OK" : "FAILED") << " - " << out_snippet << "\n";
+            out.flush();
 
             dissections.push_back(std::move(d));
         };
@@ -538,7 +539,15 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
         config.max_repeated_calls = 4;
 
         AgentLoop loop(*active_be, registry, mod_ctx);
-        const auto res = loop.run(recipe, goal, config);
+        TerminalResult res;
+        try {
+            res = loop.run(recipe, goal, config);
+        } catch (const std::exception& ex) {
+            err << "\n[AgentLoop Exception Caught]: " << ex.what() << "\n";
+            res.success = false;
+            res.outcome = LoopOutcome::aborted;
+            res.completion_output = std::string("Agent loop terminated with exception: ") + ex.what();
+        }
 
         out << "\n========================================\n"
             << "EVALUATION AUTOPSY & TRAJECTORY ANALYSIS\n"

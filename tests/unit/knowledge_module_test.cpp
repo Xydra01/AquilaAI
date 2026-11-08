@@ -1,5 +1,6 @@
 #include "aquila/knowledge/knowledge_module.hpp"
 #include "aquila/modules/registry.hpp"
+#include "temp_dir.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -19,7 +20,53 @@ TEST_CASE("KnowledgeModule registration and action dispatch", "[knowledge_module
     REQUIRE(km != nullptr);
 
     auto actions = km->get_actions();
-    CHECK(actions.size() == 6);
+    CHECK(actions.size() == 7);
+
+    SECTION("verify_research_deliverable utility gate") {
+        test::TempDir tmp;
+        ModuleContext tmp_ctx{.workspace_root = tmp.path(), .max_output_chars = 2000};
+        KnowledgeModule km_temp(tmp_ctx);
+
+        // 1. Missing report fails
+        auto res = km_temp.execute_action("verify_research_deliverable", Json::object());
+        CHECK_FALSE(res.success);
+        CHECK(res.error_code == "missing_report");
+
+        // 2. Report too brief (< 350 chars) fails
+        tmp.write("research_report.md", "# Findings\nShort text.\n");
+        res = km_temp.execute_action("verify_research_deliverable", Json::object());
+        CHECK_FALSE(res.success);
+        CHECK(res.error_code == "shallow_report");
+
+        // 3. Report lacking citations fails
+        std::string long_no_cites = "# Executive Summary\n\nThis research project investigates modern transformer attention mechanisms.\n\n## Methodology\n\nWe survey flash attention, multi-head latent attention, and sparse kernels across modern GPU clusters without any formal reference markers.\n\n## Conclusion\n\nThe efficiency of tensor computations depends heavily on memory bandwidth rather than peak FLOPs.";
+        while (long_no_cites.size() < 400) {
+            long_no_cites += " Hardware accelerators dictate modern neural throughput.\n";
+        }
+        tmp.write("research_report.md", long_no_cites);
+        res = km_temp.execute_action("verify_research_deliverable", Json::object());
+        CHECK_FALSE(res.success);
+        CHECK(res.error_code == "missing_citations");
+
+        // 4. Report with citations but no facts stored in FactStore fails
+        std::string cited_report = "# Executive Summary\n\nRecent advances in FlashAttention-3 [Dao et al., 2024] exploit asynchronous warp specialization [1].\n\n## Architecture Findings\n\nTMA (Tensor Memory Accelerator) enables overlap between GEMM computations and global memory loads [2].\n\n## Comparative Benchmarks\n\nHardware benchmarks demonstrate a 1.8x speedup over standard FP16 kernels on NVIDIA Hopper architectures [3].";
+        while (cited_report.size() < 420) {
+            cited_report += " Asynchronous memory staging minimizes register pressure.\n";
+        }
+        tmp.write("research_report.md", cited_report);
+        res = km_temp.execute_action("verify_research_deliverable", Json::object());
+        CHECK_FALSE(res.success);
+        CHECK(res.error_code == "empty_factstore");
+
+        // 5. Storing fact then verifying passes!
+        km_temp.execute_action("store_fact", Json{
+            {"topic", "attention"},
+            {"fact", "FlashAttention-3 leverages TMA and asynchronous warp specialization."}
+        });
+        res = km_temp.execute_action("verify_research_deliverable", Json::object());
+        CHECK(res.success);
+        CHECK(res.llm_facing_output.find("verified successfully") != std::string::npos);
+    }
 
     SECTION("store_fact and get_all_facts lifecycle") {
         auto res1 = km->execute_action("store_fact", Json{

@@ -45,6 +45,7 @@ protected:
     ActionResult run(const std::string& action_name, const Json& args) override;
 
 private:
+    ActionResult verify_research_deliverable_action(const Json& args);
     void init_db(const std::string& db_path_str);
     [[nodiscard]] ActionResult capped(ActionResult r) const;
 

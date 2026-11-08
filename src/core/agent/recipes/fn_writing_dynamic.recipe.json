@@ -38,7 +38,6 @@
       "initial_state": {
         "required_fields": [
           "active_objective",
-          "current_hypothesis",
           "next_immediate_action"
         ]
       },

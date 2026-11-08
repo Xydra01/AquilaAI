@@ -25,7 +25,8 @@
         "run_python",
         "pip_list",
         "exec_sandboxed_cmd",
-        "run_test_suite"
+        "run_test_suite",
+        "verify_implementation"
       ]
     },
     {
@@ -33,7 +34,6 @@
       "initial_state": {
         "required_fields": [
           "active_objective",
-          "current_hypothesis",
           "next_immediate_action"
         ]
       },
@@ -51,5 +51,11 @@
     "Implement necessary code changes",
     "Run script or test suite to verify implementation",
     "Complete task"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "ExecutionModule",
+    "action": "verify_implementation",
+    "must_succeed": true,
+    "on_failure_instruction": "Implementation verification failed. Ensure the script exists, has non-empty executable code (no pass/TODO stubs), passes python syntax checks, and executes cleanly in .venv without errors. Fix the code and complete the recipe again."
+  }
 }

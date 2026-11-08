@@ -11,7 +11,8 @@
         "read_outline",
         "revise_selection",
         "compile_document",
-        "get_draft_state"
+        "get_draft_state",
+        "verify_manuscript_quality"
       ]
     },
     {
@@ -41,8 +42,14 @@
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Initialize document canvas with target outline",
-    "Draft each section adhering to word count guidelines",
+    "Draft each section with substantive, detailed paragraphs (minimum 250 words total across at least 2 sections)",
     "Revise and refine sections",
     "Compile final draft and complete"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "DocumentModule",
+    "action": "verify_manuscript_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Manuscript verification failed. Ensure your draft contains at least 2 distinct sections, has at least 250 words total, has no placeholder tokens (such as TODO, Lorem ipsum, or TBD), and has substantive prose before completing."
+  }
 }

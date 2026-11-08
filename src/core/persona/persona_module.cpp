@@ -4,6 +4,7 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 
 namespace aquila::persona {
@@ -164,6 +165,17 @@ std::vector<ActionSchema> PersonaModule::get_actions() const {
                 {"type", "object"},
                 {"properties", Json::object()}
             })
+        },
+        ActionSchema{
+            "verify_persona_quality",
+            "Verifies persona profile utility: asserts initialization bible length (>= 800 chars), structured lore sections, absence of assistant leakage, and finalized greeting.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"min_chars", Json::object({{"type", "integer"}, {"description", "Minimum characters for initialization.md (default 800)"}})},
+                    {"require_finalized", Json::object({{"type", "boolean"}, {"description", "Whether persona build must be finalized (default true)"}})}
+                })}
+            })
         }
     };
 }
@@ -212,8 +224,7 @@ bool PersonaModule::load_persona_record(const std::string& persona_id, const std
         Json j;
         in >> j;
         persona_ = Persona::from_json(j);
-        init_written_ = std::filesystem::is_regular_file(initialization_file(), ec) &&
-                        (std::filesystem::file_size(initialization_file(), ec) >= kInitDocMinChars);
+        init_written_ = false;
         load_chat_history();
         return true;
     } catch (...) {
@@ -287,12 +298,12 @@ void PersonaModule::restore_state_snapshot(const Json& snapshot) {
 
 ActionResult PersonaModule::run(const std::string& action_name, const Json& args) {
     if (action_name == "load_persona") {
-        if (persona_.build_complete) {
-            return ok("✅ Persona '" + persona_.display_name + "' is already fully built and finalized. Now call OrchestratorModule.complete_recipe to finish the recipe.");
-        }
         const std::string pid = args.value("persona_id", "");
         if (pid.empty()) {
             return fail("missing_persona_id", "❌ Error: persona_id must not be empty.");
+        }
+        if (persona_.build_complete && pid == active_persona_id_) {
+            return ok("✅ Persona '" + persona_.display_name + "' is already fully built and finalized. Now call OrchestratorModule.complete_recipe to finish the recipe.");
         }
         const std::string iid = args.value("instance_id", instance_id_);
         const bool found = load_persona_record(pid, iid);
@@ -307,9 +318,6 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
     }
 
     if (action_name == "write_initialization") {
-        if (persona_.build_complete) {
-            return ok("✅ Persona '" + persona_.display_name + "' is already fully built and finalized. Do NOT write initialization again. Now call OrchestratorModule.complete_recipe to finish the recipe.");
-        }
         if (!has_active_persona()) {
             return fail("no_active_persona", "❌ Error: No active persona loaded. Use load_persona first.");
         }
@@ -324,7 +332,8 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
                         " characters (need at least " + std::to_string(kInitDocMinChars) +
                         "). Add personality, voice, backstory, and scene.");
         }
-        if (init_written_) {
+        const bool overwrite = args.value("overwrite", false);
+        if (init_written_ && !overwrite) {
             return fail("already_written",
                         "❌ OS BLOCK: initialization.md is already written. Do NOT call write_persona_file again. "
                         "Call finalize_persona(greeting=..., tagline=...) then call OrchestratorModule.complete_recipe.");
@@ -426,6 +435,74 @@ ActionResult PersonaModule::run(const std::string& action_name, const Json& args
         j["active"] = true;
         j["chat_turns"] = chat_history_.size();
         return ok(j.dump(2));
+    }
+
+    if (action_name == "verify_persona_quality") {
+        if (!has_active_persona()) {
+            return fail("no_active_persona", "❌ Error: No active persona loaded. Use load_persona first.");
+        }
+
+        const bool require_finalized = args.value("require_finalized", true);
+        if (require_finalized && !persona_.build_complete) {
+            return fail("persona_not_finalized", "❌ Persona build is not finalized. Call PersonaModule.finalize_persona(greeting='...', tagline='...') before completing.");
+        }
+        if (require_finalized && persona_.greeting.empty()) {
+            return fail("missing_greeting", "❌ Persona greeting is empty. Provide an in-character opening greeting via PersonaModule.finalize_persona.");
+        }
+
+        const std::size_t min_chars = args.value("min_chars", static_cast<int>(kInitDocMinChars));
+        const auto init_path = initialization_file();
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(init_path, ec)) {
+            return fail("missing_initialization", "❌ Persona initialization file not found: " + init_path.generic_string());
+        }
+
+        std::ifstream in(init_path, std::ios::binary);
+        if (!in.is_open()) {
+            return fail("file_read_error", "❌ Could not open initialization file: " + init_path.generic_string());
+        }
+        std::stringstream ss;
+        ss << in.rdbuf();
+        const std::string content = ss.str();
+
+        if (content.size() < min_chars) {
+            return fail("shallow_initialization", "❌ initialization.md is only " + std::to_string(content.size()) +
+                        " chars (minimum " + std::to_string(min_chars) + " required). Expand backstory, voice, and traits.");
+        }
+
+        // Section structure check: lines starting with '#'
+        std::size_t heading_count = 0;
+        std::istringstream lstream(content);
+        std::string line;
+        while (std::getline(lstream, line)) {
+            const std::size_t first = line.find_first_not_of(" \t\r\n");
+            if (first != std::string::npos && line[first] == '#') {
+                ++heading_count;
+            }
+        }
+        if (heading_count < 2) {
+            return fail("unstructured_initialization", "❌ initialization.md lacks structured sections. Use markdown headings (# Identity, # Voice, # Dialogue, etc.).");
+        }
+
+        // Anti-assistant leakage check
+        static const std::regex leakage_re(
+            R"(\b(as an AI language model|as an AI assistant|I am an artificial intelligence|I am an AI|I do not have personal opinions|I do not have feelings|I cannot fulfill this request)\b)",
+            std::regex::icase);
+        std::smatch m;
+        if (std::regex_search(content, m, leakage_re)) {
+            return fail("assistant_leakage_detected", "❌ Persona initialization contains generic AI assistant phrasing ('" + m.str() + "'). Must maintain strict in-character immersion.");
+        }
+
+        Json report = Json::object({
+            {"verified", true},
+            {"persona_id", persona_.id},
+            {"display_name", persona_.display_name},
+            {"init_chars", content.size()},
+            {"headings", heading_count},
+            {"build_complete", persona_.build_complete}
+        });
+        return ok("✅ Persona profile verified successfully (" + std::to_string(content.size()) + " chars, " +
+                  std::to_string(heading_count) + " sections for '" + persona_.display_name + "').\n" + report.dump(2));
     }
 
     return fail("unknown_action", "PersonaModule: unknown action " + action_name);

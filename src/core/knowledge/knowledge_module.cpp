@@ -1,9 +1,13 @@
 #include "aquila/knowledge/knowledge_module.hpp"
+#include "aquila/workspace/path_firewall.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
 namespace aquila::knowledge {
+
+using aquila::path_to_utf8;
 
 namespace {
 
@@ -125,6 +129,16 @@ std::vector<ActionSchema> KnowledgeModule::get_actions() const {
             .parameters_json_schema = Json{
                 {"type", "object"},
                 {"properties", Json::object()}
+            }
+        },
+        ActionSchema{
+            .action_name = "verify_research_deliverable",
+            .description = "Verify that a research report exists, meets substance and citation criteria, and facts are stored",
+            .parameters_json_schema = Json{
+                {"type", "object"},
+                {"properties", {
+                    {"file", {{"type", "string"}, {"description", "Report filename, defaults to research_report.md"}}}
+                }}
             }
         }
     };
@@ -325,7 +339,66 @@ ActionResult KnowledgeModule::run(const std::string& action_name, const Json& ar
         return capped(ok(lore));
     }
 
+    if (action_name == "verify_research_deliverable") {
+        return verify_research_deliverable_action(args);
+    }
+
     return fail("unknown_action", "KnowledgeModule does not support action: " + action_name);
+}
+
+ActionResult KnowledgeModule::verify_research_deliverable_action(const Json& args) {
+    namespace fs = std::filesystem;
+    const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
+    std::string report_file_name = args.value("file", "research_report.md");
+    auto report_path = base / report_file_name;
+    std::error_code ec;
+
+    if (!fs::exists(report_path, ec)) {
+        for (const auto& entry : fs::directory_iterator(base, ec)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".md") {
+                const auto fn = path_to_utf8(entry.path().filename());
+                if (fn.find("report") != std::string::npos || fn.find("research") != std::string::npos) {
+                    report_path = entry.path();
+                    report_file_name = fn;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!fs::exists(report_path, ec)) {
+        return fail("missing_report", "❌ Research deliverable '" + report_file_name + "' was not found. Write the research findings into research_report.md using WorkspaceModule.create_file before completing.");
+    }
+
+    std::ifstream in(report_path, std::ios::binary);
+    if (!in.is_open()) {
+        return fail("unreadable_report", "❌ Could not open research report '" + report_file_name + "'.");
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    const std::string text = ss.str();
+    in.close();
+
+    if (text.size() < 350) {
+        return fail("shallow_report", "❌ Research report '" + report_file_name + "' is too brief (" + std::to_string(text.size()) + " chars, minimum is 350). Expand findings with detailed technical analysis and evidence.");
+    }
+
+    const bool has_headings = text.find("# ") != std::string::npos || text.find("## ") != std::string::npos;
+    if (!has_headings) {
+        return fail("unstructured_report", "❌ Research report '" + report_file_name + "' lacks markdown section headings. Organize into sections (e.g. Summary, Findings, Citations).");
+    }
+
+    const bool has_citations = text.find('[') != std::string::npos && text.find(']') != std::string::npos;
+    if (!has_citations) {
+        return fail("missing_citations", "❌ Research report lacks citations or references. Cite retrieved sources (e.g. [1] or [Source]) to ground claims.");
+    }
+
+    auto all_facts = fact_store_->get_all_facts();
+    if (all_facts.empty() || all_facts.find("No permanent facts stored yet.") != std::string::npos) {
+        return fail("empty_factstore", "❌ No verified facts were recorded. Store key findings into long-term knowledge using KnowledgeModule.store_fact before completing.");
+    }
+
+    return ok("✅ Verified research deliverable '" + report_file_name + "' verified successfully (" + std::to_string(text.size()) + " chars, facts recorded).");
 }
 
 ActionResult KnowledgeModule::capped(ActionResult r) const {

@@ -201,3 +201,37 @@ TEST_CASE("execution e2e: a real CMake + compiler build of a broken file is diag
     CHECK(r.llm_facing_output.find("failed targets:") != std::string::npos);
     std::printf("e2e build: %s", r.llm_facing_output.substr(0, r.llm_facing_output.find('\n') + 1).c_str());
 }
+
+TEST_CASE("execution: verify_implementation utility gates", "[execution]") {
+    test::TempDir tmp;
+    ExecutionModule m({tmp.path(), 4500});
+
+    // 1. Missing file fails
+    auto r = m.execute_action("verify_implementation", Json{{"file_path", "nonexistent.py"}});
+    CHECK_FALSE(r.success);
+    CHECK(r.error_code == "script_not_found");
+
+    // 2. Stub file with pass fails
+    tmp.write("stub.py", "def run():\n    pass\n\nif __name__ == '__main__':\n    run()\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "stub.py"}});
+    CHECK_FALSE(r.success);
+    CHECK(r.error_code == "stub_implementation");
+
+    // 3. Stub file with TODO fails
+    tmp.write("todo_stub.py", "# TODO: implement this feature later\nprint('starting')\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "todo_stub.py"}});
+    CHECK_FALSE(r.success);
+    CHECK(r.error_code == "stub_implementation");
+
+    // 4. Broken syntax fails
+    tmp.write("broken.py", "def syntax_err(\n    return 42\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "broken.py"}});
+    CHECK_FALSE(r.success);
+    CHECK(r.error_code == "syntax_error");
+
+    // 5. Valid executable script passes
+    tmp.write("solution.py", "import sys\nimport math\n\ndef calculate():\n    return math.sqrt(16.0)\n\nprint(f'Result: {calculate()}')\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "solution.py"}});
+    CHECK(r.success);
+    CHECK(r.llm_facing_output.find("verified successfully") != std::string::npos);
+}

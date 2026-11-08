@@ -2,6 +2,7 @@
 #include "aquila/knowledge/html_cleaner.hpp"
 #include "aquila/knowledge/page_scorer.hpp"
 #include "aquila/knowledge/web_fetcher.hpp"
+#include "aquila/workspace/path_firewall.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -9,8 +10,11 @@
 #include <iomanip>
 #include <regex>
 #include <sstream>
+#include <unordered_set>
 
 namespace aquila::learn {
+
+using aquila::path_to_utf8;
 
 namespace fs = std::filesystem;
 
@@ -466,6 +470,18 @@ std::vector<ActionSchema> LearnModule::get_actions() const {
                 {"type", "object"},
                 {"properties", Json::object()}
             })
+        },
+        ActionSchema{
+            "verify_course_quality",
+            "Verifies syllabus and course utility: asserts minimum unit and sub-unit counts, non-empty and non-duplicate titles, absence of generic placeholders, and finalized state.",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"min_nodes", Json::object({{"type", "integer"}, {"description", "Minimum total syllabus nodes (default 8)"}})},
+                    {"min_children", Json::object({{"type", "integer"}, {"description", "Minimum child units with parent_id (default 5)"}})},
+                    {"require_finalized", Json::object({{"type", "boolean"}, {"description", "Whether course must be finalized (default true)"}})}
+                })}
+            })
         }
     };
 }
@@ -720,9 +736,9 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         if (syllabus_.nodes.empty()) {
             const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
             std::error_code ec_dir;
-            for (const auto& entry : fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec_dir)) {
+            for (const auto& entry : fs::directory_iterator(base, ec_dir)) {
                 if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                    const auto stem = entry.path().stem().string();
+                    const auto stem = path_to_utf8(entry.path().stem());
                     if (stem.find("syllabus") != std::string::npos || stem.find("course") != std::string::npos) {
                         try {
                             std::ifstream f(entry.path());
@@ -822,7 +838,7 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
 
         std::ofstream out(file_path, std::ios::trunc | std::ios::binary);
         if (!out.is_open()) {
-            return fail("io_error", "❌ Failed to write archive file: " + file_path.string());
+            return fail("io_error", "❌ Failed to write archive file: " + path_to_utf8(file_path));
         }
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
         out.close();
@@ -832,7 +848,7 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         src.id = slug;
         src.name = name;
         src.source_type = "text";
-        src.file_path = file_path.filename().string();
+        src.file_path = path_to_utf8(file_path.filename());
         src.token_count = content.size() / 4;
         src.added_at = now_iso();
         manifest.sources.push_back(src);
@@ -852,25 +868,25 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         }
         fs::path target_file = ctx_.workspace_root.empty() ? fs::path(rel_path) : ctx_.workspace_root / rel_path;
         if (!fs::exists(target_file)) {
-            return fail("file_not_found", "❌ File not found: " + target_file.string());
+            return fail("file_not_found", "❌ File not found: " + path_to_utf8(target_file));
         }
 
         std::ifstream in(target_file, std::ios::binary);
         if (!in.is_open()) {
-            return fail("read_error", "❌ Failed to read file: " + target_file.string());
+            return fail("read_error", "❌ Failed to read file: " + path_to_utf8(target_file));
         }
         std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         in.close();
 
-        std::string name = args.value("name", target_file.filename().string());
+        std::string name = args.value("name", path_to_utf8(target_file.filename()));
         std::error_code ec;
         fs::create_directories(archive_sources_dir(), ec);
         std::string slug = "file_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count() % 1000000);
-        fs::path dest_file = archive_sources_dir() / (slug + target_file.extension().string());
+        fs::path dest_file = archive_sources_dir() / (slug + path_to_utf8(target_file.extension()));
 
         std::ofstream out(dest_file, std::ios::trunc | std::ios::binary);
         if (!out.is_open()) {
-            return fail("write_error", "❌ Failed to write into archive: " + dest_file.string());
+            return fail("write_error", "❌ Failed to write into archive: " + path_to_utf8(dest_file));
         }
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
         out.close();
@@ -880,7 +896,7 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         src.id = slug;
         src.name = name;
         src.source_type = "file";
-        src.file_path = dest_file.filename().string();
+        src.file_path = path_to_utf8(dest_file.filename());
         src.token_count = content.size() / 4;
         src.added_at = now_iso();
         manifest.sources.push_back(src);
@@ -921,7 +937,7 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
 
             std::ofstream out(dest_file, std::ios::trunc | std::ios::binary);
             if (!out.is_open()) {
-                return fail("write_error", "❌ Failed to write into archive: " + dest_file.string());
+                return fail("write_error", "❌ Failed to write into archive: " + path_to_utf8(dest_file));
             }
             out.write(content.data(), static_cast<std::streamsize>(content.size()));
             out.close();
@@ -931,7 +947,7 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
             src.id = slug;
             src.name = name;
             src.source_type = "url";
-            src.file_path = dest_file.filename().string();
+            src.file_path = path_to_utf8(dest_file.filename());
             src.token_count = content.size() / 4;
             src.added_at = now_iso();
             manifest.sources.push_back(src);
@@ -1082,6 +1098,76 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         j["status"] = syllabus_.status;
         j["units"] = syllabus_.nodes.size();
         return ok(j.dump(2));
+    }
+
+    if (action_name == "verify_course_quality") {
+        if (!has_active_course()) {
+            return fail("no_active_course", "❌ No active course found. Create a course first.");
+        }
+
+        const bool require_finalized = args.value("require_finalized", true);
+        if (require_finalized && !course_.build_complete && syllabus_.status != "ready") {
+            return fail("course_not_finalized", "❌ Course '" + course_.title + "' is not finalized. Call LearnModule.finalize_course before finishing.");
+        }
+
+        const std::size_t min_nodes = args.value("min_nodes", static_cast<int>(kSyllabusMinNodes));
+        const std::size_t min_children = args.value("min_children", static_cast<int>(kSyllabusMinChildNodes));
+
+        // Validate syllabus structure hierarchy
+        const auto [valid, err] = validate_syllabus_structure(syllabus_.nodes);
+        if (!valid) {
+            return fail("invalid_syllabus_structure", "❌ Syllabus structure failed validation: " + err);
+        }
+        if (syllabus_.nodes.size() < min_nodes) {
+            return fail("insufficient_nodes", "❌ Syllabus has only " + std::to_string(syllabus_.nodes.size()) +
+                        " units (minimum " + std::to_string(min_nodes) + " required).");
+        }
+
+        std::size_t child_count = 0;
+        std::unordered_set<std::string> seen_titles;
+        static const std::regex generic_title_re(R"(^(unit|module|topic|lesson|chapter)\s*\d*$)", std::regex::icase);
+        static const std::regex placeholder_re(R"(\b(TODO|placeholder|untitled|tbd)\b)", std::regex::icase);
+
+        for (const auto& node : syllabus_.nodes) {
+            if (node.parent_id && !node.parent_id->empty()) {
+                ++child_count;
+            }
+
+            std::string t = node.title;
+            while (!t.empty() && std::isspace(static_cast<unsigned char>(t.front()))) t.erase(0, 1);
+            while (!t.empty() && std::isspace(static_cast<unsigned char>(t.back()))) t.pop_back();
+
+            if (t.size() < 4) {
+                return fail("shallow_title", "❌ Unit title '" + node.title + "' is too short (< 4 chars).");
+            }
+
+            if (std::regex_search(t, placeholder_re) || std::regex_match(t, generic_title_re)) {
+                return fail("placeholder_title", "❌ Unit title '" + node.title + "' is too generic. Each unit must specify concrete, pedagogical topics.");
+            }
+
+            std::string low_t = t;
+            for (char& c : low_t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (!seen_titles.insert(low_t).second) {
+                return fail("duplicate_unit_title", "❌ Syllabus contains duplicate unit title: '" + node.title + "'. Each unit must have a distinct pedagogical topic.");
+            }
+        }
+
+        if (child_count < min_children) {
+            return fail("insufficient_child_nodes", "❌ Syllabus has only " + std::to_string(child_count) +
+                        " sub-units (minimum " + std::to_string(min_children) + " required). Structure units hierarchically.");
+        }
+
+        Json report = Json::object({
+            {"verified", true},
+            {"course_id", course_.id},
+            {"title", course_.title},
+            {"units", syllabus_.nodes.size()},
+            {"sub_units", child_count},
+            {"build_complete", course_.build_complete}
+        });
+        return ok("✅ Course and syllabus verified successfully (" + std::to_string(syllabus_.nodes.size()) +
+                  " units, " + std::to_string(child_count) + " sub-units for '" + course_.title + "').\n" + report.dump(2));
     }
 
     return fail("unknown_action", "LearnModule: unknown action " + action_name);

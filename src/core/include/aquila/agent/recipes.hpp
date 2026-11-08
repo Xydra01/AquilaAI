@@ -127,7 +127,8 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
         "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
-        "get_all_facts"
+        "get_all_facts",
+        "verify_research_deliverable"
       ]
     },
     {
@@ -163,7 +164,13 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
     "Summarize final synthesis into report file using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "KnowledgeModule",
+    "action": "verify_research_deliverable",
+    "must_succeed": true,
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and citations like [1] or [Author, Year]) to research_report.md before completing."
+  }
 }
 )AQ";
 
@@ -332,7 +339,8 @@ inline constexpr std::string_view kFnWritingFullRecipeJson = R"AQ({
         "read_outline",
         "revise_selection",
         "compile_document",
-        "get_draft_state"
+        "get_draft_state",
+        "verify_manuscript_quality"
       ]
     },
     {
@@ -362,10 +370,16 @@ inline constexpr std::string_view kFnWritingFullRecipeJson = R"AQ({
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Initialize document canvas with target outline",
-    "Draft each section adhering to word count guidelines",
+    "Draft each section with substantive, detailed paragraphs (minimum 250 words total across at least 2 sections)",
     "Revise and refine sections",
     "Compile final draft and complete"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "DocumentModule",
+    "action": "verify_manuscript_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Manuscript verification failed. Ensure your draft contains at least 2 distinct sections, has at least 250 words total, has no placeholder tokens (such as TODO, Lorem ipsum, or TBD), and has substantive prose before completing."
+  }
 }
 )AQ";
 
@@ -410,7 +424,6 @@ inline constexpr std::string_view kFnWritingDynamicRecipeJson = R"AQ({
       "initial_state": {
         "required_fields": [
           "active_objective",
-          "current_hypothesis",
           "next_immediate_action"
         ]
       },
@@ -495,7 +508,8 @@ inline constexpr std::string_view kFnLearnSyllabusRecipeJson = R"AQ({
         "ingest_archive_url",
         "list_archive_sources",
         "search_archive",
-        "get_course_info"
+        "get_course_info",
+        "verify_course_quality"
       ]
     },
     {
@@ -528,7 +542,13 @@ inline constexpr std::string_view kFnLearnSyllabusRecipeJson = R"AQ({
     "Validate and write syllabus structure",
     "Finalize course and verify archive readiness",
     "Call OrchestratorModule complete_recipe"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "LearnModule",
+    "action": "verify_course_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Course verification failed. Ensure you have written a hierarchical syllabus with at least 8 units, at least 5 sub-units with parent_id, distinct non-placeholder titles, and called LearnModule.finalize_course before completing."
+  }
 }
 )AQ";
 
@@ -612,7 +632,8 @@ inline constexpr std::string_view kFnPersonaBuildRecipeJson = R"AQ({
         "write_initialization",
         "finalize_persona",
         "update_preferences",
-        "chat_as_persona"
+        "chat_as_persona",
+        "verify_persona_quality"
       ]
     },
     {
@@ -641,11 +662,17 @@ inline constexpr std::string_view kFnPersonaBuildRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Craft rich initialization profile (>=800 characters)",
-    "Write initialization and configure preferences",
-    "Finalize persona profile",
+    "Load or initialize persona record via PersonaModule.load_persona",
+    "Write rich initialization profile (>=800 characters) with structured headings via PersonaModule.write_initialization",
+    "Finalize persona profile with in-character greeting and tagline via PersonaModule.finalize_persona",
     "Call OrchestratorModule complete_recipe"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "PersonaModule",
+    "action": "verify_persona_quality",
+    "must_succeed": true,
+    "on_failure_instruction": "Persona verification failed. Ensure you have written initialization.md with at least 800 characters of rich lore, structured markdown headings, no generic assistant leakage, and called PersonaModule.finalize_persona with an in-character greeting before completing."
+  }
 }
 )AQ";
 
@@ -722,7 +749,8 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
         "run_python",
         "pip_list",
         "exec_sandboxed_cmd",
-        "run_test_suite"
+        "run_test_suite",
+        "verify_implementation"
       ]
     },
     {
@@ -730,7 +758,6 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
       "initial_state": {
         "required_fields": [
           "active_objective",
-          "current_hypothesis",
           "next_immediate_action"
         ]
       },
@@ -748,7 +775,13 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
     "Implement necessary code changes",
     "Run script or test suite to verify implementation",
     "Complete task"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "ExecutionModule",
+    "action": "verify_implementation",
+    "must_succeed": true,
+    "on_failure_instruction": "Implementation verification failed. Ensure the script exists, has non-empty executable code (no pass/TODO stubs), passes python syntax checks, and executes cleanly in .venv without errors. Fix the code and complete the recipe again."
+  }
 }
 )AQ";
 
