@@ -9,6 +9,7 @@
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "surgical_edit",
         "outline"

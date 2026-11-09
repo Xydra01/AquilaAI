@@ -39,6 +39,7 @@ signals:
                            const QStringList& facts, const QStringList& checklist);
     void statusChanged(const QString& statusText);
     void finished(bool success, const QString& completionOutput);
+    void logFileReady(const QString& logPath, const QString& jsonlPath);
     void askUserRequested(const QString& question);
 
 protected:

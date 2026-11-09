@@ -1,6 +1,7 @@
 #include "aquila/agent/agent_loop.hpp"
 
 #include "aquila/json.hpp"
+#include "aquila/logging/run_logger.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -92,7 +93,8 @@ std::string build_recipe_system_prompt(const RecipeCartridge& recipe,
               "1. You must respond ONLY with a single JSON ActionCall object matching the required schema: {\"thought\": \"...\", \"module\": \"...\", \"action\": \"...\", \"args\": {...}}.\n"
               "2. The 'module' field MUST be one of the loaded modules listed above. Never invent or hallucinate unloaded modules.\n"
               "3. When writing code, scripts, or files (via WorkspaceModule or ExecutionModule), write complete, syntactically valid code (e.g. in Python, always call functions with parentheses like datetime.now(tz), provide valid arguments, and include needed imports). If an action returns an error or syntax failure, READ the error output, fix the code, and NEVER submit the identical failing code.\n"
-              "4. Task Completion: Once your objective has been met (e.g. script executed, document written, or research facts synthesized), immediately call OrchestratorModule.complete_recipe with a concise summary of what was accomplished to finish the recipe. Do not stay stuck in repetitive loops or rerun completed steps.\n";
+              "4. Task Completion: Once your objective has been met (e.g. script executed, document written, or research facts synthesized), immediately call OrchestratorModule.complete_recipe with a concise summary of what was accomplished to finish the recipe. Do not stay stuck in repetitive loops or rerun completed steps.\n"
+              "5. Non-Interactive Script Rule: All generated code and scripts MUST be non-interactive. NEVER call input() or prompt for user stdin. Accept parameters via sys.argv / argparse or provide default fallback values. For external APIs, write defensive code that validates responses and handles missing credentials or network errors gracefully.\n";
     return prompt;
 }
 
@@ -220,6 +222,23 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
 
     TerminalResult result;
 
+    // Universal Recipe RunLogger
+    std::shared_ptr<logging::RunLogger> logger = config.logger;
+    if (!logger && config.enable_disk_logging) {
+        logger = std::make_shared<logging::RunLogger>();
+        const std::filesystem::path ws = module_ctx_.workspace_root.empty() ? "." : module_ctx_.workspace_root;
+        logger->start_session(recipe.recipe_id, config.mode, config.instance_id, user_request, ws);
+    }
+
+    auto finish_and_return = [&](TerminalResult res) -> TerminalResult {
+        if (logger) {
+            std::string outcome_str = (res.outcome == LoopOutcome::success) ? "success" :
+                                      (res.outcome == LoopOutcome::aborted) ? "aborted" : "turn_limit";
+            logger->log_session_end(res.success, outcome_str, res.completion_output, res.transcript.size());
+        }
+        return res;
+    };
+
     std::string last_call_sig;
     std::string last_action_sig;
     std::string second_last_action_sig;
@@ -241,7 +260,11 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             result.outcome = LoopOutcome::aborted;
             result.success = false;
             result.run_record = std::move(run_record);
-            return result;
+            return finish_and_return(std::move(result));
+        }
+
+        if (logger) {
+            logger->log_turn_start(turn);
         }
 
         // 1. Assemble the prompt and resend it in full. The scaffold cannot reuse
@@ -269,6 +292,9 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             if (config.on_turn) {
                 config.on_turn(result.transcript.back());
             }
+            if (logger) {
+                logger->log_guidance(turn, note);
+            }
             condenser.push_guidance(note);
             continue;
         }
@@ -293,8 +319,20 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             if (config.on_turn) {
                 config.on_turn(result.transcript.back());
             }
+            if (logger) {
+                logger->log_llm_response(turn, gen.content, false, "");
+                logger->log_guidance(turn, note);
+            }
             condenser.push_guidance(note);
             continue;
+        }
+
+        if (logger) {
+            if (!call.thought.empty()) {
+                logger->log_thinking(turn, call.thought, "action_thought");
+            }
+            logger->log_llm_response(turn, gen.content, true, call.thought);
+            logger->log_action_call(turn, call.module, call.action, call.args);
         }
 
         // 4. Resolve the module/action and dispatch exactly one execute_action,
@@ -302,6 +340,11 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         // the module's own failures (unknown_action, invalid_args) as-is. All
         // control flow below branches on success/error_code only (Req 1.4, R19).
         const ActionResult action_result = resolve_and_dispatch(modules, recipe, call);
+
+        if (logger) {
+            logger->log_action_result(turn, call.module, call.action, action_result.success,
+                                      action_result.llm_facing_output, action_result.error_code);
+        }
 
         // 5. Wrap the outcome as a ToolInteraction with a turn-derived id (Req 1.6),
         // record the cycle in the condenser's rolling tail, and append the turn to
@@ -386,7 +429,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             result.completion_output = "Task halted by anti-repetition circuit breaker: repeated call '" +
                                        call.module + "::" + call.action + "'";
             result.run_record = std::move(run_record);
-            return result;
+            return finish_and_return(std::move(result));
         }
 
         // 6. Advance the RunRecord (Req 6.2): step_index counts completed turns and
@@ -425,18 +468,21 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 // completion_output carries the hook's on_failure_instruction, which
                 // we push as next-turn guidance before continuing the loop.
                 TerminalResult gate =
-                    run_exit_gate(recipe, modules, orchestrator->completion_output());
+                    run_exit_gate(recipe, modules, orchestrator->completion_output(), logger);
                 if (gate.success) {
                     result.outcome = LoopOutcome::success;
                     result.success = true;
                     result.completion_output = std::move(gate.completion_output);
                     result.run_record = std::move(run_record);
-                    return result;
+                    return finish_and_return(std::move(result));
                 }
                 // Non-success gate: completion_output carries the hook's
                 // on_failure_instruction (see run_exit_gate's contract). Inject it
                 // as guidance so the next turn can satisfy the gate.
                 if (!gate.completion_output.empty()) {
+                    if (logger) {
+                        logger->log_guidance(turn, gate.completion_output);
+                    }
                     condenser.push_guidance(std::move(gate.completion_output));
                 }
                 break;
@@ -487,12 +533,12 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     result.outcome = LoopOutcome::turn_limit;
     result.success = false;
     result.run_record = std::move(run_record);
-    return result;
+    return finish_and_return(std::move(result));
 }
 
 TerminalResult AgentLoop::run_exit_gate(
     const RecipeCartridge& recipe, const std::vector<std::unique_ptr<IAgentModule>>& modules,
-    std::string completion_output) {
+    std::string completion_output, std::shared_ptr<logging::RunLogger> logger) {
     // The deterministic recipe exit gate (Req 5). This runs on a complete_recipe
     // request and issues NO backend generate() call — it never touches backend_.
 
@@ -533,6 +579,11 @@ TerminalResult AgentLoop::run_exit_gate(
         hook_result = target->execute_action(hook.action, Json::object());
     }
 
+    if (logger) {
+        logger->log_exit_gate(hook.module, hook.action, hook_result.success,
+                              hook_result.llm_facing_output, hook_result.error_code);
+    }
+
     // Hook passed: completion succeeds with the completion output (Req 5.3).
     if (hook_result.success) {
         TerminalResult result;
@@ -555,15 +606,15 @@ TerminalResult AgentLoop::run_exit_gate(
 
     // Hook failed with must_succeed==true: the loop must NOT exit (Req 5.2).
     // Return a non-success result whose completion_output carries the hook's
-    // on_failure_instruction. The run() call site pushes a non-success result's
-    // completion_output as next-turn guidance, so this injects the instruction and
-    // continues the loop; the loop's own max_turns bound still governs final
-    // termination (Req 1.5). outcome is turn_limit so the non-success branch in
-    // run() continues rather than terminating.
+    // on_failure_instruction plus the granular failure output.
     TerminalResult result;
     result.outcome = LoopOutcome::turn_limit;
     result.success = false;
-    result.completion_output = hook.on_failure_instruction;
+    std::string failure_feedback = hook.on_failure_instruction;
+    if (!hook_result.llm_facing_output.empty()) {
+        failure_feedback += "\n\n[VALIDATION FAILURE DETAIL]:\n" + hook_result.llm_facing_output;
+    }
+    result.completion_output = std::move(failure_feedback);
     return result;
 }
 

@@ -1,9 +1,13 @@
 // apps/aquila_gui/pages/task_page.cpp
 #include "task_page.hpp"
 
+#include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QUrl>
 
 namespace aquila::gui {
 
@@ -45,6 +49,19 @@ TaskPage::TaskPage(QWidget* parent)
         emit openBuilderRequested(recipeCombo_->currentText());
     });
     controls->addWidget(openBuilderButton_);
+
+    openLogsButton_ = new QPushButton(QStringLiteral("📂 Open Logs"), this);
+    connect(openLogsButton_, &QPushButton::clicked, this, [this]() {
+        QString path = lastLogPath_;
+        if (path.isEmpty() || !QFileInfo::exists(path)) {
+            path = QDir::current().filePath(QStringLiteral("Agent-Logs"));
+        }
+        if (!QFileInfo::exists(path)) {
+            QDir().mkpath(path);
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+    controls->addWidget(openLogsButton_);
 
     layout->addLayout(controls);
 
@@ -222,6 +239,10 @@ QString TaskPage::hypothesis() const {
 
 int TaskPage::factsCount() const {
     return factsList_->count();
+}
+
+void TaskPage::setLastLogPath(const QString& path) {
+    lastLogPath_ = path;
 }
 
 int TaskPage::checklistCount() const {

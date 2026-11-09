@@ -4,6 +4,7 @@
 #include "aquila/core.hpp"
 #include "aquila/agent/agent_loop.hpp"
 #include "aquila/agent/recipes.hpp"
+#include "aquila/logging/run_logger.hpp"
 #include "aquila/inference/ollama_backend.hpp"
 #include "aquila/modules/registry.hpp"
 
@@ -231,6 +232,11 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
 
     config.max_repeated_calls = 4;
 
+    auto run_logger = std::make_shared<aquila::logging::RunLogger>();
+    run_logger->start_session(recipe.recipe_id, "cli", "cli", task, opts.workspace_root.empty() ? "." : opts.workspace_root);
+    config.logger = run_logger;
+    out << "[RunLogger] Logging session to: " << run_logger->log_path().string() << " (.jsonl)\n";
+
     ModuleRegistry registry = ModuleRegistry::builtin();
     ModuleContext mod_ctx;
     mod_ctx.workspace_root = opts.workspace_root;
@@ -244,6 +250,10 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
             << "Turns: " << res.transcript.size() << "\n";
         if (!res.completion_output.empty()) {
             out << "Completion Output: " << res.completion_output << "\n";
+        }
+        if (run_logger && run_logger->is_active()) {
+            out << "Session Log:  " << run_logger->log_path().string() << "\n"
+                << "Event Stream: " << run_logger->jsonl_path().string() << "\n";
         }
         out << "========================================\n";
         return res.success ? 0 : 1;
@@ -272,6 +282,10 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
             if (!res.completion_output.empty()) {
                 out << "Completion Output: " << res.completion_output << "\n";
             }
+            if (run_logger && run_logger->is_active()) {
+                out << "Session Log:  " << run_logger->log_path().string() << "\n"
+                    << "Event Stream: " << run_logger->jsonl_path().string() << "\n";
+            }
             out << "========================================\n";
             return res.success ? 0 : 1;
         } catch (const std::exception& ex) {
@@ -298,6 +312,10 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
         << "Turns: " << res.transcript.size() << "\n";
     if (!res.completion_output.empty()) {
         out << "Completion Output: " << res.completion_output << "\n";
+    }
+    if (run_logger && run_logger->is_active()) {
+        out << "Session Log:  " << run_logger->log_path().string() << "\n"
+            << "Event Stream: " << run_logger->jsonl_path().string() << "\n";
     }
     out << "========================================\n";
     return res.success ? 0 : 1;

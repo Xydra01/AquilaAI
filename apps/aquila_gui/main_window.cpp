@@ -496,6 +496,10 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         taskPage_->addLedgerEntry(turn, mod, act, success ? QStringLiteral("OK") : QStringLiteral("FAILED"), out);
     });
     connect(activeWorker_, &AgentWorker::scratchpadUpdated, taskPage_, &TaskPage::updateScratchpad);
+    connect(activeWorker_, &AgentWorker::logFileReady, this, [this](const QString& logPath, const QString&) {
+        taskPage_->setLastLogPath(logPath);
+        statusBarLabel_->setText(QStringLiteral("Session log: %1").arg(logPath));
+    });
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
         statusBarLabel_->setText(status);
         taskPage_->setStatus(status);

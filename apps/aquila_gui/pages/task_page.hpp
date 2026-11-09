@@ -25,6 +25,7 @@ public:
     void updateScratchpad(const QString& objective, const QString& hypothesis,
                           const QStringList& facts, const QStringList& checklist);
     void clearLedger();
+    void setLastLogPath(const QString& path);
 
     QString objective() const;
     QString hypothesis() const;
@@ -44,6 +45,8 @@ private:
     QPushButton* runButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
     QPushButton* openBuilderButton_ = nullptr;
+    QPushButton* openLogsButton_ = nullptr;
+    QString lastLogPath_;
 
     QTreeWidget* ledgerTree_ = nullptr;
     QLabel* objectiveLabel_ = nullptr;

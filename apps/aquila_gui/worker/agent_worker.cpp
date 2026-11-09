@@ -1,5 +1,6 @@
 // apps/aquila_gui/worker/agent_worker.cpp
 #include "agent_worker.hpp"
+#include "aquila/logging/run_logger.hpp"
 
 namespace aquila::gui {
 
@@ -165,8 +166,18 @@ void AgentWorker::run() {
 
         emit statusChanged(QStringLiteral("Running recipe '%1'...").arg(QString::fromStdString(recipe_.recipe_id)));
         config_.max_repeated_calls = 4;
+
+        auto run_logger = std::make_shared<aquila::logging::RunLogger>();
+        run_logger->start_session(recipe_.recipe_id, "gui_task", "gui", user_request_, workspace_root_);
+        config_.logger = run_logger;
+
         AgentLoop loop(*backend_, registry, ctx);
         const auto res = loop.run(recipe_, user_request_, config_);
+
+        if (run_logger && run_logger->is_active()) {
+            emit logFileReady(QString::fromStdString(run_logger->log_path().string()),
+                              QString::fromStdString(run_logger->jsonl_path().string()));
+        }
 
         if (cancel_flag_.load()) {
             emit statusChanged(QStringLiteral("Task cancelled by user."));

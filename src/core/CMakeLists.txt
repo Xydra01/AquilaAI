@@ -66,7 +66,8 @@ add_library(aquila_core STATIC
     knowledge/document_chunker.cpp
     knowledge/page_scorer.cpp
     knowledge/web_search.cpp
-    knowledge/knowledge_module.cpp)
+    knowledge/knowledge_module.cpp
+    logging/run_logger.cpp)
 add_library(aquila::core ALIAS aquila_core)
 
 target_include_directories(aquila_core PUBLIC include)

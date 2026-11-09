@@ -19,6 +19,10 @@
 
 namespace aquila {
 
+namespace logging {
+class RunLogger;
+}
+
 // Why the loop stopped (Req 1.5, 5.3, 7.4).
 enum class LoopOutcome { success, turn_limit, aborted };
 
@@ -58,6 +62,10 @@ struct LoopConfig {
     TokenCallback on_token = {};
     std::function<void(const TurnRecord&)> on_turn = {};
     std::function<bool()> check_cancelled = {};
+
+    // Logging:
+    std::shared_ptr<logging::RunLogger> logger = nullptr;
+    bool enable_disk_logging = true;
 };
 
 // Single-threaded, deterministic driver (Req 1, Req 5, R14). No async, no
@@ -102,7 +110,7 @@ private:
     // touch backend_.
     [[nodiscard]] static TerminalResult run_exit_gate(
         const RecipeCartridge& recipe, const std::vector<std::unique_ptr<IAgentModule>>& modules,
-        std::string completion_output);
+        std::string completion_output, std::shared_ptr<logging::RunLogger> logger = nullptr);
 
     // Resolves a parsed decision to an ActionResult (Req 1.4): finds the loaded
     // module and checks the recipe's expose_actions, returning a synthetic failed

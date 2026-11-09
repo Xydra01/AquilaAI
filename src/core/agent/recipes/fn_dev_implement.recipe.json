@@ -9,6 +9,7 @@
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "surgical_edit",
         "outline"
@@ -48,7 +49,7 @@
   "scratchpad_checklist": [
     "Analyze requirements and codebase",
     "Ensure workspace virtualenv and install required dependencies",
-    "Implement necessary code changes",
+    "Implement necessary code changes (ensure scripts are strictly non-interactive with no input() calls)",
     "Run script or test suite to verify implementation",
     "Complete task"
   ],
@@ -56,6 +57,6 @@
     "module": "ExecutionModule",
     "action": "verify_implementation",
     "must_succeed": true,
-    "on_failure_instruction": "Implementation verification failed. Ensure the script exists, has non-empty executable code (no pass/TODO stubs), passes python syntax checks, and executes cleanly in .venv without errors. Fix the code and complete the recipe again."
+    "on_failure_instruction": "Implementation verification failed. Ensure the script exists, has non-empty executable code (no pass/TODO stubs), is non-interactive (never call input(); accept CLI args or test defaults), passes python syntax checks, and executes cleanly in .venv without errors. Fix the code and complete the recipe again."
   }
 }

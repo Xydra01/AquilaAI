@@ -743,6 +743,7 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "surgical_edit",
         "outline"
@@ -782,7 +783,7 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
   "scratchpad_checklist": [
     "Analyze requirements and codebase",
     "Ensure workspace virtualenv and install required dependencies",
-    "Implement necessary code changes",
+    "Implement necessary code changes (ensure scripts are strictly non-interactive with no input() calls)",
     "Run script or test suite to verify implementation",
     "Complete task"
   ],
@@ -790,7 +791,7 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
     "module": "ExecutionModule",
     "action": "verify_implementation",
     "must_succeed": true,
-    "on_failure_instruction": "Implementation verification failed. Ensure the script exists, has non-empty executable code (no pass/TODO stubs), passes python syntax checks, and executes cleanly in .venv without errors. Fix the code and complete the recipe again."
+    "on_failure_instruction": "Implementation verification failed. Ensure the script exists, has non-empty executable code (no pass/TODO stubs), is non-interactive (never call input(); accept CLI args or test defaults), passes python syntax checks, and executes cleanly in .venv without errors. Fix the code and complete the recipe again."
   }
 }
 )AQ";
@@ -854,6 +855,7 @@ inline constexpr std::string_view kFnDevTddRecipeJson = R"AQ({
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "surgical_edit",
         "outline"
@@ -913,6 +915,7 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "surgical_edit",
         "outline"
@@ -959,7 +962,7 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility)",
+    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility, and ensure non-interactive with no input() calls)",
     "Run and verify execution using ExecutionModule run_python",
     "Verify implementation quality via ExecutionModule verify_implementation",
     "Call OrchestratorModule complete_recipe"
@@ -968,7 +971,7 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
     "module": "ExecutionModule",
     "action": "verify_implementation",
     "must_succeed": true,
-    "on_failure_instruction": "Implementation verification failed. Ensure you have written a complete, substantive script without stub bodies (no pass or TODO), and that it executes cleanly with exit code 0."
+    "on_failure_instruction": "Implementation verification failed. Ensure you have written a complete, substantive script without stub bodies (no pass or TODO), that it is strictly non-interactive (no input(); use CLI args or defaults), and that it executes cleanly with exit code 0."
   }
 }
 )AQ";
