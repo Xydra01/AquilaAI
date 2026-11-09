@@ -644,6 +644,12 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
 
     int foundCount = 0;
     QStringList sourceSummaries;
+    QString scrapedContext;
+
+    QString trimmedQuery = query.trimmed();
+    if (trimmedQuery.startsWith('"') && trimmedQuery.endsWith('"') && trimmedQuery.size() >= 2) {
+        trimmedQuery = trimmedQuery.mid(1, trimmedQuery.size() - 2).trimmed();
+    }
 
     const bool doLocal = scope.contains(QStringLiteral("Local"), Qt::CaseInsensitive) || scope.contains(QStringLiteral("Both"), Qt::CaseInsensitive);
     const bool doWeb = scope.contains(QStringLiteral("Web"), Qt::CaseInsensitive) || scope.contains(QStringLiteral("Both"), Qt::CaseInsensitive);
@@ -656,7 +662,7 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
             QFile file(dir.filePath(f));
             if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 const QString text = QString::fromUtf8(file.read(8192));
-                if (text.contains(query, Qt::CaseInsensitive)) {
+                if (text.contains(trimmedQuery, Qt::CaseInsensitive)) {
                     QString matchSnippet = text.left(200).trimmed();
                     researchPage_->addSearchResult(QStringLiteral("Match in %1: %2").arg(f, matchSnippet), 0.95 - (foundCount * 0.05), QStringLiteral("Local Files"), f);
                     researchPage_->addFact(QStringLiteral("Local context from %1: %2").arg(f, matchSnippet.left(100)), 0.95, f);
@@ -681,13 +687,22 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
 
             std::vector<aquila::knowledge::SearchResult> results;
             if (engine == QStringLiteral("duckduckgo")) {
-                results = webEngine.search_duckduckgo_lite(query.toStdString(), limit);
+                results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
+                if (results.empty()) {
+                    results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
+                }
             } else if (engine == QStringLiteral("searxng")) {
-                results = webEngine.search_searxng(query.toStdString(), limit);
+                results = webEngine.search_searxng(trimmedQuery.toStdString(), limit);
+                if (results.empty()) {
+                    results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
+                }
+                if (results.empty()) {
+                    results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
+                }
             } else if (engine == QStringLiteral("wikipedia")) {
-                results = webEngine.search_wikipedia(query.toStdString(), limit);
+                results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
             } else {
-                results = webEngine.search(query.toStdString());
+                results = webEngine.search(trimmedQuery.toStdString());
             }
 
             for (const auto& r : results) {
@@ -721,6 +736,11 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
                             researchPage_->addFact(QStringLiteral("Scraped from %1: %2")
                                 .arg(pageTitle, QString::fromStdString(analysis.usable_excerpt).left(150).trimmed()),
                                 0.92, QString::fromStdString(r.url));
+                            scrapedContext += QStringLiteral("\n\n--- SOURCE [%1]: %2 (%3) ---\n%4\n--- END SOURCE ---\n")
+                                .arg(scraped + 1)
+                                .arg(pageTitle)
+                                .arg(QString::fromStdString(r.url))
+                                .arg(QString::fromStdString(analysis.usable_excerpt).left(3500));
                             ++scraped;
                         }
                     } catch (...) {}
@@ -740,16 +760,29 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
             const auto cp = activeBackend_->mark_checkpoint();
             Message sys_msg;
             sys_msg.role = Role::system;
-            sys_msg.content = "You are Aquila Research Synthesizer. Synthesize the provided research topic and findings into a comprehensive, well-structured research briefing in Markdown. Include sections: Executive Summary, Key Findings, Technical Architecture & Capabilities, and References/Citations with [1], [2] links.";
+            sys_msg.content = "You are Aquila Research Synthesizer. Synthesize the provided research topic and findings into a comprehensive, authoritative research briefing in Markdown.\n"
+                              "Required sections:\n"
+                              "## Executive Summary\n"
+                              "## Key Findings & Evidence (cite specific figures, dates, results, and sources using [1], [2] links)\n"
+                              "## Detailed Analysis & Implications\n"
+                              "## References & Sources (numbered list of retrieved URLs)\n"
+                              "Always produce substantive, factual analysis. Never output empty sections or placeholder templates.";
             activeBackend_->append(sys_msg);
 
             Message user_msg;
             user_msg.role = Role::user;
+            QString userPrompt = QStringLiteral("Topic: %1\n\n").arg(query);
             if (!sourceSummaries.isEmpty()) {
-                user_msg.content = "Query: " + query.toStdString() + "\n\nSources:\n" + sourceSummaries.join(QStringLiteral("\n")).toStdString();
-            } else {
-                user_msg.content = "Query: " + query.toStdString() + "\n\n(No external live sources retrieved; provide authoritative parametric analysis with clear findings).";
+                userPrompt += QStringLiteral("### Retrieved Sources & Snippets:\n") + sourceSummaries.join(QStringLiteral("\n")) + QStringLiteral("\n\n");
             }
+            if (!scrapedContext.isEmpty()) {
+                userPrompt += QStringLiteral("### Full Grounded Source Content:\n") + scrapedContext + QStringLiteral("\n\n");
+            }
+            if (sourceSummaries.isEmpty() && scrapedContext.isEmpty()) {
+                userPrompt += QStringLiteral("(No external live web sources retrieved; perform authoritative parametric domain analysis with concrete findings).\n\n");
+            }
+            userPrompt += QStringLiteral("Synthesize a comprehensive research briefing now.");
+            user_msg.content = userPrompt.toStdString();
             activeBackend_->append(user_msg);
 
             GenerationParams params;

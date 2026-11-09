@@ -58,7 +58,13 @@ std::string url_decode(std::string_view in) {
 std::string strip_html_tags(std::string_view html) {
     static const std::regex tag_re(R"(<[^>]+>)");
     std::string text = std::regex_replace(std::string(html), tag_re, " ");
-    return HtmlCleaner::decode_entities(text);
+    std::string decoded = HtmlCleaner::decode_entities(text);
+    static const std::regex ws_re(R"(\s+)");
+    std::string normalized = std::regex_replace(decoded, ws_re, " ");
+    auto start = normalized.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    auto end = normalized.find_last_not_of(" \t\r\n");
+    return normalized.substr(start, end - start + 1);
 }
 
 } // namespace
@@ -87,18 +93,30 @@ void WebSearchEngine::set_mock_handler(MockHandler handler) {
     mock_handler_ = std::move(handler);
 }
 
+std::string clean_query_string(std::string_view query) {
+    std::string q(query);
+    while (!q.empty() && (q.front() == '"' || q.front() == '\'' || std::isspace(static_cast<unsigned char>(q.front())))) {
+        q.erase(q.begin());
+    }
+    while (!q.empty() && (q.back() == '"' || q.back() == '\'' || std::isspace(static_cast<unsigned char>(q.back())))) {
+        q.pop_back();
+    }
+    return q;
+}
+
 std::vector<SearchResult> WebSearchEngine::search_duckduckgo_lite(
     std::string_view query,
     int max_results
 ) const {
     std::vector<SearchResult> results;
-    if (query.empty() || max_results <= 0) {
+    const std::string clean_query = clean_query_string(query);
+    if (clean_query.empty() || max_results <= 0) {
         return results;
     }
 
     FetchOptions fetch_opts;
     fetch_opts.method = "POST";
-    fetch_opts.post_body = "q=" + url_encode(query);
+    fetch_opts.post_body = "q=" + url_encode(clean_query);
     fetch_opts.content_type = "application/x-www-form-urlencoded";
     fetch_opts.user_agent = options_.user_agent;
     fetch_opts.timeout_seconds = options_.timeout_seconds;
@@ -124,7 +142,7 @@ std::vector<SearchResult> WebSearchEngine::search_duckduckgo_lite(
         std::regex_constants::icase
     );
     static const std::regex snippet_re(
-        R"(<td\s+[^>]*class=['"]result-snippet['"][^>]*>(.*?)</td>)",
+        R"(<td\s+[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)</td>)",
         std::regex_constants::icase
     );
 
@@ -174,7 +192,8 @@ std::vector<SearchResult> WebSearchEngine::search_searxng(
     int max_results
 ) const {
     std::vector<SearchResult> results;
-    if (query.empty() || max_results <= 0) {
+    const std::string clean_query = clean_query_string(query);
+    if (clean_query.empty() || max_results <= 0) {
         return results;
     }
 
@@ -208,7 +227,7 @@ std::vector<SearchResult> WebSearchEngine::search_searxng(
     cli.set_connection_timeout(options_.timeout_seconds, 0);
     cli.set_read_timeout(options_.timeout_seconds, 0);
 
-    const std::string path = "/search?q=" + url_encode(query) + "&format=json";
+    const std::string path = "/search?q=" + url_encode(clean_query) + "&format=json";
     auto res = cli.Get(path.c_str());
     if (!res || res->status != 200) {
         return results;
@@ -227,7 +246,7 @@ std::vector<SearchResult> WebSearchEngine::search_searxng(
                 sr.snippet = item.value("content", "");
                 sr.engine = item.value("engine", "searxng");
                 if (!sr.url.empty()) {
-                    sr.score = PageScorer::score_url(sr.url, query, sr.title, sr.snippet);
+                    sr.score = PageScorer::score_url(sr.url, clean_query, sr.title, sr.snippet);
                     results.push_back(std::move(sr));
                 }
             }
@@ -244,7 +263,8 @@ std::vector<SearchResult> WebSearchEngine::search_wikipedia(
     int max_results
 ) const {
     std::vector<SearchResult> results;
-    if (query.empty() || max_results <= 0) {
+    const std::string clean_query = clean_query_string(query);
+    if (clean_query.empty() || max_results <= 0) {
         return results;
     }
 
@@ -254,7 +274,7 @@ std::vector<SearchResult> WebSearchEngine::search_wikipedia(
     fetch_opts.timeout_seconds = options_.timeout_seconds;
 
     const std::string path = "/w/api.php?action=opensearch&search=" +
-                             url_encode(query) +
+                             url_encode(clean_query) +
                              "&limit=" + std::to_string(max_results) +
                              "&namespace=0&format=json";
 
@@ -282,7 +302,7 @@ std::vector<SearchResult> WebSearchEngine::search_wikipedia(
                 sr.url = (i < urls.size() && urls[i].is_string()) ? urls[i].get<std::string>() : "";
                 sr.engine = "wikipedia";
                 if (!sr.url.empty()) {
-                    sr.score = PageScorer::score_url(sr.url, query, sr.title, sr.snippet);
+                    sr.score = PageScorer::score_url(sr.url, clean_query, sr.title, sr.snippet);
                     results.push_back(std::move(sr));
                 }
             }
