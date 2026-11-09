@@ -532,7 +532,7 @@ int main(int argc, char** argv) {
     aquila::gui::apply_theme(&app, aquila::gui::ThemeMode::Dark);
 
     const bool smoke = app.arguments().contains(QStringLiteral("--smoke"));
-    const bool headlessTest = app.arguments().contains(QStringLiteral("--test-headless"));
+    const bool headlessTest = app.arguments().contains(QStringLiteral("--test-headless")) || app.arguments().contains(QStringLiteral("--run-headless-tests"));
     const int ssIdx = app.arguments().indexOf(QStringLiteral("--screenshots"));
 
     if (ssIdx != -1 && ssIdx + 1 < app.arguments().size()) {

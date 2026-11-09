@@ -21,6 +21,7 @@
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "outline"
       ]
@@ -45,7 +46,7 @@
   "scratchpad_checklist": [
     "Search web or local documentation for relevant material using KnowledgeModule web_search",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
-    "Summarize final synthesis into report file using WorkspaceModule create_file",
+    "Write comprehensive final research report to research_report.md (with markdown headers and citations like [1]) using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {

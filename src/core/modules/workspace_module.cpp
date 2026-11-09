@@ -106,8 +106,10 @@ std::vector<ActionSchema> WorkspaceModule::get_actions() const {
          schema(R"({"type":"object","properties":{"file":{"type":"string"},"name":{"type":"string"}},"required":["file","name"],"additionalProperties":false})")},
         {"surgical_edit", "Replace one exact, unique block of text in a file. The edit is rejected if it breaks the file's syntax.",
          schema(R"({"type":"object","properties":{"file":{"type":"string"},"search_block":{"type":"string"},"replace_block":{"type":"string"}},"required":["file","search_block","replace_block"],"additionalProperties":false})")},
-        {"create_file", "Create a new file with the given content.",
-         schema(R"({"type":"object","properties":{"file":{"type":"string"},"file_name":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"}},"additionalProperties":true})")},
+        {"create_file", "Create a new file with the given content (or overwrite an existing file).",
+         schema(R"({"type":"object","properties":{"file":{"type":"string"},"file_name":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":true})")},
+        {"write_file", "Write content to a file, creating it if it does not exist or overwriting it if it does.",
+         schema(R"({"type":"object","properties":{"file":{"type":"string"},"file_name":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":true})")},
         {"revert_file", "Restore a file to its content when it was first opened.",
          schema(R"({"type":"object","properties":{"file":{"type":"string"}},"required":["file"],"additionalProperties":false})")},
     };
@@ -170,6 +172,11 @@ ActionResult WorkspaceModule::run(const std::string& action, const Json& args) {
         if (action == "inspect_symbol") return capped(inspect_symbol(args));
         if (action == "surgical_edit") return capped(surgical_edit(args));
         if (action == "create_file") return capped(create_file(args));
+        if (action == "write_file" || action == "modify_file") {
+            Json wargs = args;
+            wargs["overwrite"] = true;
+            return capped(create_file(wargs));
+        }
         if (action == "revert_file") return capped(revert_file(args));
     } catch (const CanvasError& e) {
         return canvas_failure(e);
@@ -365,12 +372,21 @@ ActionResult WorkspaceModule::create_file(const Json& args) {
         return fail("invalid_args", "/file: missing required key ('file', 'file_name', or 'path')");
     }
     const auto content = args.value("content", std::string{});
+    const bool overwrite = args.contains("overwrite") && args["overwrite"].is_boolean() && args["overwrite"].get<bool>();
 
-    if (args.contains("overwrite") && args["overwrite"].is_boolean() && args["overwrite"].get<bool>()) {
-        canvas().discard(file_param);
-        std::error_code ec;
-        const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
-        fs::remove(base / file_param, ec);
+    // If file already exists in canvas or disk, check overwrite flag
+    try {
+        const auto& d = canvas().open(file_param);
+        if (!overwrite) {
+            return fail("exists", "'" + d.path + "' already exists; pass overwrite=true or call write_file to replace its content");
+        }
+        const std::string old_text = d.text();
+        const std::string path = d.path;
+        return submit(path, old_text, content, "overwrote " + path + " (" + std::to_string(lines_of(content).size()) + " lines)");
+    } catch (const CanvasError&) {
+        // File does not exist yet, continue to create
+    } catch (const PathDenied& pe) {
+        return path_failure(pe);
     }
 
     try {
@@ -380,7 +396,15 @@ ActionResult WorkspaceModule::create_file(const Json& args) {
         if (!r.success) canvas_->discard(path);  // validation failed: forget the empty document
         return r;
     } catch (const CanvasError& ce) {
-        return fail(ce.code(), ce.what());
+        if (ce.code() == "exists" && overwrite) {
+            try {
+                const auto& d = canvas().open(file_param);
+                const std::string old_text = d.text();
+                const std::string path = d.path;
+                return submit(path, old_text, content, "overwrote " + path + " (" + std::to_string(lines_of(content).size()) + " lines)");
+            } catch (...) {}
+        }
+        return fail(ce.code(), ce.what() + (ce.code() == "exists" ? std::string("; pass overwrite=true to replace") : ""));
     }
 }
 

@@ -154,7 +154,14 @@ QString ResearchPage::selectedEngine() const {
 }
 
 QString ResearchPage::selectedScope() const {
-    return scopeCombo_->currentText();
+    const QString txt = scopeCombo_->currentText();
+    if (txt.contains(QStringLiteral("Web"), Qt::CaseInsensitive) && txt.contains(QStringLiteral("Local"), Qt::CaseInsensitive)) {
+        return QStringLiteral("Both");
+    }
+    if (txt.contains(QStringLiteral("Web"), Qt::CaseInsensitive)) {
+        return QStringLiteral("Web");
+    }
+    return QStringLiteral("Local");
 }
 
 void ResearchPage::onSearchClicked() {

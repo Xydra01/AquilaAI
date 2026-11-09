@@ -645,8 +645,11 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
     int foundCount = 0;
     QStringList sourceSummaries;
 
-    // 1. Local Search (if scope is "Local" or "Both")
-    if (scope == QStringLiteral("Local") || scope == QStringLiteral("Both")) {
+    const bool doLocal = scope.contains(QStringLiteral("Local"), Qt::CaseInsensitive) || scope.contains(QStringLiteral("Both"), Qt::CaseInsensitive);
+    const bool doWeb = scope.contains(QStringLiteral("Web"), Qt::CaseInsensitive) || scope.contains(QStringLiteral("Both"), Qt::CaseInsensitive);
+
+    // 1. Local Search (if scope includes Local)
+    if (doLocal) {
         QDir dir(workspaceRoot_);
         const QStringList files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
         for (const auto& f : files) {
@@ -664,8 +667,8 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
         }
     }
 
-    // 2. Web Search (if scope is "Web" or "Both")
-    if (scope == QStringLiteral("Web") || scope == QStringLiteral("Both")) {
+    // 2. Web Search (if scope includes Web)
+    if (doWeb) {
         try {
             aquila::knowledge::SearchOptions opts;
             if (settingsPage_) {
@@ -730,19 +733,23 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
 
     // 3. Synthesis Report Generation
     QString report;
-    if (ensureBackendReady() && !sourceSummaries.isEmpty()) {
+    if (ensureBackendReady()) {
         statusBarLabel_->setText(QStringLiteral("Synthesizing research briefing with model in VRAM..."));
         qApp->processEvents();
         try {
             const auto cp = activeBackend_->mark_checkpoint();
             Message sys_msg;
             sys_msg.role = Role::system;
-            sys_msg.content = "You are Aquila Research Synthesizer. Synthesize the provided research findings into a comprehensive, well-structured research briefing in Markdown. Include citations like [1], [2], etc., corresponding to sources.";
+            sys_msg.content = "You are Aquila Research Synthesizer. Synthesize the provided research topic and findings into a comprehensive, well-structured research briefing in Markdown. Include sections: Executive Summary, Key Findings, Technical Architecture & Capabilities, and References/Citations with [1], [2] links.";
             activeBackend_->append(sys_msg);
 
             Message user_msg;
             user_msg.role = Role::user;
-            user_msg.content = "Query: " + query.toStdString() + "\n\nSources:\n" + sourceSummaries.join(QStringLiteral("\n")).toStdString();
+            if (!sourceSummaries.isEmpty()) {
+                user_msg.content = "Query: " + query.toStdString() + "\n\nSources:\n" + sourceSummaries.join(QStringLiteral("\n")).toStdString();
+            } else {
+                user_msg.content = "Query: " + query.toStdString() + "\n\n(No external live sources retrieved; provide authoritative parametric analysis with clear findings).";
+            }
             activeBackend_->append(user_msg);
 
             GenerationParams params;

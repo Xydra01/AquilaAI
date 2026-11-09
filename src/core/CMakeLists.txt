@@ -90,4 +90,7 @@ target_link_libraries(aquila_core
         # by `#if AQUILA_HAS_LLAMACPP`. Linking an INTERFACE target compiles nothing
         # at configure time; on stub lanes it never pulls in llama.cpp.
         aquila_llamacpp)
+if (WIN32)
+    target_link_libraries(aquila_core PRIVATE winhttp)
+endif()
 aquila_set_warnings(aquila_core)

@@ -1,5 +1,6 @@
 #include "aquila/knowledge/web_search.hpp"
 #include "aquila/knowledge/html_cleaner.hpp"
+#include "aquila/knowledge/web_fetcher.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -95,28 +96,25 @@ std::vector<SearchResult> WebSearchEngine::search_duckduckgo_lite(
         return results;
     }
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    httplib::SSLClient cli("lite.duckduckgo.com", 443);
-#else
-    httplib::Client cli("http://lite.duckduckgo.com");
-#endif
-    cli.set_connection_timeout(options_.timeout_seconds, 0);
-    cli.set_read_timeout(options_.timeout_seconds, 0);
-    cli.set_follow_location(true);
+    FetchOptions fetch_opts;
+    fetch_opts.method = "POST";
+    fetch_opts.post_body = "q=" + url_encode(query);
+    fetch_opts.content_type = "application/x-www-form-urlencoded";
+    fetch_opts.user_agent = options_.user_agent;
+    fetch_opts.timeout_seconds = options_.timeout_seconds;
 
-    httplib::Headers headers = {
-        {"User-Agent", options_.user_agent},
-        {"Content-Type", "application/x-www-form-urlencoded"},
-        {"Accept", "text/html"}
-    };
-
-    const std::string body = "q=" + url_encode(query);
-    auto res = cli.Post("/lite/", headers, body, "application/x-www-form-urlencoded");
-    if (!res || res->status != 200) {
+    FetchResponse res;
+    try {
+        res = execute_http("https://lite.duckduckgo.com/lite/", fetch_opts);
+    } catch (...) {
         return results;
     }
 
-    const std::string& html = res->body;
+    if (res.status_code != 200 || res.body.empty()) {
+        return results;
+    }
+
+    const std::string& html = res.body;
 
     // Regex matching both attribute orders for result-link:
     // 1: href before class
@@ -250,30 +248,29 @@ std::vector<SearchResult> WebSearchEngine::search_wikipedia(
         return results;
     }
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    httplib::SSLClient cli("en.wikipedia.org", 443);
-#else
-    httplib::Client cli("http://en.wikipedia.org");
-#endif
-    cli.set_connection_timeout(options_.timeout_seconds, 0);
-    cli.set_read_timeout(options_.timeout_seconds, 0);
+    FetchOptions fetch_opts;
+    fetch_opts.method = "GET";
+    fetch_opts.user_agent = options_.user_agent;
+    fetch_opts.timeout_seconds = options_.timeout_seconds;
 
     const std::string path = "/w/api.php?action=opensearch&search=" +
                              url_encode(query) +
                              "&limit=" + std::to_string(max_results) +
                              "&namespace=0&format=json";
 
-    httplib::Headers headers = {
-        {"User-Agent", options_.user_agent}
-    };
+    FetchResponse res;
+    try {
+        res = execute_http("https://en.wikipedia.org" + path, fetch_opts);
+    } catch (...) {
+        return results;
+    }
 
-    auto res = cli.Get(path.c_str(), headers);
-    if (!res || res->status != 200) {
+    if (res.status_code != 200 || res.body.empty()) {
         return results;
     }
 
     try {
-        Json j = Json::parse(res->body);
+        Json j = Json::parse(res.body);
         if (j.is_array() && j.size() >= 4) {
             const auto& titles = j[1];
             const auto& snippets = j[2];
@@ -316,21 +313,32 @@ std::vector<SearchResult> WebSearchEngine::search(std::string_view query) const 
     switch (options_.provider) {
         case SearchProvider::searxng:
             results = search_searxng(query, kMax);
+            if (results.empty()) {
+                results = search_duckduckgo_lite(query, kMax);
+            }
+            if (results.empty()) {
+                results = search_wikipedia(query, kMax);
+            }
             break;
         case SearchProvider::wikipedia:
             results = search_wikipedia(query, kMax);
             break;
         case SearchProvider::auto_detect: {
-            // Try SearXNG first, if empty fall back to DuckDuckGo
             results = search_searxng(query, kMax);
             if (results.empty()) {
                 results = search_duckduckgo_lite(query, kMax);
+            }
+            if (results.empty()) {
+                results = search_wikipedia(query, kMax);
             }
             break;
         }
         case SearchProvider::duckduckgo:
         default:
             results = search_duckduckgo_lite(query, kMax);
+            if (results.empty()) {
+                results = search_wikipedia(query, kMax);
+            }
             break;
     }
 

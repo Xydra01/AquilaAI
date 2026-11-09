@@ -21,10 +21,13 @@ private:
 };
 
 struct FetchOptions {
+    std::string method{"GET"};
+    std::string post_body;
+    std::string content_type;
     int timeout_seconds{10};
     std::size_t max_body_bytes{2 * 1024 * 1024}; // 2 MB
     int max_redirects{5};
-    std::string user_agent{"Aquila-Agent/1.0"};
+    std::string user_agent{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"};
 };
 
 struct FetchResponse {
@@ -33,6 +36,8 @@ struct FetchResponse {
     std::string body;
     std::string final_url;
 };
+
+[[nodiscard]] FetchResponse execute_http(std::string_view url, const FetchOptions& options);
 
 class WebFetcher {
 public:

@@ -183,7 +183,15 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
         return 2;
     }
 
-    const std::string task = opts.task_prompt.empty() ? recipe.goal_template : opts.task_prompt;
+    std::string task = opts.task_prompt;
+    if (task.empty()) {
+        task = recipe.goal_template;
+        const std::string placeholder = "{{user_instructions}}";
+        auto pos = task.find(placeholder);
+        if (pos != std::string::npos) {
+            task.replace(pos, placeholder.size(), "state-of-the-art developments and key architectural findings");
+        }
+    }
 
     out << "Starting recipe '" << recipe.recipe_id << "'...\n";
     out << "Workspace: " << std::filesystem::absolute(opts.workspace_root).string() << "\n";
@@ -396,7 +404,15 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
             return 2;
         }
         const RecipeCartridge recipe = *maybe_recipe;
-        const std::string goal = opts.task_prompt.empty() ? recipe.goal_template : opts.task_prompt;
+        std::string goal = opts.task_prompt;
+        if (goal.empty()) {
+            goal = recipe.goal_template;
+            const std::string placeholder = "{{user_instructions}}";
+            auto pos = goal.find(placeholder);
+            if (pos != std::string::npos) {
+                goal.replace(pos, placeholder.size(), "state-of-the-art developments and key architectural findings");
+            }
+        }
 
         out << "Recipe: " << recipe.recipe_id << "\n"
             << "Goal: " << goal << "\n"

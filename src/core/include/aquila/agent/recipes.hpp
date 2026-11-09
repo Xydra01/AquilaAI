@@ -138,6 +138,7 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
       },
       "expose_actions": [
         "create_file",
+        "write_file",
         "read_region",
         "outline"
       ]
@@ -162,7 +163,7 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
   "scratchpad_checklist": [
     "Search web or local documentation for relevant material using KnowledgeModule web_search",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
-    "Summarize final synthesis into report file using WorkspaceModule create_file",
+    "Write comprehensive final research report to research_report.md (with markdown headers and citations like [1]) using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {
@@ -972,96 +973,88 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
 }
 )AQ";
 
-}  // namespace detail
+} // namespace detail
 
 [[nodiscard]] inline RecipeCartridge code_smoke_file_recipe() {
-    return parse<RecipeCartridge>(detail::kCodeSmokeFileRecipeJson);
+  return parse<RecipeCartridge>(detail::kCodeSmokeFileRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge knowledge_smoke_recipe() {
-    return parse<RecipeCartridge>(detail::kKnowledgeSmokeRecipeJson);
+  return parse<RecipeCartridge>(detail::kKnowledgeSmokeRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_research_full_recipe() {
-    return parse<RecipeCartridge>(detail::kFnResearchFullRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnResearchFullRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_research_dynamic_recipe() {
-    return parse<RecipeCartridge>(detail::kFnResearchDynamicRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnResearchDynamicRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_research_offline_recipe() {
-    return parse<RecipeCartridge>(detail::kFnResearchOfflineRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnResearchOfflineRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_research_chat_light_recipe() {
-    return parse<RecipeCartridge>(detail::kFnResearchChatLightRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnResearchChatLightRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_writing_full_recipe() {
-    return parse<RecipeCartridge>(detail::kFnWritingFullRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnWritingFullRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_writing_dynamic_recipe() {
-    return parse<RecipeCartridge>(detail::kFnWritingDynamicRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnWritingDynamicRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_writing_sources_recipe() {
-    return parse<RecipeCartridge>(detail::kFnWritingSourcesRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnWritingSourcesRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_learn_syllabus_recipe() {
-    return parse<RecipeCartridge>(detail::kFnLearnSyllabusRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnLearnSyllabusRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_learn_syllabus_web_recipe() {
-    return parse<RecipeCartridge>(detail::kFnLearnSyllabusWebRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnLearnSyllabusWebRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_persona_build_recipe() {
-    return parse<RecipeCartridge>(detail::kFnPersonaBuildRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnPersonaBuildRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_persona_lore_recipe() {
-    return parse<RecipeCartridge>(detail::kFnPersonaLoreRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnPersonaLoreRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_dev_implement_recipe() {
-    return parse<RecipeCartridge>(detail::kFnDevImplementRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnDevImplementRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_dev_documentation_recipe() {
-    return parse<RecipeCartridge>(detail::kFnDevDocumentationRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnDevDocumentationRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_dev_tdd_recipe() {
-    return parse<RecipeCartridge>(detail::kFnDevTddRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnDevTddRecipeJson);
 }
 
 [[nodiscard]] inline RecipeCartridge fn_dev_dynamic_recipe() {
-    return parse<RecipeCartridge>(detail::kFnDevDynamicRecipeJson);
+  return parse<RecipeCartridge>(detail::kFnDevDynamicRecipeJson);
 }
 
 [[nodiscard]] inline std::vector<RecipeCartridge> all_builtin_recipes() {
-    return {
-        code_smoke_file_recipe(),
-        knowledge_smoke_recipe(),
-        fn_research_full_recipe(),
-        fn_research_dynamic_recipe(),
-        fn_research_offline_recipe(),
-        fn_research_chat_light_recipe(),
-        fn_writing_full_recipe(),
-        fn_writing_dynamic_recipe(),
-        fn_writing_sources_recipe(),
-        fn_learn_syllabus_recipe(),
-        fn_learn_syllabus_web_recipe(),
-        fn_persona_build_recipe(),
-        fn_persona_lore_recipe(),
-        fn_dev_implement_recipe(),
-        fn_dev_documentation_recipe(),
-        fn_dev_tdd_recipe(),
-        fn_dev_dynamic_recipe(),
-    };
+  return {
+      code_smoke_file_recipe(),       knowledge_smoke_recipe(),
+      fn_research_full_recipe(),      fn_research_dynamic_recipe(),
+      fn_research_offline_recipe(),   fn_research_chat_light_recipe(),
+      fn_writing_full_recipe(),       fn_writing_dynamic_recipe(),
+      fn_writing_sources_recipe(),    fn_learn_syllabus_recipe(),
+      fn_learn_syllabus_web_recipe(), fn_persona_build_recipe(),
+      fn_persona_lore_recipe(),       fn_dev_implement_recipe(),
+      fn_dev_documentation_recipe(),  fn_dev_tdd_recipe(),
+      fn_dev_dynamic_recipe(),
+  };
 }
 
-}  // namespace aquila
+} // namespace aquila
