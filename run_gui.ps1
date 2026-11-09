@@ -6,13 +6,21 @@ Write-Host "===================================================" -ForegroundColo
 Write-Host "  Aquila AI Framework - Launching GUI" -ForegroundColor Cyan
 Write-Host "===================================================" -ForegroundColor Cyan
 
-if (Test-Path $cudaExe) {
-    Write-Host "[INFO] Launching GPU-accelerated binary [build\msvc-release-cuda]..." -ForegroundColor Green
-    Start-Process -FilePath $cudaExe -ArgumentList $args
-} elseif (Test-Path $releaseExe) {
-    Write-Host "[INFO] Launching release binary [build\msvc-release]..." -ForegroundColor Yellow
-    Start-Process -FilePath $releaseExe -ArgumentList $args
-} else {
+$targetExe = if (Test-Path $cudaExe) { $cudaExe } elseif (Test-Path $releaseExe) { $releaseExe } else { $null }
+
+if (-not $targetExe) {
     Write-Host "[ERROR] aquila_gui.exe not found! Please build with scripts\msvc-dev.cmd first." -ForegroundColor Red
     exit 1
+}
+
+if ($targetExe -eq $cudaExe) {
+    Write-Host "[INFO] Launching GPU-accelerated binary [build\msvc-release-cuda]..." -ForegroundColor Green
+} else {
+    Write-Host "[INFO] Launching release binary [build\msvc-release]..." -ForegroundColor Yellow
+}
+
+if ($args.Count -gt 0) {
+    Start-Process -FilePath $targetExe -WorkingDirectory $PSScriptRoot -ArgumentList $args
+} else {
+    Start-Process -FilePath $targetExe -WorkingDirectory $PSScriptRoot
 }
