@@ -49,11 +49,12 @@ private:
     };
 
     ActionResult execute(const std::string& action, std::vector<std::string> argv, const std::string& cwd,
-                         bool diagnose, const std::string& fail_code);
+                         bool diagnose, const std::string& fail_code, double timeout_override = 0.0);
     ActionResult ensure_venv_action(const std::string& venv_name);
     ActionResult pip_install_action(const std::vector<std::string>& packages, bool upgrade);
     ActionResult run_python_action(const std::string& script, const std::string& code,
-                                   const std::vector<std::string>& script_args, const std::string& cwd);
+                                   const std::vector<std::string>& script_args, const std::string& cwd,
+                                   double timeout_override = 0.0);
     ActionResult pip_list_action();
     ActionResult verify_implementation_action(const Json& args);
     [[nodiscard]] std::string program_name(const std::string& argv0) const;
@@ -64,7 +65,7 @@ private:
     std::string test_cmd_;
     std::string cwd_ = ".";
     std::set<std::string> extra_allowed_;
-    double timeout_s_ = 300.0;
+    double timeout_s_ = 30.0;
     std::map<std::string, std::string> env_;
     std::size_t max_output_chars_;
     std::deque<RunRecord> history_;

@@ -354,6 +354,7 @@ std::string RunLogger::recipe_id() const {
 void RunLogger::write_log_line(const std::string& line) {
     if (log_stream_.is_open()) {
         log_stream_ << line;
+        log_stream_.flush();
     }
 }
 
@@ -370,7 +371,9 @@ void RunLogger::write_jsonl_record(const std::string& event_type, const Json& da
             record[it.key()] = it.value();
         }
         jsonl_stream_ << record.dump() << "\n";
+        jsonl_stream_.flush();
     }
 }
 
 }  // namespace aquila::logging
+

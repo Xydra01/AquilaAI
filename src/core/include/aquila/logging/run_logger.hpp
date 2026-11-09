@@ -92,3 +92,4 @@ private:
 };
 
 }  // namespace aquila::logging
+

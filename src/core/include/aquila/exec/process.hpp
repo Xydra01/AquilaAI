@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@ struct RunOptions {
     double timeout_s = 120.0;                // whole-run limit; kills the process tree
     std::size_t max_output_bytes = 1 << 20;  // head and tail are kept beyond this
     std::string stdin_data;                  // input piped to child process's stdin (empty => NUL / dev/null)
+    std::function<bool()> check_cancelled;   // optional cancellation hook (kills process tree if true)
 };
 
 struct RunResult {
@@ -38,6 +40,7 @@ struct RunResult {
     std::string error;  // why the process could not start
     int exit_code = -1;
     bool timed_out = false;
+    bool cancelled = false;
     double duration_s = 0.0;
     std::string output;  // stdout and stderr, interleaved as written
     bool truncated = false;

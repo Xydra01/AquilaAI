@@ -167,6 +167,15 @@ RunResult run(const RunOptions& opt) {
             exited = true;
             exit_time = std::chrono::steady_clock::now();
         }
+        if (!exited && opt.check_cancelled && opt.check_cancelled()) {
+            ::killpg(pid, SIGKILL);
+            r.cancelled = true;
+            r.timed_out = false;
+            r.error = "process terminated: cancelled by user";
+            ::waitpid(pid, &status, 0);
+            exited = true;
+            exit_time = std::chrono::steady_clock::now();
+        }
         if (!exited && elapsed() > opt.timeout_s) {
             ::killpg(pid, SIGKILL);
             r.timed_out = true;

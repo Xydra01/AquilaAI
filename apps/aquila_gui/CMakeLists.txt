@@ -76,12 +76,16 @@ get_filename_component(AQUILA_QT_BIN_DIR "${_qmake}" DIRECTORY)
 
 add_test(NAME gui.smoke COMMAND aquila_gui --smoke)
 set_tests_properties(gui.smoke PROPERTIES
-    PASS_REGULAR_EXPRESSION "smoke=ok"
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    PASS_REGULAR_EXPRESSION "smoke=ok")
+if(NOT WIN32)
+    set_property(TEST gui.smoke PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 aquila_test_env(gui.smoke "${AQUILA_QT_BIN_DIR}")
 
 add_test(NAME gui.headless COMMAND aquila_gui --test-headless)
 set_tests_properties(gui.headless PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[GUI-HEADLESS-TEST-OK\\]"
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    PASS_REGULAR_EXPRESSION "\\[GUI-HEADLESS-TEST-OK\\]")
+if(NOT WIN32)
+    set_property(TEST gui.headless PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 aquila_test_env(gui.headless "${AQUILA_QT_BIN_DIR}")

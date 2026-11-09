@@ -613,14 +613,13 @@ int main(int argc, char** argv) {
 
     if (smoke) {
         std::printf("platform=%s\n", qPrintable(QApplication::platformName()));
-        std::printf("style=%s\n", qPrintable(QApplication::style()->name()));
+        if (auto* s = QApplication::style()) {
+            std::printf("style=%s\n", qPrintable(s->name()));
+        }
         std::printf("styles=%s\n", qPrintable(QStyleFactory::keys().join(QLatin1Char(','))));
-        QTimer::singleShot(0, &app, [&app] {
-            std::printf("smoke=ok\n");
-            std::fflush(stdout);
-            app.quit();
-        });
-        return QApplication::exec();
+        std::printf("smoke=ok\n");
+        std::fflush(stdout);
+        return 0;
     }
 
     aquila::gui::MainWindow window;

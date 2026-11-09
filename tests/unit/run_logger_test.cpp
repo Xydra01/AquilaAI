@@ -114,3 +114,4 @@ TEST_CASE("RunLogger creates dual-format .log and .jsonl files with full thinkin
 
     std::filesystem::remove_all(temp_dir, ec);
 }
+

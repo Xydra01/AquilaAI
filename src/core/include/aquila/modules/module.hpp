@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@ namespace aquila {
 struct ModuleContext {
     std::filesystem::path workspace_root;  // every path a module touches stays under it
     std::size_t max_output_chars = 4500;    // R16 GPU-tier default; M4 sets it per tier
+    std::function<bool()> check_cancelled; // optional cancellation predicate
 };
 
 // A coarse-grained, stateful module (R9-R10).

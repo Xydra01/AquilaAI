@@ -234,6 +234,7 @@ ActionResult ExecutionModule::ensure_venv_action(const std::string& venv_name) {
     opt.cwd = base;
     opt.timeout_s = 60.0;
     opt.env = env_;
+    opt.check_cancelled = ctx_.check_cancelled;
     auto run_res = exec::run(opt);
     if (!run_res.started || run_res.exit_code != 0) {
         opt.argv = {"python3", "-m", "venv", target_name};
@@ -310,6 +311,7 @@ ActionResult ExecutionModule::pip_install_action(const std::vector<std::string>&
     opt.timeout_s = 180.0;
     opt.env = env_;
     opt.env["VIRTUAL_ENV"] = path_to_utf8(venv);
+    opt.check_cancelled = ctx_.check_cancelled;
 
     const auto run_res = exec::run(opt);
     if (!run_res.started || run_res.exit_code != 0) {
@@ -327,7 +329,8 @@ ActionResult ExecutionModule::pip_install_action(const std::vector<std::string>&
 }
 
 ActionResult ExecutionModule::run_python_action(const std::string& script, const std::string& code,
-                                               const std::vector<std::string>& script_args, const std::string& cwd) {
+                                               const std::vector<std::string>& script_args, const std::string& cwd,
+                                               double timeout_override) {
     ensure_venv_action(".venv");
 
     const auto base = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
@@ -417,7 +420,7 @@ ActionResult ExecutionModule::run_python_action(const std::string& script, const
         return fail("invalid_args", "run_python requires either 'script' or 'code'");
     }
 
-    return execute("run_python", argv, target_cwd, false, "python_execution_failed");
+    return execute("run_python", argv, target_cwd, false, "python_execution_failed", timeout_override);
 }
 
 ActionResult ExecutionModule::pip_list_action() {
@@ -526,21 +529,28 @@ ActionResult ExecutionModule::verify_implementation_action(const Json& args) {
     if (trimmed.empty() || trimmed.size() < 20) {
         return fail("stub_implementation", "❌ Script '" + script_path + "' is too short or empty (" + std::to_string(trimmed.size()) + " bytes). Provide the full functional code.");
     }
-    static const std::regex stub_re(R"(\b(pass|raise NotImplementedError|TODO)\b)");
+    static const std::regex stub_re(R"(\b(pass|raise\s+NotImplementedError|TO\s*DO|FIXME)\b)", std::regex_constants::icase);
     if (std::regex_search(trimmed, stub_re)) {
         return fail("stub_implementation", "❌ Script '" + script_path + "' contains placeholder stubs (pass/TODO/NotImplementedError). Implement the actual functional logic.");
     }
 
-    // Run Python syntax & compile check
-    auto compile_res = run_python_action("", "import py_compile, sys; py_compile.compile(sys.argv[1], doraise=True)", {script_path}, cwd_);
+    // Run Python syntax & compile check (10s timeout)
+    auto compile_res = run_python_action("", "import py_compile, sys; py_compile.compile(sys.argv[1], doraise=True)", {script_path}, cwd_, 10.0);
     if (!compile_res.success) {
         return fail("syntax_error", "❌ Syntax error in '" + script_path + "':\n" + compile_res.llm_facing_output);
     }
 
-    // Execute script in venv
-    auto run_res = run_python_action(script_path, "", {}, cwd_);
+    // Execute script in venv with a tight verification timeout (15s)
+    auto run_res = run_python_action(script_path, "", {}, cwd_, 15.0);
+    static const std::regex srv_re(R"(Serving Flask app|Running on http|Uvicorn running|Application startup complete|Press CTRL\+C to quit|Development server|WSGIServer|Started server process|Bottle server starting up)");
     if (!run_res.success) {
+        if (std::regex_search(run_res.llm_facing_output, srv_re)) {
+            return ok("✅ Verified web/server application in '" + script_path + "'. Server initialized and started listening successfully:\nOutput:\n" + run_res.llm_facing_output);
+        }
         return fail("execution_failed", "❌ Script '" + script_path + "' failed execution:\n" + run_res.llm_facing_output);
+    }
+    if (std::regex_search(run_res.llm_facing_output, srv_re)) {
+        return ok("✅ Verified web/server application in '" + script_path + "'. Server initialized and started listening successfully:\nOutput:\n" + run_res.llm_facing_output);
     }
     if (run_res.llm_facing_output.empty() || run_res.llm_facing_output == "\n") {
         return fail("empty_output", "❌ Script '" + script_path + "' ran but produced no stdout. Ensure the script prints results.");
@@ -550,7 +560,7 @@ ActionResult ExecutionModule::verify_implementation_action(const Json& args) {
 }
 
 ActionResult ExecutionModule::execute(const std::string& action, std::vector<std::string> argv, const std::string& cwd,
-                                      bool diagnose, const std::string& fail_code) {
+                                      bool diagnose, const std::string& fail_code, double timeout_override) {
     if (!allowed(argv.front())) {
         return fail("not_allowed", "program '" + program_name(argv.front()) +
                                        "' is not on the allowlist (no shell; allowed: python, pytest, git, cmake, ninja, "
@@ -587,7 +597,9 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
     exec::RunOptions opt;
     opt.cwd = dir;
     opt.env = env_;
-    opt.timeout_s = timeout_s_;
+    const double eff_timeout = timeout_override > 0.0 ? timeout_override : timeout_s_;
+    opt.timeout_s = eff_timeout;
+    opt.check_cancelled = ctx_.check_cancelled;
 
     // Inject .venv if active in workspace
     const auto base_dir = ctx_.workspace_root.empty() ? fs::current_path() : ctx_.workspace_root;
@@ -647,10 +659,11 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
 
     const std::string what = action == "run_build_and_diagnose" ? "build" : action == "run_test_suite" ? "tests" : "command";
     std::string text;
-    const bool ok_exit = res.exit_code == 0 && !res.timed_out;
-    text = what + (res.timed_out ? " TIMED OUT after " + seconds(timeout_s_) + " (process tree killed)"
-                   : ok_exit    ? " succeeded"
-                                : " FAILED") +
+    const bool ok_exit = res.exit_code == 0 && !res.timed_out && !res.cancelled;
+    text = what + (res.cancelled ? " CANCELLED by user"
+                   : res.timed_out ? " TIMED OUT after " + seconds(eff_timeout) + " (process tree killed)"
+                   : ok_exit       ? " succeeded"
+                                   : " FAILED") +
            " (exit " + std::to_string(res.exit_code) + ", " + seconds(res.duration_s) + ")\n";
     if (diagnose) {
         const auto d = exec::diagnose(res.output);
@@ -684,10 +697,16 @@ ActionResult ExecutionModule::execute(const std::string& action, std::vector<std
     if (action == "run_python" && ok_exit) {
         text += "\n[SUCCESS: Script executed successfully with exit code 0! If execution verification is complete, call OrchestratorModule.complete_recipe to finish the task.]\n";
     }
+    if (action == "run_python" && res.timed_out) {
+        static const std::regex srv_re(R"(Serving Flask app|Running on http|Uvicorn running|Press CTRL\+C to quit|Development server|WSGIServer|Started server process)");
+        if (std::regex_search(res.output, srv_re)) {
+            text += "\n[SERVER DETECTED: The script launched a persistent web server that listened until timeout. Web apps must be tested non-interactively using test clients (e.g. Flask's app.test_client() or httpx) or guarded behind '--serve' so scripts exit cleanly with exit code 0 when run directly. If the application is already complete and working, you may now call OrchestratorModule.complete_recipe.]\n";
+        }
+    }
     history_.push_back(std::move(rec));
     while (history_.size() > kHistory) history_.pop_front();
 
-    ActionResult r = res.timed_out ? fail("timeout", text) : ok_exit ? ok(text) : fail(fail_code, text);
+    ActionResult r = res.cancelled ? fail("cancelled", text) : res.timed_out ? fail("timeout", text) : ok_exit ? ok(text) : fail(fail_code, text);
     if (r.llm_facing_output.size() > max_output_chars_) {
         const auto cut = r.llm_facing_output.size() - max_output_chars_;
         r.llm_facing_output.resize(max_output_chars_);

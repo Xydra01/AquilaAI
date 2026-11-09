@@ -94,7 +94,7 @@ std::string build_recipe_system_prompt(const RecipeCartridge& recipe,
               "2. The 'module' field MUST be one of the loaded modules listed above. Never invent or hallucinate unloaded modules.\n"
               "3. When writing code, scripts, or files (via WorkspaceModule or ExecutionModule), write complete, syntactically valid code (e.g. in Python, always call functions with parentheses like datetime.now(tz), provide valid arguments, and include needed imports). If an action returns an error or syntax failure, READ the error output, fix the code, and NEVER submit the identical failing code.\n"
               "4. Task Completion: Once your objective has been met (e.g. script executed, document written, or research facts synthesized), immediately call OrchestratorModule.complete_recipe with a concise summary of what was accomplished to finish the recipe. Do not stay stuck in repetitive loops or rerun completed steps.\n"
-              "5. Non-Interactive Script Rule: All generated code and scripts MUST be non-interactive. NEVER call input() or prompt for user stdin. Accept parameters via sys.argv / argparse or provide default fallback values. For external APIs, write defensive code that validates responses and handles missing credentials or network errors gracefully.\n";
+              "5. Non-Interactive & Server Application Rule: All generated code and scripts MUST be non-interactive and terminate cleanly. NEVER call input() or block on user stdin. For web servers and daemons (Flask, FastAPI, etc.): NEVER block unconditionally on app.run() or uvicorn.run() during testing. Always test routes using the framework's test client (e.g. app.test_client() in Flask or httpx/requests) so the script verifies endpoints and exits cleanly with exit code 0 when run directly, or guard server startup behind '--serve' CLI flag. Once verification succeeds, call OrchestratorModule.complete_recipe.\n";
     return prompt;
 }
 
@@ -173,10 +173,14 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
 
     // Build the module set: instantiate each loaded module through the registry
     // (held as unique_ptr, no raw owning pointers) and apply its initial_state.
+    ModuleContext ctx = module_ctx_;
+    if (config.check_cancelled) {
+        ctx.check_cancelled = config.check_cancelled;
+    }
     std::vector<std::unique_ptr<IAgentModule>> modules;
     modules.reserve(recipe.load_modules.size());
     for (const ModuleLoad& load : recipe.load_modules) {
-        std::unique_ptr<IAgentModule> module = registry_.create(load.module, module_ctx_);
+        std::unique_ptr<IAgentModule> module = registry_.create(load.module, ctx);
         module->configure(load.initial_state);
         modules.push_back(std::move(module));
     }

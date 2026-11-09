@@ -314,6 +314,16 @@ RunResult run(const RunOptions& opt) {
             exit_time = std::chrono::steady_clock::now();
             continue;
         }
+        if (!exited && opt.check_cancelled && opt.check_cancelled()) {
+            TerminateJobObject(job.h, 1);
+            r.cancelled = true;
+            r.timed_out = false;
+            r.error = "process terminated: cancelled by user";
+            WaitForSingleObject(proc.h, 1000);
+            exited = true;
+            exit_time = std::chrono::steady_clock::now();
+            continue;
+        }
         if (!exited && elapsed() > opt.timeout_s) {
             TerminateJobObject(job.h, 1);
             r.timed_out = true;

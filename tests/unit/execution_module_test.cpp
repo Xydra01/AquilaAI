@@ -223,6 +223,12 @@ TEST_CASE("execution: verify_implementation utility gates", "[execution]") {
     CHECK_FALSE(r.success);
     CHECK(r.error_code == "stub_implementation");
 
+    // 3b. Stub file with spaced TO DO fails
+    tmp.write("spaced_todo_stub.py", "# TO DO: implement this feature later\nprint('starting')\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "spaced_todo_stub.py"}});
+    CHECK_FALSE(r.success);
+    CHECK(r.error_code == "stub_implementation");
+
     // 4. Broken syntax fails
     tmp.write("broken.py", "def syntax_err(\n    return 42\n");
     r = m.execute_action("verify_implementation", Json{{"file_path", "broken.py"}});
@@ -234,4 +240,26 @@ TEST_CASE("execution: verify_implementation utility gates", "[execution]") {
     r = m.execute_action("verify_implementation", Json{{"file_path", "solution.py"}});
     CHECK(r.success);
     CHECK(r.llm_facing_output.find("verified successfully") != std::string::npos);
+
+    // 6. Web server script that outputs server startup logs passes verification
+    tmp.write("web_app.py", "import sys\nprint(' * Serving Flask app \\'web_app\\'\\n * Running on http://127.0.0.1:5000\\nPress CTRL+C to quit')\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "web_app.py"}});
+    CHECK(r.success);
+    CHECK(r.llm_facing_output.find("Verified web/server application") != std::string::npos);
+}
+
+TEST_CASE("execution: cancellation callback halts child process promptly", "[execution]") {
+    test::TempDir tmp;
+    std::atomic<bool> cancelled{false};
+    ModuleContext ctx{tmp.path(), 4500, [&]() { return cancelled.load(); }};
+    ExecutionModule m(ctx);
+
+    // Write a script that would otherwise sleep for 10 seconds
+    tmp.write("sleep_test.py", "import time\ntime.sleep(10)\nprint('done')\n");
+
+    // Set cancellation to true before running
+    cancelled.store(true);
+    const auto r = m.execute_action("run_python", Json{{"script", "sleep_test.py"}});
+    CHECK_FALSE(r.success);
+    CHECK(r.error_code == "cancelled");
 }
