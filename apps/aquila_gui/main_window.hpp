@@ -69,6 +69,9 @@ public slots:
     void onLearnSubmitAnswer(int selectedOption);
     void onOpenSetupWizard();
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private:
     void setupUi();
     void setupConnections();

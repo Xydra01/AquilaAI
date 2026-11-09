@@ -48,6 +48,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     refreshLearnArchiveSources();
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (settingsPage_) {
+        settingsPage_->saveSettings();
+    }
+    QMainWindow::closeEvent(event);
+}
+
 MainWindow::~MainWindow() {
     if (activeWorker_ && activeWorker_->isRunning()) {
         activeWorker_->cancel();

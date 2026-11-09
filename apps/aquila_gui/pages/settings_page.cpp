@@ -209,9 +209,15 @@ void SettingsPage::saveSettings() {
     s.setValue(QStringLiteral("searchProviderIndex"), searchProviderCombo_->currentIndex());
     s.setValue(QStringLiteral("searxngEndpoint"), searxngEndpointInput_->text());
     s.setValue(QStringLiteral("autoScrape"), autoScrapeCheck_->isChecked());
+    s.sync();
 }
 
 void SettingsPage::loadSettings() {
+    QSignalBlocker bBlock(backendCombo_);
+    QSignalBlocker tBlock(tierCombo_);
+    QSignalBlocker thBlock(themeCombo_);
+    QSignalBlocker spBlock(searchProviderCombo_);
+
     QSettings s(QStringLiteral("Aquila"), QStringLiteral("AquilaGui"));
     if (s.contains(QStringLiteral("backendIndex"))) {
         backendCombo_->setCurrentIndex(s.value(QStringLiteral("backendIndex"), 0).toInt());
@@ -244,6 +250,7 @@ void SettingsPage::loadSettings() {
             saveSettings();
         }
     }
+    hostInput_->setEnabled(backendCombo_->currentIndex() == 0);
 }
 
 void SettingsPage::onSaveClicked() {

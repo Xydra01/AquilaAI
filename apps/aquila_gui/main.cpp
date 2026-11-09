@@ -528,6 +528,8 @@ int main(int argc, char** argv) {
 #endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
+    QCoreApplication::setOrganizationName(QStringLiteral("Aquila"));
+    QCoreApplication::setApplicationName(QStringLiteral("AquilaGui"));
     QApplication app(argc, argv);
     aquila::gui::apply_theme(&app, aquila::gui::ThemeMode::Dark);
 
