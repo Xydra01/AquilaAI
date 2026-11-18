@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <filesystem>
 
 namespace aquila::gui {
 
@@ -45,13 +46,32 @@ IntroPage::IntroPage(QWidget* parent) : QWizardPage(parent) {
 
 ModelDetectionPage::ModelDetectionPage(QWidget* parent) : QWizardPage(parent) {
     setTitle(QStringLiteral("Inference Engine & Model"));
-    setSubTitle(QStringLiteral("Configure local model weights (Ollama or native GGUF)"));
+    setSubTitle(QStringLiteral("Configure local Qwen 3.5 weights (native GGUF or Ollama)"));
 
     auto* layout = new QVBoxLayout(this);
-    auto* info = new QLabel(QStringLiteral("Detected local Ollama instance at http://127.0.0.1:11434.\nEnter model tag or GGUF path:"), this);
+    QString detected = QStringLiteral("qwen3.5:4b");
+    std::error_code ec;
+    for (const char* p : {
+             "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+             "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+             "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+             "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+             "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+             "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+         }) {
+        if (std::filesystem::is_regular_file(p, ec)) {
+            detected = QString::fromUtf8(p);
+            break;
+        }
+    }
+
+    auto* info = new QLabel(
+        QStringLiteral("Recommended local models: Qwen3.5-4B (CPU 16K default) or Qwen3.5-9B (GPU 32K).\n"
+                       "Enter GGUF file path or Ollama model tag:"),
+        this);
     layout->addWidget(info);
 
-    modelEdit_ = new QLineEdit(QStringLiteral("aquila"), this);
+    modelEdit_ = new QLineEdit(detected, this);
     registerField(QStringLiteral("modelName*"), modelEdit_);
     layout->addWidget(modelEdit_);
     layout->addStretch(1);

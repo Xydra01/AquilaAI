@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -25,8 +27,19 @@ std::string build_recipe_system_prompt(const RecipeCartridge& recipe,
                                        const std::string& user_request) {
     std::string prompt = custom_prompt;
     if (prompt.empty()) {
-        prompt = "You are Aquila, an autonomous software engineering and research agent.\n"
-                 "You solve complex technical tasks systematically by selecting and executing module actions.\n";
+#if defined(_WIN32)
+        constexpr const char* kHostOsNote =
+            "Host Environment: Windows (use cross-platform or Windows-compatible Python stdlib; "
+            "do NOT import Unix-only modules like 'resource' or 'fcntl', nor read '/proc/*').\n";
+#elif defined(__APPLE__)
+        constexpr const char* kHostOsNote = "Host Environment: macOS.\n";
+#else
+        constexpr const char* kHostOsNote = "Host Environment: Linux.\n";
+#endif
+        prompt = std::string(
+                     "You are Aquila, an autonomous software engineering and research agent.\n"
+                     "You solve complex technical tasks systematically by selecting and executing module actions.\n") +
+                 kHostOsNote;
     }
     prompt += "\nACTIVE RECIPE: " + recipe.recipe_id + "\n";
     std::string goal = recipe.goal_template;
@@ -93,55 +106,127 @@ std::string build_recipe_system_prompt(const RecipeCartridge& recipe,
               "1. You must respond ONLY with a single JSON ActionCall object matching the required schema: {\"thought\": \"...\", \"module\": \"...\", \"action\": \"...\", \"args\": {...}}.\n"
               "2. The 'module' field MUST be one of the loaded modules listed above. Never invent or hallucinate unloaded modules.\n"
               "3. When writing code, scripts, or files (via WorkspaceModule or ExecutionModule), write complete, syntactically valid code (e.g. in Python, always call functions with parentheses like datetime.now(tz), provide valid arguments, and include needed imports). If an action returns an error or syntax failure, READ the error output, fix the code, and NEVER submit the identical failing code.\n"
-              "4. Task Completion: Once your objective has been met (e.g. script executed, document written, or research facts synthesized), immediately call OrchestratorModule.complete_recipe with a concise summary of what was accomplished to finish the recipe. Do not stay stuck in repetitive loops or rerun completed steps.\n"
-              "5. Non-Interactive & Server Application Rule: All generated code and scripts MUST be non-interactive and terminate cleanly. NEVER call input() or block on user stdin. For web servers and daemons (Flask, FastAPI, etc.): NEVER block unconditionally on app.run() or uvicorn.run() during testing. Always test routes using the framework's test client (e.g. app.test_client() in Flask or httpx/requests) so the script verifies endpoints and exits cleanly with exit code 0 when run directly, or guard server startup behind '--serve' CLI flag. Once verification succeeds, call OrchestratorModule.complete_recipe.\n";
+              "4. Task Completion: Once your task ledger steps are completed and deliverables verified, call OrchestratorModule.complete_recipe with a concise summary of what was accomplished to finish the recipe. Do not stay stuck in repetitive loops or rerun completed steps.\n"
+              "5. Non-Interactive & Server Application Rule: All generated code and scripts MUST be non-interactive and terminate cleanly. NEVER call input() or block on user stdin. For web servers and daemons (Flask, FastAPI, etc.): NEVER block unconditionally on app.run() or uvicorn.run() during testing. Always test routes using the framework's test client (e.g. app.test_client() in Flask or httpx/requests) so the script verifies endpoints and exits cleanly with exit code 0 when run directly, or guard server startup behind '--serve' CLI flag. Once verification succeeds, call OrchestratorModule.complete_recipe.\n"
+              "6. Task Ledger & Milestone Tracking: Your active Task Ledger is anchored in your context every turn. Keep it updated as you progress by calling OrchestratorModule.update_task_ledger (e.g. completed_steps: [\"1\"], in_progress_step: \"2\") or during checkpoint_notes. OrchestratorModule.complete_recipe will deterministically reject if mandatory steps remain incomplete.\n";
+    const bool has_browser = std::any_of(recipe.load_modules.begin(), recipe.load_modules.end(),
+        [](const ModuleLoad& lm) { return lm.module == "BrowserModule"; });
+    if (has_browser) {
+        prompt += "7. Active Web Exploration (BrowserModule): Do NOT stop after glancing only at the top of one webpage. "
+                  "Whenever a page reports remaining content below the fold or truncated text, call BrowserModule.browser_scroll (direction: \"down\", moderate steps <= 1600px) to read deeper sections, tables, benchmarks, and citations. "
+                  "Use BrowserModule.browser_click with the listed CSS selectors to expand collapsed tabs/accordions ([collapsed] / [role=tab] / <summary>) or follow high-signal links (GitHub repos, arXiv papers, docs, technical discussions); "
+                  "use BrowserModule.browser_type(selector, text, submit: true) on [search-input] bars to search inside sites. "
+                  "Check BrowserModule's anchored visited_urls_do_not_reload and failed_urls_do_not_retry lists so you never reload finished pages or retry 404 URLs, and always cite the real http(s):// URLs of your visited/retrieved sources in research_report.md.\n";
+    }
     return prompt;
+}
+
+std::string canonical_call_signature(const ActionCall& call) {
+    Json normalized = call.args.is_object() ? call.args : Json::object();
+    if (normalized.is_object()) {
+        for (const char* key : {"path", "dir", "file"}) {
+            if (normalized.contains(key) && normalized[key].is_string()) {
+                std::string v = normalized[key].get<std::string>();
+                while (v.size() > 1 && (v.back() == '/' || v.back() == '\\')) {
+                    v.pop_back();
+                }
+                if (v == "./" || v == ".\\") {
+                    v = ".";
+                }
+                normalized[key] = std::move(v);
+            }
+        }
+    }
+    return call.module + "::" + call.action + "::" + json_io::canonical_dump(normalized);
+}
+
+void emit_guidance(ContextCondenser& condenser,
+                   const std::shared_ptr<logging::RunLogger>& logger,
+                   std::uint64_t turn,
+                   std::string text,
+                   std::vector<std::string>* emitted_out = nullptr) {
+    if (logger) {
+        logger->log_guidance(turn, text);
+    }
+    if (emitted_out != nullptr) {
+        emitted_out->push_back(text);
+    }
+    condenser.push_guidance(std::move(text));
+}
+
+std::vector<std::pair<std::string, Json>> collect_context_summaries(
+    const std::vector<std::unique_ptr<IAgentModule>>& modules) {
+    std::vector<std::pair<std::string, Json>> summaries;
+    summaries.reserve(modules.size());
+    for (const std::unique_ptr<IAgentModule>& module : modules) {
+        summaries.emplace_back(module->module_id(), module->export_context_summary());
+    }
+    return summaries;
+}
+
+bool is_readonly_discovery_action(std::string_view action) noexcept {
+    return action == "outline" || action == "read_region" || action == "inspect_symbol" ||
+           action == "web_search" || action == "fetch_and_clean_url" ||
+           action == "search_local_docs" || action == "get_all_facts";
+}
+
+bool is_state_mutating_action(std::string_view action) noexcept {
+    return action == "surgical_edit" || action == "create_file" || action == "write_file" ||
+           action == "revert_file" || action == "edit_file" || action == "restore" ||
+           action == "execute" || action == "run_command" || action == "run_tests" ||
+           action == "run_python" || action == "write_section" ||
+           action == "browser_navigate" || action == "browser_click" ||
+           action == "browser_type" || action == "browser_scroll";
+}
+
+bool is_progressive_browser_action(std::string_view module, std::string_view action) noexcept {
+    return module == "BrowserModule" && (action == "browser_scroll" || action == "browser_click");
 }
 
 }  // namespace
 
 Json AgentLoop::action_call_schema(const RecipeCartridge* recipe) {
     // The OutputConstraint::json_schema the backend enforces (R14). Mirrors M1
-    // ActionCall exactly: all four fields required, no extra keys permitted.
+    // ActionCall: all four fields required, no extra keys permitted. When a recipe
+    // is present, per-module `oneOf` couples each module constant to its own
+    // expose_actions enum so cross-module hallucinations are grammatically impossible.
+    if (recipe != nullptr && !recipe->load_modules.empty()) {
+        Json branches = Json::array();
+        for (const auto& lm : recipe->load_modules) {
+            if (lm.expose_actions.empty()) {
+                continue;
+            }
+            Json bprops = Json::object();
+            bprops["thought"] = Json::object({{"type", "string"}});
+            bprops["module"] = Json::object({{"const", lm.module}});
+            bprops["action"] = Json::object({{"type", "string"}, {"enum", lm.expose_actions}});
+            bprops["args"] = Json::object({{"type", "object"}});
+
+            Json branch = Json::object();
+            branch["type"] = "object";
+            branch["properties"] = std::move(bprops);
+            branch["required"] = Json::array({"thought", "module", "action", "args"});
+            branch["additionalProperties"] = false;
+            branches.push_back(std::move(branch));
+        }
+        if (branches.size() == 1) {
+            return branches[0];
+        }
+        if (!branches.empty()) {
+            Json schema = Json::object();
+            schema["oneOf"] = std::move(branches);
+            return schema;
+        }
+    }
+
     Json schema = Json::object();
     schema["type"] = "object";
 
     Json properties = Json::object();
-    Json thought = Json::object();
-    thought["type"] = "string";
-    properties["thought"] = std::move(thought);
-
-    Json module = Json::object();
-    module["type"] = "string";
-    if (recipe != nullptr && !recipe->load_modules.empty()) {
-        std::vector<std::string> allowed_mods;
-        for (const auto& lm : recipe->load_modules) {
-            allowed_mods.push_back(lm.module);
-        }
-        module["enum"] = allowed_mods;
-    }
-    properties["module"] = std::move(module);
-
-    Json action = Json::object();
-    action["type"] = "string";
-    if (recipe != nullptr && !recipe->load_modules.empty()) {
-        std::vector<std::string> allowed_actions;
-        for (const auto& lm : recipe->load_modules) {
-            for (const auto& act : lm.expose_actions) {
-                if (std::find(allowed_actions.begin(), allowed_actions.end(), act) == allowed_actions.end()) {
-                    allowed_actions.push_back(act);
-                }
-            }
-        }
-        if (!allowed_actions.empty()) {
-            action["enum"] = allowed_actions;
-        }
-    }
-    properties["action"] = std::move(action);
-
-    Json args = Json::object();
-    args["type"] = "object";
-    properties["args"] = std::move(args);
+    properties["thought"] = Json::object({{"type", "string"}});
+    properties["module"] = Json::object({{"type", "string"}});
+    properties["action"] = Json::object({{"type", "string"}});
+    properties["args"] = Json::object({{"type", "object"}});
     schema["properties"] = std::move(properties);
 
     schema["required"] = Json::array({"thought", "module", "action", "args"});
@@ -151,12 +236,13 @@ Json AgentLoop::action_call_schema(const RecipeCartridge* recipe) {
 
 GenerationParams AgentLoop::generation_params(const TierLimits& limits, const RecipeCartridge* recipe) const {
     GenerationParams params;
-    // The loop is deterministic (Req 1.6): pin a greedy temperature so an
-    // identical replayed context yields an identical reply.
-    params.temperature = 0.0;
-    // Output budget derived from the tier's thought cap (R14). The reply carries
-    // the `thought` plus the {module, action, args} JSON envelope; budget at least
-    // 4096 tokens so script creation, code edits, syllabi, and document writing are not truncated.
+    // Non-greedy low-variance sampling calibrated for Qwen 3.5 structured tool calls
+    // avoids greedy EOS/punctuation traps while preserving tight schema determinism.
+    params.temperature = 0.2;
+    params.top_k = 20;
+    params.top_p = 0.95;
+    params.presence_penalty = 0.5;
+    params.think = false;
     params.max_tokens = std::max(static_cast<std::uint32_t>(limits.max_thought_tokens * 8U), 4096U);
     params.constraint = OutputConstraint::json_schema(action_call_schema(recipe));
     return params;
@@ -200,10 +286,31 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         }
     }
 
+    if (orchestrator != nullptr) {
+        TaskLedger init_ledger = orchestrator->ledger();
+        if (init_ledger.task_id.empty()) {
+            init_ledger.task_id = recipe.recipe_id;
+        }
+        if (init_ledger.objective.empty()) {
+            init_ledger.objective = user_request;
+        }
+        if (init_ledger.steps.empty() && !recipe.scratchpad_checklist.empty()) {
+            for (std::size_t i = 0; i < recipe.scratchpad_checklist.size(); ++i) {
+                init_ledger.add_step(recipe.scratchpad_checklist[i], "step_" + std::to_string(i + 1));
+            }
+        }
+        orchestrator->set_task_ledger(std::move(init_ledger));
+    }
+
     // Seed the condenser from the active tier (Req 2.1): the pinned prefix carries
     // the system prompt and the rendered action-call schema that constrains every
     // reply, so it is the natural recipe schema text to pin.
     ContextCondenser condenser(limits, config.context_strategy);
+    if (orchestrator != nullptr) {
+        condenser.set_anchored(orchestrator->scratchpad(),
+                               collect_context_summaries(modules),
+                               &orchestrator->ledger());
+    }
     const std::string sys_prompt = build_recipe_system_prompt(recipe, modules, config.system_prompt, user_request);
     condenser.set_pinned_prefix(sys_prompt,
                                 json_io::canonical_dump(action_call_schema(&recipe)));
@@ -215,6 +322,8 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // and capture the backend's starting context position.
     const GenerationParams params = generation_params(limits, &recipe);
     const std::size_t context_baseline = backend_.mark_checkpoint();
+    bool pinned_prefix_cached = false;
+    std::size_t pinned_baseline = context_baseline;
 
     // One RunRecord per run (Req 6.1); starts fresh, never imported (Req 6.3).
     RunRecord run_record;
@@ -244,6 +353,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     };
 
     std::string last_call_sig;
+    std::string last_action_output;
     std::string last_action_sig;
     std::string second_last_action_sig;
     std::string last_failed_module;
@@ -251,6 +361,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     std::uint32_t repeat_count = 0;
     std::uint32_t oscillation_count = 0;
     std::uint32_t consecutive_failures = 0;
+    std::unordered_map<std::string, std::uint32_t> readonly_call_counts;
 
     // The deterministic turn cycle (Req 1.2-1.4). Each iteration builds the prompt,
     // regenerates against the full context, parses the reply, resolves and
@@ -271,18 +382,41 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             logger->log_turn_start(turn);
         }
 
-        // 1. Assemble the prompt and resend it in full. The scaffold cannot reuse
-        // KV, so rewind to the load-time baseline and re-append every message.
+        // 1. Assemble the prompt. When the backend supports KV/state reuse, cache the
+        // invariant leading system prompt + schema prefix ONCE on turn 0 (merged into a
+        // single leading Role::system message so Qwen 3.5 Jinja never drops system turns)
+        // and only replay dynamic tail/anchored state on subsequent turns.
         const std::vector<Message> messages = condenser.build_messages();
-        backend_.rollback_to(context_baseline);
-        for (const Message& message : messages) {
-            backend_.append(message);
+        if (backend_.supports_kv_reuse() && messages.size() >= 2 &&
+            messages[0].role == Role::system && messages[1].role == Role::system) {
+            if (!pinned_prefix_cached) {
+                backend_.rollback_to(context_baseline);
+                backend_.append(Message{
+                    Role::system,
+                    messages[0].content + "\n\nRequired Output JSON Schema:\n" + messages[1].content,
+                    {}});
+                pinned_baseline = backend_.mark_checkpoint();
+                pinned_prefix_cached = true;
+            } else {
+                backend_.rollback_to(pinned_baseline);
+            }
+            for (std::size_t i = 2; i < messages.size(); ++i) {
+                backend_.append(messages[i]);
+            }
+        } else {
+            backend_.rollback_to(context_baseline);
+            for (const Message& message : messages) {
+                backend_.append(message);
+            }
         }
 
         // 2. Generate. Pass config.on_token (or empty if omitted). A backend failure
         // (ok == false) is a failed turn — record the backend error, nudge the
         // model, and continue without throwing (Req 1.2).
         const GenerationResult gen = backend_.generate(params, config.on_token);
+        if (logger && !gen.thinking.empty()) {
+            logger->log_thinking(turn, gen.thinking, "native_think");
+        }
         if (!gen.ok) {
             const std::string note =
                 "backend generation failed (" + gen.error_code + ": " + gen.error_detail +
@@ -359,6 +493,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         interaction.action = call.action;
         interaction.args = call.args;
         interaction.result = action_result;
+        interaction.images = action_result.images;
         condenser.record_tool_cycle(interaction);
 
         TurnRecord record;
@@ -372,14 +507,31 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             config.on_turn(result.transcript.back());
         }
 
-        // Anti-repetition detection and loop circuit breaker
-        const std::string current_call_sig = call.module + "::" + call.action + "::" + call.args.dump();
-        if (current_call_sig == last_call_sig ||
-            (!action_result.success && call.module == last_failed_module && call.action == last_failed_action)) {
+        // Anti-repetition detection and loop circuit breaker.
+        // Progressive browser actions (scrolling down a long page or clicking pagination/load-more)
+        // legitimately reuse identical args across turns while advancing viewport/DOM state.
+        const std::string current_call_sig = canonical_call_signature(call);
+        const bool progressive_browser_advance =
+            action_result.success &&
+            is_progressive_browser_action(call.module, call.action) &&
+            !last_action_output.empty() &&
+            action_result.llm_facing_output != last_action_output;
+        if (!progressive_browser_advance &&
+            (current_call_sig == last_call_sig ||
+             (!action_result.success && call.module == last_failed_module && call.action == last_failed_action))) {
             repeat_count++;
         } else {
             repeat_count = 0;
         }
+
+        if (is_state_mutating_action(call.action)) {
+            readonly_call_counts.clear();
+        }
+        std::uint32_t cumulative_repeat = 0;
+        if (is_readonly_discovery_action(call.action)) {
+            cumulative_repeat = readonly_call_counts[current_call_sig]++;
+        }
+        const std::uint32_t effective_repeat = std::max(repeat_count, cumulative_repeat);
 
         const std::string action_sig = call.module + "::" + call.action;
         if (!second_last_action_sig.empty() && action_sig == second_last_action_sig && action_sig != last_action_sig) {
@@ -391,18 +543,12 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         second_last_action_sig = last_action_sig;
         last_action_sig = action_sig;
         last_call_sig = current_call_sig;
+        last_action_output = action_result.llm_facing_output;
 
         if (!action_result.success) {
             last_failed_module = call.module;
             last_failed_action = call.action;
             consecutive_failures++;
-            if (consecutive_failures >= 2 && repeat_count < 2) {
-                condenser.push_guidance(
-                    "[SYSTEM NOTICE: The previous action '" + call.module + "::" + call.action +
-                    "' failed (" + action_result.llm_facing_output +
-                    "). Carefully read the error message, correct your code/arguments, and do not repeat the failed action.]"
-                );
-            }
         } else {
             last_failed_module.clear();
             last_failed_action.clear();
@@ -410,24 +556,42 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             condenser.clear_guidance();
         }
 
-        if (repeat_count == 1) {
-            condenser.push_guidance(
+        std::vector<std::string> pending_turn_guidance;
+        if (!action_result.success && (effective_repeat >= 1 || consecutive_failures >= 2)) {
+            const bool gated = recipe.post_llm_validation_hook.has_value();
+            const std::string recovery_hint = (call.module == "BrowserModule")
+                ? "Switch strategy: navigate directly to a known authoritative URL with BrowserModule.browser_navigate, scroll/click a different CSS selector, or inspect local docs with KnowledgeModule.search_local_docs"
+                : "Read the error above, inspect or edit the code/arguments (e.g. via WorkspaceModule.surgical_edit or write_file) to fix the root cause";
+            emit_guidance(
+                condenser, logger, turn,
+                "[CRITICAL SYSTEM NOTICE: Action '" + call.module + "::" + call.action +
+                "' failed (" + action_result.llm_facing_output +
+                "). You MUST NOT re-run this failing action unchanged. " + recovery_hint +
+                (gated ? std::string(", then re-verify before calling OrchestratorModule.complete_recipe")
+                       : std::string(", or switch strategy")) +
+                ".]",
+                &pending_turn_guidance);
+        } else if (effective_repeat == 1) {
+            emit_guidance(
+                condenser, logger, turn,
                 "[SYSTEM NOTICE: You just called '" + call.module + "::" + call.action +
-                "' with identical arguments. Doing this again will trigger the circuit breaker. Change your query/arguments, choose a different module/action, or call OrchestratorModule.complete_recipe to conclude.]"
-            );
-        } else if (repeat_count >= 2) {
-            condenser.push_guidance(
+                "' with identical arguments. Doing this again will trigger the circuit breaker. Change your query/arguments, choose a different module/action, or call OrchestratorModule.complete_recipe to conclude.]",
+                &pending_turn_guidance);
+        } else if (effective_repeat >= 2) {
+            emit_guidance(
+                condenser, logger, turn,
                 "[CRITICAL SYSTEM WARNING: Repetition loop detected! You must NOT call '" + call.module + "::" + call.action +
-                "' again. Immediately call OrchestratorModule.complete_recipe to conclude the task.]"
-            );
+                "' again. Immediately call OrchestratorModule.complete_recipe to conclude the task.]",
+                &pending_turn_guidance);
         } else if (oscillation_count >= 2) {
-            condenser.push_guidance(
+            emit_guidance(
+                condenser, logger, turn,
                 "[SYSTEM WARNING: Oscillation loop detected! You are alternating between '" + call.module + "::" + call.action +
-                "' and the previous action without making new progress. Stop repeating this cycle; proceed to store facts with KnowledgeModule.store_fact, finalize the output file, and call OrchestratorModule.complete_recipe.]"
-            );
+                "' and the previous action without making new progress. Stop repeating this cycle; proceed to store facts with KnowledgeModule.store_fact, finalize the output file, and call OrchestratorModule.complete_recipe.]",
+                &pending_turn_guidance);
         }
         if (config.max_repeated_calls > 0 &&
-            (repeat_count >= config.max_repeated_calls || oscillation_count >= config.max_repeated_calls + 2)) {
+            (effective_repeat >= config.max_repeated_calls || oscillation_count >= config.max_repeated_calls + 2)) {
             result.outcome = LoopOutcome::turn_limit;
             result.success = false;
             result.completion_output = "Task halted by anti-repetition circuit breaker: repeated call '" +
@@ -446,18 +610,10 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         // The dispatch above may have mutated the Orchestrator's scratchpad (e.g.
         // checkpoint_notes) or any module's state, so — once per turn after the
         // dispatch — refresh the anchored block from the latest scratchpad plus a
-        // snapshot of every loaded module. Snapshot order follows the modules
-        // vector (deterministic, Req 1.6). Skipped when no Orchestrator is loaded:
-        // there is no scratchpad to anchor. This also makes condense()'s
-        // "refresh from the latest set_anchored inputs" meaningful on a wipe.
+        // lightweight context summary of every loaded module. Skipped when no
+        // Orchestrator is loaded: there is no scratchpad to anchor.
         if (orchestrator != nullptr) {
-            std::vector<std::pair<std::string, Json>> module_snapshots;
-            module_snapshots.reserve(modules.size());
-            for (const std::unique_ptr<IAgentModule>& module : modules) {
-                module_snapshots.emplace_back(module->module_id(),
-                                              module->export_state_snapshot());
-            }
-            condenser.set_anchored(orchestrator->scratchpad(), module_snapshots);
+            condenser.set_anchored(orchestrator->scratchpad(), collect_context_summaries(modules), &orchestrator->ledger());
         }
 
         // 8. Handle the Orchestrator's intent (Req 3.3, Req 5). The module records
@@ -484,10 +640,8 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 // on_failure_instruction (see run_exit_gate's contract). Inject it
                 // as guidance so the next turn can satisfy the gate.
                 if (!gate.completion_output.empty()) {
-                    if (logger) {
-                        logger->log_guidance(turn, gate.completion_output);
-                    }
-                    condenser.push_guidance(std::move(gate.completion_output));
+                    emit_guidance(condenser, logger, turn, std::move(gate.completion_output),
+                                  &pending_turn_guidance);
                 }
                 break;
             }
@@ -495,8 +649,11 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 // The module only requests a condense after validating the
                 // scratchpad (Req 3.3), so the loop trusts it. The anchor was just
                 // refreshed above, so the wipe re-renders from the latest
-                // scratchpad.
+                // scratchpad. Re-push any turn guidance so condense() never drops it.
                 condenser.condense();
+                for (const std::string& g : pending_turn_guidance) {
+                    condenser.push_guidance(g);
+                }
                 break;
             }
             case OrchestratorModule::Intent::none:
@@ -504,25 +661,72 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             }
         }
 
+        // Gentle wrap-up reminder when any sufficiently long recipe nears turn exhaustion.
+        if (limits.max_turns >= 8 && pending_turn_guidance.empty()) {
+            const auto remaining = limits.max_turns - (turn + 1);
+            const std::size_t warn_window = (limits.max_turns >= 16) ? 5 : 3;
+            if (remaining >= 1 && remaining <= warn_window) {
+                std::string pending_ids;
+                std::string pending_summary;
+                if (orchestrator != nullptr && !orchestrator->ledger().all_mandatory_completed()) {
+                    for (const auto& st : orchestrator->ledger().steps) {
+                        if (st.status == LedgerStepStatus::pending || st.status == LedgerStepStatus::in_progress) {
+                            std::string desc_low = st.description;
+                            std::transform(desc_low.begin(), desc_low.end(), desc_low.begin(),
+                                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                            // OrchestratorModule.complete_recipe auto-satisfies trailing complete_recipe meta-steps.
+                            if (desc_low.find("complete_recipe") != std::string::npos) {
+                                continue;
+                            }
+                            if (!pending_ids.empty()) pending_ids += ", ";
+                            pending_ids += "\"" + st.id + "\"";
+                            if (!pending_summary.empty()) pending_summary += "; ";
+                            pending_summary += st.id + " (" + st.description.substr(0, 60) + ")";
+                        }
+                    }
+                }
+                if (remaining == 1 && pending_ids.empty()) {
+                    emit_guidance(
+                        condenser, logger, turn,
+                        "[TURN BUDGET NOTICE: FINAL TURN! All work steps are complete — call OrchestratorModule.complete_recipe NOW.]",
+                        &pending_turn_guidance);
+                } else {
+                    std::string ledger_hint;
+                    if (!pending_ids.empty()) {
+                        ledger_hint = " Remaining mandatory work steps: " + pending_summary +
+                                      ". Finish any unwritten deliverable (e.g. store_fact / create_file research_report.md), "
+                                      "then call OrchestratorModule.update_task_ledger with completed_steps: [" +
+                                      pending_ids + "] BEFORE calling complete_recipe!";
+                    }
+                    emit_guidance(
+                        condenser, logger, turn,
+                        "[TURN BUDGET NOTICE: Only " + std::to_string(remaining) +
+                        (remaining == 1 ? " turn remains" : " turns remain") +
+                        " before the turn limit. Stop extra web exploration now." +
+                        ledger_hint +
+                        (pending_ids.empty() ? " Call OrchestratorModule.complete_recipe now." : "") + "]",
+                        &pending_turn_guidance);
+                }
+            }
+        }
+
         // 9. Post-turn condense pressure (Req 2.6). A wipe clears history, so it may
         // only happen once the scratchpad is valid — otherwise the agent would lose
-        // its tail before its required notes were saved (Req 3.3). With no
-        // Orchestrator there are no required fields to protect, so treat that as
-        // valid. When pressure is high but the scratchpad is invalid, hold the
-        // history and nudge the model to checkpoint its notes first.
-        if (condenser.should_condense()) {
+        // its tail before its required notes were saved (Req 3.3). Only condense when
+        // there is collapsible tail/summary history, and preserve turn guidance across
+        // the wipe so warnings remain visible on the next turn.
+        if (condenser.should_condense() && condenser.has_collapsible_history()) {
             const bool scratchpad_ok = orchestrator == nullptr || orchestrator->scratchpad_valid();
             if (scratchpad_ok) {
                 if (orchestrator != nullptr) {
-                    std::vector<std::pair<std::string, Json>> module_snapshots;
-                    module_snapshots.reserve(modules.size());
-                    for (const std::unique_ptr<IAgentModule>& module : modules) {
-                        module_snapshots.emplace_back(module->module_id(),
-                                                      module->export_state_snapshot());
-                    }
-                    condenser.set_anchored(orchestrator->scratchpad(), module_snapshots);
+                    condenser.set_anchored(orchestrator->scratchpad(),
+                                           collect_context_summaries(modules),
+                                           &orchestrator->ledger());
                 }
                 condenser.condense();
+                for (const std::string& g : pending_turn_guidance) {
+                    condenser.push_guidance(g);
+                }
             } else {
                 condenser.push_guidance(
                     "context is nearly full; call OrchestratorModule.checkpoint_notes to save "
@@ -566,10 +770,13 @@ TerminalResult AgentLoop::run_exit_gate(
     // module as a gate failure. ValidationHook carries no args, so pass an empty
     // object. The module/action is invoked exactly once (Req 5.1 / Property 15).
     IAgentModule* target = nullptr;
+    IAgentModule* browser_mod = nullptr;
     for (const std::unique_ptr<IAgentModule>& module : modules) {
         if (module->module_id() == hook.module) {
             target = module.get();
-            break;
+        }
+        if (module->module_id() == "BrowserModule") {
+            browser_mod = module.get();
         }
     }
 
@@ -580,7 +787,36 @@ TerminalResult AgentLoop::run_exit_gate(
         hook_result.error_code = "unknown_module";
         hook_result.llm_facing_output = "hook module '" + hook.module + "' is not loaded";
     } else {
-        hook_result = target->execute_action(hook.action, Json::object());
+        Json hook_args = Json::object();
+        if (hook.module == "KnowledgeModule" &&
+            hook.action == "verify_research_deliverable" &&
+            browser_mod != nullptr) {
+            hook_args["require_urls"] = true;
+            Json grounded = Json::array();
+            const Json bsnap = browser_mod->export_state_snapshot();
+            if (bsnap.is_object()) {
+                if (bsnap.contains("visited_urls") && bsnap["visited_urls"].is_array()) {
+                    for (const auto& v : bsnap["visited_urls"]) {
+                        if (v.is_object() && v.contains("url") && v["url"].is_string()) {
+                            grounded.push_back(v["url"].get<std::string>());
+                        }
+                    }
+                }
+                if (bsnap.contains("discovered_urls") && bsnap["discovered_urls"].is_array()) {
+                    for (const auto& d : bsnap["discovered_urls"]) {
+                        if (d.is_string()) {
+                            grounded.push_back(d.get<std::string>());
+                        }
+                    }
+                }
+                if (grounded.empty() && bsnap.contains("current_url") && bsnap["current_url"].is_string()) {
+                    const std::string cur = bsnap["current_url"].get<std::string>();
+                    if (!cur.empty()) grounded.push_back(cur);
+                }
+            }
+            hook_args["grounded_urls"] = std::move(grounded);
+        }
+        hook_result = target->execute_action(hook.action, hook_args);
     }
 
     if (logger) {

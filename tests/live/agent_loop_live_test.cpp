@@ -37,7 +37,7 @@ namespace fs = std::filesystem;
 
 std::string live_model() {
     const char* m = std::getenv("AQUILA_LIVE_MODEL");
-    return (m && *m) ? m : "aquila:latest";
+    return (m && *m) ? m : "qwen3.5:4b";
 }
 
 OllamaHttpBackend live_backend() {

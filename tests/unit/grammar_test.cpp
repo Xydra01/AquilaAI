@@ -34,6 +34,8 @@
 
 #if AQUILA_HAS_LLAMACPP
 
+#include "aquila/agent/agent_loop.hpp"
+#include "aquila/agent/recipes.hpp"
 #include "aquila/inference/backend.hpp"   // OutputConstraint (shared M2 value type)
 #include "aquila/inference/grammar.hpp"   // GrammarFactory
 #include "aquila/inference/llama_backend.hpp"  // LlamaConfig
@@ -44,10 +46,14 @@
 
 #include <llama.h>  // llama_vocab
 
+#include <cmath>
+#include <cstddef>
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 using namespace aquila;
 
@@ -293,6 +299,108 @@ TEST_CASE("Property 5: a malformed grammar yields a null sampler and never crash
                  // Unparseable -> null sampler (-> caller maps to invalid_request).
                  RC_ASSERT(sampler == nullptr);
              });
+}
+
+TEST_CASE("oneOf action_call_schema GBNF allows same-module actions and rejects cross-module calls",
+          "[grammar][llamacpp][oneof]") {
+    if (!tiny_model_available()) {
+        SKIP("tiny GGUF model not found at AQUILA_TINY_GGUF");
+    }
+
+    LlamaSession session(kTinyGguf, cpu_config());
+    const llama_vocab* vocab = session.vocab();
+    REQUIRE(vocab != nullptr);
+
+    const RecipeCartridge dev_recipe = fn_dev_implement_recipe();
+    const Json schema = AgentLoop::action_call_schema(&dev_recipe);
+    REQUIRE(schema.contains("oneOf"));
+
+    GrammarFactory factory;
+    const std::optional<std::string> gbnf =
+        factory.gbnf_for(OutputConstraint::json_schema(schema));
+    REQUIRE(gbnf.has_value());
+    REQUIRE_FALSE(gbnf->empty());
+
+    const auto tokenize_exact = [&](const std::string& text) -> std::vector<llama_token> {
+        // SentencePiece vocabs with add_space_prefix=true prepend ' ' when tokenizing
+        // at position 0. Prefixing with "a\n" absorbs that space onto "a" so `text`
+        // (starting at '{') begins on an exact byte boundary without leading whitespace.
+        const std::string sentinel = "a\n";
+        const std::string combined = sentinel + text;
+        const int32_t needed = -llama_tokenize(
+            vocab, combined.data(), static_cast<int32_t>(combined.size()),
+            nullptr, 0, /*add_special=*/false, /*parse_special=*/false);
+        REQUIRE(needed > 0);
+        std::vector<llama_token> raw(static_cast<std::size_t>(needed));
+        const int32_t n = llama_tokenize(
+            vocab, combined.data(), static_cast<int32_t>(combined.size()),
+            raw.data(), needed, /*add_special=*/false, /*parse_special=*/false);
+        REQUIRE(n == needed);
+
+        std::string prefix_accum;
+        std::size_t start_idx = 0;
+        for (; start_idx < raw.size(); ++start_idx) {
+            char piece_buf[128]{};
+            const int plen = llama_token_to_piece(vocab, raw[start_idx], piece_buf, sizeof(piece_buf), 0, false);
+            REQUIRE(plen >= 0);
+            prefix_accum.append(piece_buf, static_cast<std::size_t>(plen));
+            if (prefix_accum == sentinel || prefix_accum == (" " + sentinel)) {
+                ++start_idx;
+                break;
+            }
+            REQUIRE(prefix_accum.size() <= sentinel.size() + 1);
+        }
+        REQUIRE(start_idx < raw.size());
+        return std::vector<llama_token>(raw.begin() + static_cast<std::ptrdiff_t>(start_idx), raw.end());
+    };
+
+    const auto accepts_tokens = [&](const std::string& candidate, bool require_eos) -> bool {
+        SamplerPtr smpl = factory.make_grammar_sampler(vocab, *gbnf);
+        REQUIRE(smpl != nullptr);
+        const std::vector<llama_token> toks = tokenize_exact(candidate);
+        for (std::size_t idx = 0; idx < toks.size(); ++idx) {
+            const llama_token t = toks[idx];
+            char piece_buf[128]{};
+            const int plen = llama_token_to_piece(vocab, t, piece_buf, sizeof(piece_buf), 0, false);
+            const std::string piece = plen > 0 ? std::string(piece_buf, static_cast<std::size_t>(plen)) : "<empty>";
+            llama_token_data td{t, 0.0f, 0.0f};
+            llama_token_data_array arr{&td, 1, -1, false};
+            llama_sampler_apply(smpl.get(), &arr);
+            if (!std::isfinite(td.logit)) {
+                UNSCOPED_INFO("Rejected at tok idx=" << idx << " id=" << t << " piece=[" << piece << "] of candidate=" << candidate);
+                return false;
+            }
+            llama_sampler_accept(smpl.get(), t);
+        }
+        if (!require_eos) {
+            return true;
+        }
+        const llama_token eos = llama_vocab_eos(vocab);
+        llama_token_data td{eos, 0.0f, 0.0f};
+        llama_token_data_array arr{&td, 1, -1, false};
+        llama_sampler_apply(smpl.get(), &arr);
+        if (!std::isfinite(td.logit)) {
+            UNSCOPED_INFO("Rejected EOS for candidate=" << candidate << "\nGBNF=\n" << *gbnf);
+        }
+        return std::isfinite(td.logit);
+    };
+    const auto accepts_prefix = [&](const std::string& prefix) { return accepts_tokens(prefix, false); };
+    const auto accepts = [&](const std::string& candidate) { return accepts_tokens(candidate, true); };
+
+    // Valid module+action pairings from fn_dev_implement_recipe.
+    CHECK(accepts(R"({"thought":"check","module":"ExecutionModule","action":"run_python","args":{"script":"x.py"}})"));
+    CHECK(accepts(R"({"thought":"check","module":"WorkspaceModule","action":"read_region","args":{"path":"x.py"}})"));
+    CHECK(accepts(R"({"thought":"done","module":"OrchestratorModule","action":"complete_recipe","args":{}})"));
+
+    // Cross-module hallucinations MUST reach the discriminating token cleanly and then be rejected by GBNF.
+    CHECK(accepts_prefix(R"({"thought":"bad","module":"ExecutionModule","action":")"));
+    CHECK_FALSE(accepts(R"({"thought":"bad","module":"ExecutionModule","action":"checkpoint_notes","args":{}})"));
+    CHECK(accepts_prefix(R"({"thought":"bad","module":"WorkspaceModule","action":")"));
+    CHECK_FALSE(accepts(R"({"thought":"bad","module":"WorkspaceModule","action":"run_python","args":{}})"));
+    CHECK(accepts_prefix(R"({"thought":"bad","module":"OrchestratorModule","action":")"));
+    CHECK_FALSE(accepts(R"({"thought":"bad","module":"OrchestratorModule","action":"write_file","args":{}})"));
+    CHECK(accepts_prefix(R"({"thought":"bad","module":")"));
+    CHECK_FALSE(accepts(R"({"thought":"bad","module":"NonexistentModule","action":"read_region","args":{}})"));
 }
 
 #else  // !AQUILA_HAS_LLAMACPP

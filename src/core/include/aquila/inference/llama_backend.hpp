@@ -28,9 +28,95 @@
 #include "aquila/inference/grammar.hpp"        // GrammarFactory (guarded)
 #include "aquila/inference/llama_session.hpp"  // LlamaConfig, LlamaSession (guarded)
 
+#if AQUILA_HAS_LLAMACPP
+#include <chat.h>
+#endif
+
+#include <algorithm>
 #include <cstddef>
+#include <string>
+#include <string_view>
 
 namespace aquila {
+
+// Streaming splitter that cleanly separates `<think>...</think>` reasoning spans
+// from user/parser-facing content without cutting partial `<think>` / `</think>`
+// tags across token boundaries.
+class ThinkStreamSplitter {
+public:
+    explicit ThinkStreamSplitter(bool start_in_think = false) : in_think_(start_in_think) {}
+
+    void push(std::string_view piece, std::string& content_out, std::string& thinking_out) {
+        buf_.append(piece);
+        drain(false, content_out, thinking_out);
+    }
+
+    void flush(std::string& content_out, std::string& thinking_out) {
+        drain(true, content_out, thinking_out);
+    }
+
+private:
+    static constexpr std::string_view kOpenTag = "<think>";
+    static constexpr std::string_view kCloseTag = "</think>";
+
+    void drain(bool force_all, std::string& content_out, std::string& thinking_out) {
+        while (!buf_.empty()) {
+            if (skip_leading_newlines_ > 0) {
+                if (buf_[0] == '\n') {
+                    buf_.erase(0, 1);
+                    --skip_leading_newlines_;
+                    continue;
+                }
+                skip_leading_newlines_ = 0;
+            }
+            const std::string_view tag = in_think_ ? kCloseTag : kOpenTag;
+            std::string& target = in_think_ ? thinking_out : content_out;
+
+            const std::size_t hit = buf_.find(tag);
+            if (hit != std::string::npos) {
+                target.append(buf_.data(), hit);
+                buf_.erase(0, hit + tag.size());
+                skip_leading_newlines_ = in_think_ ? 2 : 1;
+                in_think_ = !in_think_;
+                continue;
+            }
+
+            if (force_all) {
+                target.append(buf_);
+                buf_.clear();
+                break;
+            }
+
+            std::size_t hold = 0;
+            const std::size_t max_check = std::min(buf_.size(), tag.size() - 1);
+            for (std::size_t len = max_check; len >= 1; --len) {
+                if (buf_.compare(buf_.size() - len, len, tag.data(), len) == 0) {
+                    hold = len;
+                    break;
+                }
+            }
+            const std::size_t safe_len = buf_.size() - hold;
+            if (safe_len > 0) {
+                target.append(buf_.data(), safe_len);
+                buf_.erase(0, safe_len);
+            }
+            break;
+        }
+    }
+
+    bool in_think_ = false;
+    int skip_leading_newlines_ = 0;
+    std::string buf_;
+};
+
+[[nodiscard]] inline bool opener_starts_in_think(std::string_view opener) {
+    const std::size_t open_pos = opener.rfind("<think>");
+    if (open_pos == std::string_view::npos) {
+        return false;
+    }
+    const std::size_t close_pos = opener.rfind("</think>");
+    return close_pos == std::string_view::npos || close_pos < open_pos;
+}
 
 #if AQUILA_HAS_LLAMACPP
 
@@ -83,23 +169,23 @@ public:
     [[nodiscard]] bool supports_kv_reuse() const noexcept override { return true; }
 
 private:
-    // Build the per-call sampler chain from GenerationParams in the design's order:
-    // penalties -> (top_k -> top_p: not present on GenerationParams, see .cpp) ->
-    // temp -> grammar (when a constraint is set) -> dist(seed), OR a bare greedy
-    // sampler when temperature == 0 (deterministic, Req 4.5). Returns a SamplerPtr
-    // owning the WHOLE chain (one llama_sampler*); adding a child transfers its
-    // ownership to the chain, so the chain's deleter frees everything exactly once.
+    // Build the per-call sampling chain (penalties -> top_k -> top_p -> min_p ->
+    // temp -> dist, or penalties -> greedy at temperature == 0) plus the optional
+    // GBNF grammar sampler separated for grammar-based rejection sampling in
+    // generate(): unconstrained sampling checks the single chosen token against
+    // `grammar_out` (~microseconds) and only scans the full vocabulary if rejected.
     //
     // `grammar_null_out` is set to true when a constraint IS set but the grammar
     // sampler came back NULL (unparseable grammar): generate() maps that to
-    // error_code="invalid_request" WITHOUT running the loop. On that path the
-    // returned SamplerPtr is null.
+    // error_code="invalid_request" WITHOUT running the loop.
     [[nodiscard]] SamplerPtr build_sampler(const GenerationParams& params,
-                                           bool& grammar_null_out);
+                                           bool& grammar_null_out,
+                                           SamplerPtr& grammar_out);
 
     LlamaConfig cfg_;
     LlamaSession session_;
     GrammarFactory grammar_;
+    common_chat_templates_ptr tmpls_;
 };
 
 #endif  // AQUILA_HAS_LLAMACPP

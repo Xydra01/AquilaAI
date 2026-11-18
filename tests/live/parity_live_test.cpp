@@ -38,11 +38,14 @@ namespace {
 
 std::string parity_gguf() {
     if (const char* e = std::getenv("AQUILA_PARITY_GGUF"); e && *e) return e;
-    return "D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+    if (std::filesystem::exists("F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf")) {
+        return "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf";
+    }
+    return "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf";
 }
 std::string parity_ollama_model() {
     if (const char* e = std::getenv("AQUILA_PARITY_OLLAMA_MODEL"); e && *e) return e;
-    return "llama3.2:latest";
+    return "qwen3.5:4b";
 }
 bool gguf_present() { return std::filesystem::exists(std::filesystem::path(parity_gguf())); }
 
@@ -68,6 +71,7 @@ GenerationParams schema_params() {
     p.temperature = 0.0;  // greedy: the most deterministic comparison point
     p.max_tokens = std::uint32_t{512};
     p.seed = std::int64_t{42};
+    p.think = false;
     p.constraint = OutputConstraint::json_schema(action_call_schema());
     p.timeout_s = 120.0;
     return p;
@@ -100,15 +104,26 @@ TEST_CASE("live: llama.cpp vs Ollama parity on the action-call schema",
         "Create a file named parity_check.txt. Respond with exactly one JSON action "
         "{thought, module, action, args}; put the filename in args.path."};
 
-    // --- llama.cpp (direct, GBNF) ---
-    LlamaConfig lcfg;
-    lcfg.model_path = parity_gguf();
-    lcfg.n_gpu_layers = (std::getenv("AQUILA_PARITY_GPU") ? 999 : 0);
-    lcfg.n_ctx = 4096;
-    LlamaCppBackend llama(lcfg);
-    llama.append(prompt);
-    const GenerationResult lr = llama.generate(schema_params(), nullptr);
-    const auto lcall = lr.ok ? try_parse(lr.content) : std::nullopt;
+    GenerationResult lr;
+    GenerationResult lr2;
+    std::optional<ActionCall> lcall;
+    {
+        // --- llama.cpp (direct, GBNF) ---
+        // Scope lifetime so GPU weights free VRAM before Ollama loads its model.
+        LlamaConfig lcfg;
+        lcfg.model_path = parity_gguf();
+        lcfg.n_gpu_layers = (std::getenv("AQUILA_PARITY_GPU") ? 999 : 0);
+        lcfg.n_ctx = 4096;
+        LlamaCppBackend llama(lcfg);
+        llama.append(prompt);
+        lr = llama.generate(schema_params(), nullptr);
+        lcall = lr.ok ? try_parse(lr.content) : std::nullopt;
+
+        // Determinism: repeat on the same backend at the same seed before unloading.
+        llama.rollback_to(0);
+        llama.append(prompt);
+        lr2 = llama.generate(schema_params(), nullptr);
+    }
 
     // --- Ollama (HTTP, format JSON) ---
     ollama.append(prompt);
@@ -129,11 +144,6 @@ TEST_CASE("live: llama.cpp vs Ollama parity on the action-call schema",
     CHECK(lcall.has_value());
     CHECK(orr.ok);
     CHECK(ocall.has_value());
-
-    // Determinism: the llama.cpp backend repeated at the same seed is stable.
-    llama.rollback_to(0);
-    llama.append(prompt);
-    const GenerationResult lr2 = llama.generate(schema_params(), nullptr);
     CHECK(lr2.content == lr.content);  // same seed, same backend -> identical
 }
 

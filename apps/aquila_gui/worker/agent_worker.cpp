@@ -49,16 +49,25 @@ void AgentWorker::run() {
             Message user_msg;
             user_msg.role = Role::user;
             user_msg.content = user_request_;
+            user_msg.images = user_images_;
             backend_->append(user_msg);
 
             GenerationParams params;
             params.temperature = 0.6;
             params.constraint = OutputConstraint::none();
 
-            const auto res = backend_->generate(params, [this](std::string_view tok, std::string_view) -> bool {
-                emit tokenStreamed(QString::fromUtf8(tok.data(), static_cast<qsizetype>(tok.size())));
-                return !cancel_flag_.load();
-            });
+            const auto res = backend_->generate(
+                params, [this](std::string_view tok, std::string_view think) -> bool {
+                    if (!think.empty()) {
+                        emit thinkingStreamed(
+                            QString::fromUtf8(think.data(), static_cast<qsizetype>(think.size())));
+                    }
+                    if (!tok.empty()) {
+                        emit tokenStreamed(
+                            QString::fromUtf8(tok.data(), static_cast<qsizetype>(tok.size())));
+                    }
+                    return !cancel_flag_.load();
+                });
 
             if (cancel_flag_.load()) {
                 emit statusChanged(QStringLiteral("Generation cancelled by user."));
@@ -80,8 +89,15 @@ void AgentWorker::run() {
 
     emit statusChanged(QStringLiteral("Initializing agent loop..."));
 
-    config_.on_token = [this](std::string_view tok, std::string_view) -> bool {
-        emit tokenStreamed(QString::fromUtf8(tok.data(), static_cast<qsizetype>(tok.size())));
+    config_.on_token = [this](std::string_view tok, std::string_view think) -> bool {
+        if (!think.empty()) {
+            emit thinkingStreamed(
+                QString::fromUtf8(think.data(), static_cast<qsizetype>(think.size())));
+        }
+        if (!tok.empty()) {
+            emit tokenStreamed(
+                QString::fromUtf8(tok.data(), static_cast<qsizetype>(tok.size())));
+        }
         return !cancel_flag_.load();
     };
 
@@ -143,6 +159,36 @@ void AgentWorker::run() {
         if (rec.interaction) {
             output = QString::fromStdString(rec.interaction->result.llm_facing_output);
             success = rec.interaction->result.success;
+
+            const auto& imgs = !rec.interaction->images.empty()
+                ? rec.interaction->images
+                : rec.interaction->result.images;
+            if (!imgs.empty()) {
+                QString shotUrl;
+                QString shotTitle;
+                if (rec.call && rec.call->args.is_object() &&
+                    rec.call->args.contains("url") && rec.call->args["url"].is_string()) {
+                    shotUrl = QString::fromStdString(rec.call->args["url"].get<std::string>());
+                }
+                const QStringList lines = output.split(QLatin1Char('\n'));
+                for (const QString& line : lines) {
+                    if (shotUrl.isEmpty() && line.startsWith(QStringLiteral("URL: "))) {
+                        shotUrl = line.mid(5).trimmed();
+                    } else if (shotTitle.isEmpty() && line.startsWith(QStringLiteral("Title: "))) {
+                        shotTitle = line.mid(7).trimmed();
+                    }
+                }
+                if (shotTitle.isEmpty()) {
+                    shotTitle = module.isEmpty()
+                        ? QStringLiteral("Agent Capture")
+                        : QStringLiteral("%1::%2").arg(module, action);
+                }
+                for (const auto& imgPath : imgs) {
+                    if (!imgPath.empty()) {
+                        emit screenshotCaptured(QString::fromStdString(imgPath), shotTitle, shotUrl);
+                    }
+                }
+            }
         } else if (!rec.note.empty()) {
             output = QString::fromStdString(rec.note);
             success = rec.parsed;

@@ -43,7 +43,7 @@ endif()
 add_library(aquila_llamacpp INTERFACE)
 
 if(NOT AQUILA_LLAMACPP)
-    target_compile_definitions(aquila_llamacpp INTERFACE AQUILA_HAS_LLAMACPP=0)
+    target_compile_definitions(aquila_llamacpp INTERFACE AQUILA_HAS_LLAMACPP=0 AQUILA_HAS_MTMD=0)
     message(STATUS "Aquila llama.cpp: backend STUBBED (AQUILA_HAS_LLAMACPP=0)")
     return()
 endif()
@@ -67,7 +67,8 @@ set(LLAMA_BUILD_APP      OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_UI       OFF CACHE BOOL "" FORCE)
 set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)   # deprecated upstream; harmless
 set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)   # no HTTPS stack needed for common
-set(LLAMA_BUILD_MTMD     OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_MTMD     ON  CACHE BOOL "" FORCE)
+set(MTMD_VIDEO           OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 # We link llama.cpp statically into aquila_core; a shared ggml/llama would need its
@@ -152,21 +153,27 @@ if(AQUILA_SANITIZE AND NOT MSVC)
 endif()
 
 # Public link surface: `llama` transitively pulls ggml; `llama-common` carries
-# json_schema_to_grammar. Guard against a target-name drift between tags.
+# json_schema_to_grammar + common_chat_templates; `mtmd` carries multimodal vision.
 set(_aq_llama_libs "")
-foreach(_tgt llama llama-common)
+foreach(_tgt llama llama-common mtmd)
     if(TARGET ${_tgt})
         list(APPEND _aq_llama_libs ${_tgt})
     endif()
 endforeach()
 
 target_compile_definitions(aquila_llamacpp INTERFACE AQUILA_HAS_LLAMACPP=1)
+if(TARGET mtmd)
+    target_compile_definitions(aquila_llamacpp INTERFACE AQUILA_HAS_MTMD=1)
+else()
+    target_compile_definitions(aquila_llamacpp INTERFACE AQUILA_HAS_MTMD=0)
+endif()
 target_link_libraries(aquila_llamacpp INTERFACE ${_aq_llama_libs})
-# `llama.h` is under include/; the common headers (json-schema-to-grammar.h) under
-# common/. Expose both as SYSTEM so our /W4 /WX and -Werror never see them.
+# `llama.h` is under include/; the common headers under common/; mtmd headers under
+# tools/mtmd/. Expose as SYSTEM so our /W4 /WX and -Werror never see them.
 target_include_directories(aquila_llamacpp SYSTEM INTERFACE
     "${llamacpp_SOURCE_DIR}/include"
     "${llamacpp_SOURCE_DIR}/common"
+    "${llamacpp_SOURCE_DIR}/tools/mtmd"
     "${llamacpp_SOURCE_DIR}/ggml/include")
 
 # --- tiny real-weight test model (CI-safe fast decode) ----------------------
@@ -187,22 +194,22 @@ FetchContent_MakeAvailable(aquila_tiny_gguf)
 set(AQUILA_TINY_GGUF_PATH "${aquila_tiny_gguf_SOURCE_DIR}/stories15M-q4_0.gguf"
     CACHE INTERNAL "Path to the tiny test GGUF fetched for the unit tests")
 
-# --- Qwen 3.5 4B Q4_K_M, the bake-off deciding model (M5 task 11, Req 9 / D14) ---
-# ~2.75 GB, so it is OPT-IN: fetched only when AQUILA_LIVE_TESTS is ON (the bake-off
-# is a live test, out of CI). Pinned by URL + SHA256 like every other model/dep for
-# reproducibility. A local copy next to the 9B is preferred when present (same as
-# the 9B's default path), so a developer who already has it does not re-download.
-# Exposed as AQUILA_BAKEOFF_GGUF_4B_PATH for tests/live/CMakeLists.txt.
-#   unsloth/Qwen3.5-4B-GGUF, arch qwen35 (same recurrent/M-RoPE family as the 9B),
-#   Apache-2.0. This is the CPU-first deciding lane; the 9B (GPU) only confirms.
+# --- Qwen 3.5 Model Family (4B CPU default + 9B GPU + mmproj vision) -----------
+# Pinned by URL + SHA256 when AQUILA_LIVE_TESTS is ON (out of normal CI). Local
+# copies under F:/Users/myfri/agent-projects or LM Studio are preferred when present.
 if(AQUILA_LIVE_TESTS)
+    set(_aq_f_4b "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf")
     set(_aq_local_4b "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf")
-    if(EXISTS "${_aq_local_4b}")
+    if(EXISTS "${_aq_f_4b}")
+        set(AQUILA_BAKEOFF_GGUF_4B_PATH "${_aq_f_4b}"
+            CACHE INTERNAL "Path to Qwen 3.5 4B GGUF (F:/aquila-models copy)")
+        message(STATUS "Aquila Qwen 3.5 4B: using ${_aq_f_4b}")
+    elseif(EXISTS "${_aq_local_4b}")
         set(AQUILA_BAKEOFF_GGUF_4B_PATH "${_aq_local_4b}"
-            CACHE INTERNAL "Path to the bake-off Qwen 3.5 4B GGUF (local copy)")
-        message(STATUS "Aquila bake-off: using local Qwen 3.5 4B at ${_aq_local_4b}")
+            CACHE INTERNAL "Path to Qwen 3.5 4B GGUF (local copy)")
+        message(STATUS "Aquila Qwen 3.5 4B: using local ${_aq_local_4b}")
     else()
-        set(_aq_4b_sha256 bf37767fa8d89ec3ba0ad3d614301f2f6fcb8b49360bc562502955543deb001d)
+        set(_aq_4b_sha256 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4)
         FetchContent_Declare(aquila_qwen4b_gguf
             URL https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf
             URL_HASH SHA256=${_aq_4b_sha256}
@@ -210,41 +217,72 @@ if(AQUILA_LIVE_TESTS)
         FetchContent_MakeAvailable(aquila_qwen4b_gguf)
         set(AQUILA_BAKEOFF_GGUF_4B_PATH
             "${aquila_qwen4b_gguf_SOURCE_DIR}/Qwen3.5-4B-Q4_K_M.gguf"
-            CACHE INTERNAL "Path to the bake-off Qwen 3.5 4B GGUF (fetched)")
+            CACHE INTERNAL "Path to Qwen 3.5 4B GGUF (fetched)")
     endif()
 
-# --- Base model pair (D15, R18): Llama 3.2 3B (CPU) + Llama 3.1 8B (GPU) --------
-# Ratified from the section-8.5 F3 model-family bake-off: Llama 3.2 3B does GBNF
-# actions cleanly where Qwen 3.5 4B degenerates (F2). Plain-RoPE (arch llama), so no
-# M-RoPE rollback hazard. bartowski Q4_K_M, pinned by SHA256. Local copies on D: are
-# preferred when present; exposed as AQUILA_BASE_GGUF_3B_PATH / _8B_PATH.
-if(AQUILA_LIVE_TESTS)
-    set(_aq_llama3b "D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")
-    if(EXISTS "${_aq_llama3b}")
-        set(AQUILA_BASE_GGUF_3B_PATH "${_aq_llama3b}" CACHE INTERNAL "Llama 3.2 3B base model (local)")
+    set(_aq_f_4b_mmproj "F:/aquila-models/mmproj-Qwen3.5-4B-F16.gguf")
+    set(_aq_local_4b_mmproj "F:/Users/myfri/agent-projects/mmproj-Qwen3.5-4B-F16.gguf")
+    if(EXISTS "${_aq_f_4b_mmproj}")
+        set(AQUILA_QWEN_4B_MMPROJ_PATH "${_aq_f_4b_mmproj}"
+            CACHE INTERNAL "Path to Qwen 3.5 4B mmproj GGUF (F:/aquila-models copy)")
+    elseif(EXISTS "${_aq_local_4b_mmproj}")
+        set(AQUILA_QWEN_4B_MMPROJ_PATH "${_aq_local_4b_mmproj}"
+            CACHE INTERNAL "Path to Qwen 3.5 4B mmproj GGUF (local copy)")
     else()
-        FetchContent_Declare(aquila_llama3b_gguf
-            URL https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
-            URL_HASH SHA256=6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff
+        FetchContent_Declare(aquila_qwen4b_mmproj
+            URL https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf
+            URL_HASH SHA256=cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864
             DOWNLOAD_NO_EXTRACT TRUE)
-        FetchContent_MakeAvailable(aquila_llama3b_gguf)
-        set(AQUILA_BASE_GGUF_3B_PATH "${aquila_llama3b_gguf_SOURCE_DIR}/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-            CACHE INTERNAL "Llama 3.2 3B base model (fetched)")
+        FetchContent_MakeAvailable(aquila_qwen4b_mmproj)
+        set(AQUILA_QWEN_4B_MMPROJ_PATH "${aquila_qwen4b_mmproj_SOURCE_DIR}/mmproj-F16.gguf"
+            CACHE INTERNAL "Path to Qwen 3.5 4B mmproj GGUF (fetched)")
     endif()
 
-    set(_aq_llama8b "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
-    if(EXISTS "${_aq_llama8b}")
-        set(AQUILA_BASE_GGUF_8B_PATH "${_aq_llama8b}" CACHE INTERNAL "Llama 3.1 8B base model (local)")
+    set(_aq_f_9b "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf")
+    set(_aq_local_9b "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf")
+    set(_aq_lms_9b "F:/Users/myfri/.lmstudio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf")
+    if(EXISTS "${_aq_f_9b}")
+        set(AQUILA_BASE_GGUF_9B_PATH "${_aq_f_9b}"
+            CACHE INTERNAL "Path to Qwen 3.5 9B GGUF (F:/aquila-models copy)")
+        message(STATUS "Aquila Qwen 3.5 9B: using ${_aq_f_9b}")
+    elseif(EXISTS "${_aq_local_9b}")
+        set(AQUILA_BASE_GGUF_9B_PATH "${_aq_local_9b}"
+            CACHE INTERNAL "Path to Qwen 3.5 9B GGUF (local copy)")
+    elseif(EXISTS "${_aq_lms_9b}")
+        set(AQUILA_BASE_GGUF_9B_PATH "${_aq_lms_9b}"
+            CACHE INTERNAL "Path to Qwen 3.5 9B GGUF (LM Studio local copy)")
     else()
-        FetchContent_Declare(aquila_llama8b_gguf
-            URL https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
-            URL_HASH SHA256=7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c
+        FetchContent_Declare(aquila_qwen9b_gguf
+            URL https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf
+            URL_HASH SHA256=03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
             DOWNLOAD_NO_EXTRACT TRUE)
-        FetchContent_MakeAvailable(aquila_llama8b_gguf)
-        set(AQUILA_BASE_GGUF_8B_PATH "${aquila_llama8b_gguf_SOURCE_DIR}/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
-            CACHE INTERNAL "Llama 3.1 8B base model (fetched)")
+        FetchContent_MakeAvailable(aquila_qwen9b_gguf)
+        set(AQUILA_BASE_GGUF_9B_PATH "${aquila_qwen9b_gguf_SOURCE_DIR}/Qwen3.5-9B-Q4_K_M.gguf"
+            CACHE INTERNAL "Path to Qwen 3.5 9B GGUF (fetched)")
     endif()
-    message(STATUS "Aquila base models (D15): 3B=${AQUILA_BASE_GGUF_3B_PATH} 8B=${AQUILA_BASE_GGUF_8B_PATH}")
-endif()
 
+    set(_aq_f_9b_mmproj "F:/aquila-models/mmproj-Qwen3.5-9B-BF16.gguf")
+    set(_aq_lms_9b_mmproj "F:/Users/myfri/.lmstudio/models/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf")
+    set(_aq_local_9b_mmproj "F:/Users/myfri/agent-projects/mmproj-Qwen3.5-9B-BF16.gguf")
+    if(EXISTS "${_aq_f_9b_mmproj}")
+        set(AQUILA_QWEN_9B_MMPROJ_PATH "${_aq_f_9b_mmproj}"
+            CACHE INTERNAL "Path to Qwen 3.5 9B mmproj GGUF (F:/aquila-models copy)")
+    elseif(EXISTS "${_aq_lms_9b_mmproj}")
+        set(AQUILA_QWEN_9B_MMPROJ_PATH "${_aq_lms_9b_mmproj}"
+            CACHE INTERNAL "Path to Qwen 3.5 9B mmproj GGUF (LM Studio local copy)")
+    elseif(EXISTS "${_aq_local_9b_mmproj}")
+        set(AQUILA_QWEN_9B_MMPROJ_PATH "${_aq_local_9b_mmproj}"
+            CACHE INTERNAL "Path to Qwen 3.5 9B mmproj GGUF (local copy)")
+    else()
+        FetchContent_Declare(aquila_qwen9b_mmproj
+            URL https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-BF16.gguf
+            URL_HASH SHA256=853698ce7aa6c7ba732478bad280240969ddf7b0fcbf93900046f63903a83383
+            DOWNLOAD_NO_EXTRACT TRUE)
+        FetchContent_MakeAvailable(aquila_qwen9b_mmproj)
+        set(AQUILA_QWEN_9B_MMPROJ_PATH "${aquila_qwen9b_mmproj_SOURCE_DIR}/mmproj-BF16.gguf"
+            CACHE INTERNAL "Path to Qwen 3.5 9B mmproj GGUF (fetched)")
+    endif()
+
+    set(AQUILA_BASE_GGUF_4B_PATH "${AQUILA_BAKEOFF_GGUF_4B_PATH}" CACHE INTERNAL "Qwen 3.5 4B default model")
+    message(STATUS "Aquila Qwen 3.5 models: 4B=${AQUILA_BASE_GGUF_4B_PATH} 9B=${AQUILA_BASE_GGUF_9B_PATH}")
 endif()

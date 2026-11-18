@@ -3,8 +3,10 @@
 #include "aquila/canvas/canvas_buffer.hpp"
 #include "aquila/modules/module.hpp"
 
+#include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace aquila {
@@ -26,6 +28,7 @@ public:
     void configure(const Json& initial_state) override;
 
     [[nodiscard]] Json export_state_snapshot() const override;
+    [[nodiscard]] Json export_context_summary() const override;
     void restore_state_snapshot(const Json& snapshot) override;
 
     // Host API (not exposed to the LLM).
@@ -48,6 +51,7 @@ private:
     ActionResult surgical_edit(const Json& args);
     ActionResult create_file(const Json& args);
     ActionResult revert_file(const Json& args);
+    void record_read_range(const std::string& path, std::size_t first, std::size_t last);
     // Validates `new_text` against the current text, then proposes (and in auto mode accepts) it.
     ActionResult submit(const std::string& path, const std::string& old_text, const std::string& new_text,
                         const std::string& summary);
@@ -59,6 +63,7 @@ private:
     bool manual_review_ = false;
     std::size_t max_output_chars_;
     std::optional<CanvasBuffer> canvas_;
+    std::map<std::string, std::vector<std::pair<std::size_t, std::size_t>>> read_ranges_;
 };
 
 }  // namespace aquila

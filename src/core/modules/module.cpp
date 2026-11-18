@@ -33,7 +33,13 @@ ActionResult ModuleBase::execute_action(const std::string& action_name, const Js
         } catch (const SchemaError& e) {
             return fail("invalid_args", std::string("invalid args for ") + action_name + ": " + e.what());
         }
-        return run(action_name, args);
+        try {
+            return run(action_name, args);
+        } catch (const SchemaError& e) {
+            return fail("invalid_args", std::string("invalid args for ") + action_name + ": " + e.what());
+        } catch (const Json::exception& e) {
+            return fail("invalid_args", std::string("invalid JSON args for ") + action_name + ": " + e.what());
+        }
     }
     return fail("unknown_action", module_id() + " has no action '" + action_name + "'");
 }

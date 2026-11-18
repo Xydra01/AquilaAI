@@ -1,5 +1,6 @@
 #include "aquila/agent/agent_loop.hpp"
 #include "aquila/agent/orchestrator_module.hpp"
+#include "aquila/agent/recipes.hpp"
 #include "aquila/agent/run_record.hpp"
 #include "aquila/agent/runtime_tier.hpp"
 #include "aquila/json.hpp"
@@ -632,3 +633,337 @@ TEST_CASE("AgentLoop runs synchronously on the calling thread") {
         CHECK(id == caller);
     }
 }
+
+TEST_CASE("AgentLoop::action_call_schema emits oneOf coupling modules to expose_actions",
+          "[agent_loop][schema]") {
+    RecipeCartridge recipe;
+    recipe.recipe_id = "test_oneof";
+
+    ModuleLoad m1;
+    m1.module = "WorkspaceModule";
+    m1.expose_actions = {"read_region", "write_file"};
+    recipe.load_modules.push_back(std::move(m1));
+
+    ModuleLoad m2;
+    m2.module = "ExecutionModule";
+    m2.expose_actions = {"run_python"};
+    recipe.load_modules.push_back(std::move(m2));
+
+    const Json coupled = AgentLoop::action_call_schema(&recipe);
+    REQUIRE(coupled.contains("oneOf"));
+    REQUIRE(coupled["oneOf"].is_array());
+    REQUIRE(coupled["oneOf"].size() == 2);
+    CHECK_FALSE(coupled.contains("properties"));
+
+    const Json& b0 = coupled["oneOf"][0];
+    CHECK(b0["properties"]["module"] == Json::object({{"const", "WorkspaceModule"}}));
+    CHECK(b0["properties"]["action"]["enum"] == Json::array({"read_region", "write_file"}));
+    CHECK(b0["additionalProperties"] == false);
+
+    const Json& b1 = coupled["oneOf"][1];
+    CHECK(b1["properties"]["module"] == Json::object({{"const", "ExecutionModule"}}));
+    CHECK(b1["properties"]["action"]["enum"] == Json::array({"run_python"}));
+    CHECK(b1["additionalProperties"] == false);
+
+    // Single-module recipe collapses directly to that branch without redundant oneOf.
+    RecipeCartridge single;
+    single.load_modules.push_back(recipe.load_modules[0]);
+    const Json single_schema = AgentLoop::action_call_schema(&single);
+    CHECK_FALSE(single_schema.contains("oneOf"));
+    CHECK(single_schema["properties"]["module"] == Json::object({{"const", "WorkspaceModule"}}));
+
+    // Null recipe falls back to unconstrained string fields.
+    const Json fallback = AgentLoop::action_call_schema(nullptr);
+    CHECK_FALSE(fallback.contains("oneOf"));
+    CHECK(fallback["properties"]["module"] == Json::object({{"type", "string"}}));
+}
+
+namespace {
+
+class CapturingBackend final : public IInferenceBackend {
+public:
+    explicit CapturingBackend(std::vector<GenerationResult> s) : inner_(std::move(s)) {}
+    void append(const Message& m) override {
+        seen.push_back(m);
+        inner_.append(m);
+    }
+    [[nodiscard]] std::size_t mark_checkpoint() const override { return inner_.mark_checkpoint(); }
+    void rollback_to(std::size_t c) override { inner_.rollback_to(c); }
+    GenerationResult generate(const GenerationParams& p, const TokenCallback& cb) override {
+        return inner_.generate(p, cb);
+    }
+    [[nodiscard]] ComputeProfile active_profile() const noexcept override { return inner_.active_profile(); }
+    [[nodiscard]] bool supports_kv_reuse() const noexcept override { return inner_.supports_kv_reuse(); }
+    std::vector<Message> seen;
+
+private:
+    ReplayBackend inner_;
+};
+
+}  // namespace
+
+TEST_CASE("AgentLoop injects Host OS when custom system prompt is empty and guides away from repeated failed actions",
+          "[agent_loop][recovery]") {
+    TempDir tmp;
+    RecipeCartridge recipe = code_smoke_file_recipe();
+    recipe.scratchpad_checklist.clear();
+
+    // Two identical failing calls to WorkspaceModule.create_file (missing required 'content')
+    // followed by a valid create_file and complete_recipe.
+    const std::string bad_create = action_reply("WorkspaceModule", "create_file", Json{{"file", "harness_smoke.py"}});
+    const std::string good_create = action_reply(
+        "WorkspaceModule", "create_file",
+        Json{{"file", "harness_smoke.py"}, {"content", "print('HARNESS_OK')\n"}});
+
+    std::vector<GenerationResult> scripted;
+    scripted.push_back(ok_reply(bad_create));
+    scripted.push_back(ok_reply(bad_create));
+    scripted.push_back(ok_reply(good_create));
+    scripted.push_back(ok_reply(complete_reply("smoke created")));
+
+    CapturingBackend backend(std::move(scripted));
+    const ModuleRegistry registry = ModuleRegistry::builtin();
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+    AgentLoop loop(backend, registry, ctx);
+
+    LoopConfig config = make_config(6);
+    config.system_prompt.clear();
+    config.max_repeated_calls = 4;
+
+    const TerminalResult result = loop.run(recipe, "write smoke script", config);
+    CHECK(result.success);
+
+    // System prompt (empty override) includes Host Environment.
+    REQUIRE(!backend.seen.empty());
+    CHECK(backend.seen.front().content.find("Host Environment:") != std::string::npos);
+
+    // After the second identical failing action, corrective guidance forbids re-running unchanged
+    // instead of telling a gated recipe to prematurely complete_recipe.
+    bool saw_fix_notice = false;
+    bool saw_premature_complete = false;
+    for (const auto& msg : backend.seen) {
+        if (msg.content.find("You MUST NOT re-run this failing action unchanged") != std::string::npos) {
+            saw_fix_notice = true;
+        }
+        if (msg.content.find("Immediately call OrchestratorModule.complete_recipe") != std::string::npos) {
+            saw_premature_complete = true;
+        }
+    }
+    CHECK(saw_fix_notice);
+    CHECK_FALSE(saw_premature_complete);
+}
+
+TEST_CASE("AgentLoop canonicalizes trailing slashes when detecting repeated path actions",
+          "[agent_loop][recovery]") {
+    TempDir tmp;
+    tmp.write("docs/guide.md", "# Guide\n");
+    RecipeCartridge recipe = orchestrator_only_recipe();
+    ModuleLoad ws;
+    ws.module = "WorkspaceModule";
+    ws.initial_state = Json::object();
+    ws.expose_actions = {"outline"};
+    recipe.load_modules.push_back(std::move(ws));
+
+    std::vector<GenerationResult> scripted{
+        ok_reply(action_reply("WorkspaceModule", "outline", Json{{"path", "docs"}})),
+        ok_reply(action_reply("WorkspaceModule", "outline", Json{{"path", "docs/"}})),
+        ok_reply(complete_reply("finished"))
+    };
+
+    CapturingBackend backend(std::move(scripted));
+    const ModuleRegistry registry = ModuleRegistry::builtin();
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+    AgentLoop loop(backend, registry, ctx);
+
+    LoopConfig config = make_config(5);
+    config.max_repeated_calls = 4;
+    const TerminalResult result = loop.run(recipe, "list docs", config);
+    CHECK(result.success);
+
+    bool saw_repeat_notice = false;
+    for (const auto& msg : backend.seen) {
+        if (msg.content.find("SYSTEM NOTICE: You just called 'WorkspaceModule::outline'") != std::string::npos) {
+            saw_repeat_notice = true;
+            break;
+        }
+    }
+    CHECK(saw_repeat_notice);
+}
+
+TEST_CASE("AgentLoop preserves tail and catches interleaved read repetition on large open files",
+          "[agent_loop][recovery]") {
+    TempDir tmp;
+    std::string huge_doc;
+    for (int i = 1; i <= 1500; ++i) {
+        huge_doc += "line_" + std::to_string(i) + "_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+    }
+    tmp.write("docs/design.md", huge_doc);
+
+    RecipeCartridge recipe = orchestrator_only_recipe();
+    ModuleLoad ws;
+    ws.module = "WorkspaceModule";
+    ws.initial_state = Json::object();
+    ws.expose_actions = {"outline", "read_region"};
+    recipe.load_modules.push_back(std::move(ws));
+
+    std::vector<GenerationResult> scripted{
+        ok_reply(action_reply("WorkspaceModule", "read_region",
+                              Json{{"file", "docs/design.md"}, {"start_line", 1}, {"end_line", 50}})),
+        ok_reply(action_reply("WorkspaceModule", "outline", Json{{"path", "docs"}})),
+        ok_reply(action_reply("WorkspaceModule", "read_region",
+                              Json{{"file", "docs/design.md"}, {"start_line", 1}, {"end_line", 50}})),
+        ok_reply(action_reply("WorkspaceModule", "outline", Json{{"path", "docs"}})),
+        ok_reply(action_reply("WorkspaceModule", "read_region",
+                              Json{{"file", "docs/design.md"}, {"start_line", 1}, {"end_line", 50}})),
+        ok_reply(complete_reply("done"))
+    };
+
+    CapturingBackend backend(std::move(scripted));
+    const ModuleRegistry registry = ModuleRegistry::builtin();
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+    AgentLoop loop(backend, registry, ctx);
+
+    LoopConfig config = make_config(6);
+    config.tier = RuntimeTierConfig::for_profile(ComputeProfile::cpu_low_spec_edge);  // 8192 threshold
+    config.tier.limits.max_turns = 6;
+    config.max_repeated_calls = 4;
+    const TerminalResult result = loop.run(recipe, "read design", config);
+    CHECK(result.success);
+
+    // Anchored message must never embed raw huge_doc content, and interleaved repeat
+    // detection must still trigger SYSTEM NOTICE on repeated read_region despite outline.
+    bool saw_read_repeat = false;
+    bool leaked_body_in_anchored = false;
+    for (const auto& msg : backend.seen) {
+        if (msg.role == Role::system && msg.content.find("\"scratchpad\"") != std::string::npos &&
+            msg.content.find("line_1499_xxxxxxxx") != std::string::npos) {
+            leaked_body_in_anchored = true;
+        }
+        if (msg.content.find("SYSTEM NOTICE: You just called 'WorkspaceModule::read_region'") != std::string::npos) {
+            saw_read_repeat = true;
+        }
+    }
+    CHECK_FALSE(leaked_body_in_anchored);
+    CHECK(saw_read_repeat);
+}
+
+TEST_CASE("AgentLoop emits turn budget wrap-up notice on unhooked recipes with max_turns >= 8",
+          "[agent_loop][recovery]") {
+    RecipeCartridge recipe = orchestrator_only_recipe();
+    REQUIRE_FALSE(recipe.post_llm_validation_hook.has_value());
+
+    std::vector<GenerationResult> scripted;
+    for (int i = 0; i < 5; ++i) {
+        scripted.push_back(ok_reply(action_reply(
+            "OrchestratorModule", "checkpoint_notes",
+            Json{{"fields", Json{{"note", "step_" + std::to_string(i)}}}})));
+    }
+    scripted.push_back(ok_reply(complete_reply("finished")));
+
+    CapturingBackend backend(std::move(scripted));
+    const ModuleRegistry registry = ModuleRegistry::builtin();
+    ModuleContext ctx;
+    AgentLoop loop(backend, registry, ctx);
+
+    LoopConfig config = make_config(8);
+    config.tier = RuntimeTierConfig::for_profile(ComputeProfile::gpu_high_vram);
+    config.tier.limits.max_turns = 8;
+    const TerminalResult result = loop.run(recipe, "wrap up before limit", config);
+    CHECK(result.success);
+
+    bool saw_budget_notice = false;
+    for (const auto& msg : backend.seen) {
+        if (msg.content.find("[TURN BUDGET NOTICE: Only 3 turns remain") != std::string::npos) {
+            saw_budget_notice = true;
+            break;
+        }
+    }
+    CHECK(saw_budget_notice);
+}
+
+TEST_CASE("AgentLoop allows consecutive advancing browser_scroll calls without false repetition warnings, but catches stuck bottom scrolls",
+          "[agent_loop][browser][recovery]") {
+    class FakeScrollBrowser final : public ModuleBase {
+    public:
+        explicit FakeScrollBrowser(const ModuleContext&) {}
+        std::string module_id() const override { return "BrowserModule"; }
+        std::vector<ActionSchema> get_actions() const override {
+            return {{"browser_scroll", "Scroll page", Json::object({{"type", "object"}})}};
+        }
+        void configure(const Json&) override {}
+        Json export_state_snapshot() const override { return Json::object(); }
+        void restore_state_snapshot(const Json&) override {}
+        ActionResult run(const std::string&, const Json&) override {
+            if (scroll_y_ < 1400) {
+                scroll_y_ += 700;
+            }
+            ActionResult r;
+            r.success = true;
+            r.llm_facing_output = "Scroll: y=" + std::to_string(scroll_y_) + " / total_height=2200";
+            return r;
+        }
+    private:
+        int scroll_y_ = 0;
+    };
+
+    RecipeCartridge recipe;
+    recipe.recipe_id = "browser_scroll_repeat_test";
+    recipe.goal_template = "Scroll down a long page";
+    ModuleLoad bm;
+    bm.module = "BrowserModule";
+    bm.expose_actions = {"browser_scroll"};
+    recipe.load_modules.push_back(bm);
+    ModuleLoad orch;
+    orch.module = "OrchestratorModule";
+    orch.expose_actions = {"complete_recipe"};
+    recipe.load_modules.push_back(orch);
+
+    ModuleRegistry registry = ModuleRegistry::builtin();
+    registry.register_module<FakeScrollBrowser>("BrowserModule");
+
+    // 1. Advancing scrolls (y=700, y=1400) must NOT emit any repetition notice.
+    {
+        std::vector<GenerationResult> scripted = {
+            ok_reply(action_reply("BrowserModule", "browser_scroll", Json{{"direction", "down"}})),
+            ok_reply(action_reply("BrowserModule", "browser_scroll", Json{{"direction", "down"}})),
+            ok_reply(complete_reply("scrolled cleanly")),
+        };
+        CapturingBackend backend(std::move(scripted));
+        ModuleContext ctx;
+        AgentLoop loop(backend, registry, ctx);
+        LoopConfig config = make_config(6);
+        config.max_repeated_calls = 2;
+        const TerminalResult res = loop.run(recipe, "scroll twice", config);
+        CHECK(res.success);
+        bool saw_repeat_notice = false;
+        for (const auto& msg : backend.seen) {
+            if (msg.content.find("identical arguments") != std::string::npos ||
+                msg.content.find("Repetition loop detected") != std::string::npos) {
+                saw_repeat_notice = true;
+            }
+        }
+        CHECK_FALSE(saw_repeat_notice);
+    }
+
+    // 2. Stuck scrolls at bottom (y=700 -> y=1400 -> y=1400 -> y=1400) MUST trip circuit breaker.
+    {
+        std::vector<GenerationResult> scripted = {
+            ok_reply(action_reply("BrowserModule", "browser_scroll", Json{{"direction", "down"}})),
+            ok_reply(action_reply("BrowserModule", "browser_scroll", Json{{"direction", "down"}})),
+            ok_reply(action_reply("BrowserModule", "browser_scroll", Json{{"direction", "down"}})),
+            ok_reply(action_reply("BrowserModule", "browser_scroll", Json{{"direction", "down"}})),
+        };
+        CapturingBackend backend(std::move(scripted));
+        ModuleContext ctx;
+        AgentLoop loop(backend, registry, ctx);
+        LoopConfig config = make_config(6);
+        config.max_repeated_calls = 2;
+        const TerminalResult res = loop.run(recipe, "stuck at bottom", config);
+        CHECK_FALSE(res.success);
+        CHECK(res.completion_output.find("anti-repetition circuit breaker") != std::string::npos);
+    }
+}
+

@@ -21,7 +21,9 @@ struct CliOptions {
     std::string tier_name = "cpu";
     std::string backend_type = "ollama";
     std::string model_name;
+    std::string mmproj_path;
     std::string ollama_host = "http://127.0.0.1:11434";
+    std::vector<std::string> image_paths;
     bool verbose = false;
     bool help = false;
     bool version = false;

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace aquila {
 
@@ -35,6 +36,7 @@ struct ActionResult {
     std::string error_code;
     std::string llm_facing_output;
     std::uint64_t token_estimate = 0;
+    std::vector<std::string> images = {};
 
     bool operator==(const ActionResult&) const = default;
 };

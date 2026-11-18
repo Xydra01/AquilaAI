@@ -13,14 +13,18 @@
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QKeyEvent>
 #include <QPixmap>
+#include <QSet>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QTemporaryFile>
 #include <QTimer>
 
+#include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 
 namespace {
@@ -32,9 +36,15 @@ public:
     void rollback_to(std::size_t cp) override { messages_.resize(cp); }
     aquila::GenerationResult generate(const aquila::GenerationParams&,
                                       const aquila::TokenCallback& on_token) override {
+        ++turn_;
         aquila::GenerationResult res;
         res.ok = true;
-        res.content = R"({"thought":"headless ok","module":"OrchestratorModule","action":"complete_recipe","args":{"output":"success"}})";
+        if (turn_ == 1) {
+            // Complete all checklist/ledger steps to satisfy the strict Option A completion gate
+            res.content = R"({"thought":"mark ledger steps completed","module":"OrchestratorModule","action":"update_task_ledger","args":{"completed_steps":["Setup","Write","Compile"]}})";
+        } else {
+            res.content = R"({"thought":"headless ok","module":"OrchestratorModule","action":"complete_recipe","args":{"output":"success"}})";
+        }
         if (on_token) {
             on_token(res.content, "");
         }
@@ -47,6 +57,7 @@ public:
 
 private:
     std::vector<aquila::Message> messages_;
+    int turn_ = 0;
 };
 
 int run_headless_tests(QApplication& app) {
@@ -147,7 +158,7 @@ int run_headless_tests(QApplication& app) {
     // Test 10: AgentWorker background execution with mock backend and queued signals
     {
         auto mockBackend = std::make_shared<HeadlessMockBackend>();
-        aquila::RecipeCartridge recipe = aquila::fn_research_offline_recipe();
+        aquila::RecipeCartridge recipe = aquila::fn_writing_dynamic_recipe();
         aquila::LoopConfig cfg;
         cfg.task_id = "headless-test";
         cfg.mode = "task";
@@ -394,6 +405,11 @@ int run_headless_tests(QApplication& app) {
         aquila::gui::MainWindow window;
         window.switchMode(5); // Research
         auto* resPage = window.researchPage();
+        if (resPage->selectedEngine() != QStringLiteral("searxng")) {
+            std::fprintf(stderr, "ResearchPage default engine expected 'searxng', got '%s'\n",
+                         resPage->selectedEngine().toUtf8().constData());
+            return 1;
+        }
 
         window.onResearchSearch(QStringLiteral("aquila"), QStringLiteral("comprehensive"));
         if (resPage->searchResultCount() == 0 || resPage->factCount() == 0) {
@@ -486,25 +502,94 @@ int run_headless_tests(QApplication& app) {
     }
     std::printf("[GUI-TEST] 23. Markdown Rendering Engine: OK\n");
 
-    // Test 24: Venv Sandbox Actions & Recipe Enum Constraining
+    // Test 24: Venv Sandbox Actions & Recipe OneOf Schema Constraining
     {
         aquila::RecipeCartridge recipe = aquila::fn_dev_implement_recipe();
         const auto schema = aquila::AgentLoop::action_call_schema(&recipe);
-        if (!schema.contains("properties") || !schema["properties"].contains("module") ||
-            !schema["properties"]["module"].contains("enum")) {
-            std::fprintf(stderr, "Action call schema missing module enum constraint\n");
+        if (!schema.contains("oneOf") || !schema["oneOf"].is_array()) {
+            std::fprintf(stderr, "Action call schema missing oneOf constraint\n");
             return 1;
         }
-        const auto enumList = schema["properties"]["module"]["enum"];
-        if (enumList.size() != 3) {
-            std::fprintf(stderr, "Module enum constraint size mismatch: expected 3, got %lld\n", static_cast<long long>(enumList.size()));
+        const auto& branches = schema["oneOf"];
+        if (branches.size() != 3) {
+            std::fprintf(stderr, "Action call oneOf branch size mismatch: expected 3, got %lld\n", static_cast<long long>(branches.size()));
+            return 1;
+        }
+        bool seen_exec = false, seen_ws = false, seen_orch = false;
+        for (const auto& b : branches) {
+            if (!b.contains("properties") || !b["properties"].contains("module") ||
+                !b["properties"]["module"].contains("const") ||
+                !b["properties"].contains("action") || !b["properties"]["action"].contains("enum")) {
+                std::fprintf(stderr, "Action call oneOf branch malformed\n");
+                return 1;
+            }
+            const std::string mod = b["properties"]["module"]["const"].get<std::string>();
+            if (mod == "ExecutionModule") seen_exec = true;
+            if (mod == "WorkspaceModule") seen_ws = true;
+            if (mod == "OrchestratorModule") seen_orch = true;
+        }
+        if (!seen_exec || !seen_ws || !seen_orch) {
+            std::fprintf(stderr, "Action call oneOf missing expected recipe modules\n");
             return 1;
         }
     }
-    std::printf("[GUI-TEST] 24. Venv Sandbox Actions & Recipe Enum Schema: OK\n");
+    std::printf("[GUI-TEST] 24. Venv Sandbox Actions & Recipe OneOf Schema: OK\n");
+
+    // Test 25: Research Lab Screenshot Browser Loading, Deduplication & Preview
+    {
+        aquila::gui::MainWindow window;
+        window.switchMode(5); // Research Lab
+        auto* resPage = window.researchPage();
+        resPage->clearScreenshots(false);
+
+        const QString tmpWs = QDir(QDir::tempPath()).filePath(QStringLiteral("aquila_gui_shot_test"));
+        QDir(tmpWs).removeRecursively();
+        const QString shotsDir = QDir(tmpWs).filePath(QStringLiteral(".aquila/browser_screenshots"));
+        QDir().mkpath(shotsDir);
+
+        auto writeSamplePng = [&](const QString& fname, const QColor& bg, const QColor& accent) -> QString {
+            QImage img(640, 400, QImage::Format_ARGB32);
+            img.fill(bg);
+            for (int y = 40; y < 180; ++y) {
+                for (int x = 40; x < 300; ++x) {
+                    img.setPixelColor(x, y, accent);
+                }
+            }
+            const QString fullPath = QDir(shotsDir).filePath(fname);
+            img.save(fullPath, "PNG");
+            return fullPath;
+        };
+
+        const QString p1 = writeSamplePng(QStringLiteral("shot_20261117_170001_001_001.png"), QColor(15, 23, 42), QColor(59, 130, 246));
+        const QString p2 = writeSamplePng(QStringLiteral("shot_20261117_170002_001_002.png"), QColor(20, 30, 48), QColor(16, 185, 129));
+
+        resPage->loadScreenshotsFromDir(tmpWs);
+        if (resPage->screenshotCount() != 2 || !resPage->hasScreenshotPreview()) {
+            std::fprintf(stderr, "Screenshot Browser dir load failed: count=%d, preview=%d\n",
+                         resPage->screenshotCount(), int(resPage->hasScreenshotPreview()));
+            QDir(tmpWs).removeRecursively();
+            return 1;
+        }
+        // Re-adding an existing screenshot with richer metadata must deduplicate (stay 2, not 3).
+        resPage->addScreenshot(p1, QStringLiteral("Rendered Docs Page"), QStringLiteral("https://example.org/docs"));
+        if (resPage->screenshotCount() != 2) {
+            std::fprintf(stderr, "Screenshot Browser deduplication failed: count=%d\n", resPage->screenshotCount());
+            QDir(tmpWs).removeRecursively();
+            return 1;
+        }
+        // Clearing with deleteFiles=true removes both files from disk.
+        resPage->clearScreenshots(true);
+        if (resPage->screenshotCount() != 0 || QFileInfo::exists(p1) || QFileInfo::exists(p2)) {
+            std::fprintf(stderr, "Screenshot Browser clear(deleteFiles=true) failed\n");
+            QDir(tmpWs).removeRecursively();
+            return 1;
+        }
+        QDir(tmpWs).removeRecursively();
+    }
+    std::printf("[GUI-TEST] 25. Research Lab Screenshot Browser: OK\n");
 
     std::printf("\n========================================\n");
-    std::printf("All 24 GUI headless test suites PASSED!\n");
+    std::printf("All 25 GUI headless test suites PASSED!\n");
     std::printf("[GUI-HEADLESS-TEST-OK]\n");
     std::printf("smoke=ok\n");
     std::printf("========================================\n");
@@ -536,15 +621,64 @@ int main(int argc, char** argv) {
     const bool smoke = app.arguments().contains(QStringLiteral("--smoke"));
     const bool headlessTest = app.arguments().contains(QStringLiteral("--test-headless")) || app.arguments().contains(QStringLiteral("--run-headless-tests"));
     const int ssIdx = app.arguments().indexOf(QStringLiteral("--screenshots"));
+    const int vaIdx = app.arguments().indexOf(QStringLiteral("--visual-audit"));
+    const int captureArgIdx = (vaIdx != -1) ? vaIdx : ssIdx;
+    const bool visualAudit = (vaIdx != -1);
 
-    if (ssIdx != -1 && ssIdx + 1 < app.arguments().size()) {
-        const QString outDir = app.arguments().at(ssIdx + 1);
+    if (captureArgIdx != -1 && captureArgIdx + 1 < app.arguments().size()) {
+        const QString outDir = app.arguments().at(captureArgIdx + 1);
         QDir().mkpath(outDir);
 
         aquila::gui::MainWindow window;
-        window.resize(1280, 800);
+        window.setWorkspaceRoot(QStringLiteral("."));
+        window.resize(visualAudit ? 1440 : 1280, visualAudit ? 900 : 800);
         window.show();
         app.processEvents();
+
+        // Populate rich fixtures across pages so rendered frames showcase real UI states.
+        window.taskPage()->addLedgerEntry(0, QStringLiteral("KnowledgeModule"), QStringLiteral("search_local_docs"), QStringLiteral("OK"), QStringLiteral("Found 4 matches"));
+        window.taskPage()->updateScratchpad(
+            QStringLiteral("Verify Qwen 3.5 multi-domain execution"),
+            QStringLiteral("Inspect visual GUI captures"),
+            {QStringLiteral("CPU tier isolates 0 MiB CUDA"), QStringLiteral("Lazy mmproj loads on first image")},
+            {QStringLiteral("Capture all mode screenshots"), QStringLiteral("Verify visual contrast & layout")});
+        window.writingPage()->setSectionContent(
+            QStringLiteral("1. Overview"),
+            QStringLiteral("# Architecture Summary\n\nAquila pairs a **deterministic C++ core** with Qt6 desktop workflows and lazy multimodal vision."));
+        window.characterPage()->setInitializationBible(
+            QStringLiteral("# Ada — Systems Architecture Mentor\n\n"
+                           "## Voice & Temperament\nConcise, grounded, and empirically driven.\n\n") +
+            QString(800, QLatin1Char('x')));
+
+        aquila::Json manifest = aquila::Json::array();
+        bool allValidFrames = true;
+        auto record_frame = [&](const QString& label, const QPixmap& pix, const QString& fileName) {
+            const QString path = QDir(outDir).filePath(fileName);
+            const bool saved = pix.save(path);
+            const QImage img = pix.toImage();
+            QSet<QRgb> uniqueColors;
+            const int stepX = (std::max)(1, img.width() / 64);
+            const int stepY = (std::max)(1, img.height() / 64);
+            for (int y = 0; y < img.height(); y += stepY) {
+                for (int x = 0; x < img.width(); x += stepX) {
+                    uniqueColors.insert(img.pixel(x, y));
+                }
+            }
+            const bool nonBlank = saved && !img.isNull() && img.width() >= 400 && img.height() >= 300 && uniqueColors.size() >= 8;
+            if (!nonBlank) {
+                allValidFrames = false;
+                std::fprintf(stderr, "[VISUAL-AUDIT] Invalid/blank frame %s (%dx%d, colors=%d, saved=%d)\n",
+                             qPrintable(fileName), img.width(), img.height(), static_cast<int>(uniqueColors.size()), int(saved));
+            }
+            manifest.push_back(aquila::Json::object({
+                {"label", label.toStdString()},
+                {"file", fileName.toStdString()},
+                {"width", img.width()},
+                {"height", img.height()},
+                {"sampled_unique_colors", static_cast<int>(uniqueColors.size())},
+                {"valid", nonBlank}
+            }));
+        };
 
         const QStringList modeNames = {
             QStringLiteral("01_home"),
@@ -562,9 +696,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < modeNames.size(); ++i) {
             window.switchMode(i);
             app.processEvents();
-            QPixmap pix = window.grab();
-            QString path = QDir(outDir).filePath(QStringLiteral("screenshot_%1.png").arg(modeNames[i]));
-            pix.save(path);
+            record_frame(modeNames[i], window.grab(), QStringLiteral("screenshot_%1.png").arg(modeNames[i]));
         }
 
         // Setup Wizard
@@ -572,7 +704,7 @@ int main(int argc, char** argv) {
         wizard.resize(720, 520);
         wizard.show();
         app.processEvents();
-        wizard.grab().save(QDir(outDir).filePath(QStringLiteral("screenshot_10_setup_wizard.png")));
+        record_frame(QStringLiteral("setup_wizard"), wizard.grab(), QStringLiteral("screenshot_10_setup_wizard.png"));
 
         // Plan Review Dialog
         aquila::gui::PlanReviewDialog planDialog(QStringLiteral("fn_dev_implement"),
@@ -583,7 +715,7 @@ int main(int argc, char** argv) {
         planDialog.resize(600, 450);
         planDialog.show();
         app.processEvents();
-        planDialog.grab().save(QDir(outDir).filePath(QStringLiteral("screenshot_11_plan_review.png")));
+        record_frame(QStringLiteral("plan_review"), planDialog.grab(), QStringLiteral("screenshot_11_plan_review.png"));
 
         // Live Canvas Inline Diff Screenshot
         window.switchMode(3); // Code IDE
@@ -596,11 +728,58 @@ int main(int argc, char** argv) {
             ed->setTextCursor(cur);
             ed->applyInlinePendingPatch(QStringLiteral("    // Optimized vectorized execution\n    std::ranges::for_each(std::views::iota(0, 100), process_fast);"));
             app.processEvents();
-            window.grab().save(QDir(outDir).filePath(QStringLiteral("screenshot_12_live_canvas_code.png")));
+            record_frame(QStringLiteral("live_canvas_code"), window.grab(), QStringLiteral("screenshot_12_live_canvas_code.png"));
             ed->rejectInlinePatch();
         }
 
+        // Research Lab Screenshot Browser Tab Visual Audit Frame
+        {
+            window.switchMode(5); // Research Lab
+            auto* rp = window.researchPage();
+            const QString samplePath = QDir(outDir).filePath(QStringLiteral("sample_browser_capture.png"));
+            QImage sample(1280, 800, QImage::Format_ARGB32);
+            sample.fill(QColor(15, 23, 42));
+            for (int y = 0; y < 90; ++y) {
+                for (int x = 0; x < 1280; ++x) sample.setPixelColor(x, y, QColor(30, 41, 59));
+            }
+            for (int y = 140; y < 520; ++y) {
+                for (int x = 100; x < 1180; ++x) sample.setPixelColor(x, y, QColor(37, 99, 235));
+            }
+            for (int y = 560; y < 700; ++y) {
+                for (int x = 100; x < 760; ++x) sample.setPixelColor(x, y, QColor(16, 185, 129));
+            }
+            sample.save(samplePath, "PNG");
+            rp->addCachedPage(QStringLiteral("https://docs.example.org/hybrid-attention"),
+                              QStringLiteral("Hybrid Attention Architecture Guide"),
+                              QStringLiteral("rendered + screenshot"),
+                              samplePath);
+            rp->addScreenshot(samplePath,
+                              QStringLiteral("Hybrid Attention Architecture Guide"),
+                              QStringLiteral("https://docs.example.org/hybrid-attention"));
+            rp->showScreenshotsTab();
+            app.processEvents();
+            record_frame(QStringLiteral("research_screenshots"), window.grab(), QStringLiteral("screenshot_13_research_screenshots.png"));
+        }
+
+        std::ofstream mf(QDir(outDir).filePath(QStringLiteral("visual_manifest.json")).toStdString(),
+                         std::ios::binary | std::ios::trunc);
+        if (mf.is_open()) {
+            mf << aquila::Json::object({
+                {"frames", manifest},
+                {"all_valid", allValidFrames}
+            }).dump(2);
+        }
+
+        if (visualAudit) {
+            std::printf("[VISUAL-AUDIT-%s] captured %zu frames to %s\n",
+                        allValidFrames ? "OK" : "FAIL",
+                        manifest.size(),
+                        qPrintable(outDir));
+            std::fflush(stdout);
+            return allValidFrames ? 0 : 1;
+        }
         std::printf("[SCREENSHOTS-CAPTURED-OK]\n");
+        std::fflush(stdout);
         return 0;
     }
 

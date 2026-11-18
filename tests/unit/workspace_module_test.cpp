@@ -261,4 +261,47 @@ TEST_CASE("workspace: configure is strict") {
     CHECK_NOTHROW(m.configure(Json::parse(R"({"root_dir":"src","review":"auto"})")));
     const auto r = call(m, "outline", "{}");
     CHECK(r.llm_facing_output.rfind("WORKSPACE: src (", 0) == 0);
+
+    CHECK(m.execute_action("create_file", Json{{"file", "missing_content.py"}}).error_code == "invalid_args");
+    CHECK(m.execute_action("create_file", Json{{"file", "./"}, {"content", "print(1)\n"}}).error_code == "invalid_args");
+}
+
+TEST_CASE("workspace: read_region appends continuation hint on truncation and export_context_summary stays compact",
+          "[workspace]") {
+    Repo repo;
+    std::string big_doc;
+    for (int i = 1; i <= 200; ++i) {
+        big_doc += "line_" + std::to_string(i) + "_padding_text_for_context_summary_test\n";
+    }
+    repo.tmp.write("docs/large.md", big_doc);
+
+    WorkspaceModule m(repo.ctx());
+    const auto res = m.execute_action("read_region", Json{
+        {"file", "docs/large.md"},
+        {"start_line", 1},
+        {"end_line", 500}
+    });
+    REQUIRE(res.success);
+    CHECK(res.llm_facing_output.find("lines 1-150 of 200") != std::string::npos);
+    CHECK(res.llm_facing_output.find("call read_region starting at line 151") != std::string::npos);
+
+    const Json summary = m.export_context_summary();
+    REQUIRE(summary.contains("canvas"));
+    REQUIRE(summary["canvas"].contains("open_documents"));
+    REQUIRE(summary["canvas"]["open_documents"].size() == 1);
+    CHECK(summary["canvas"]["open_documents"][0]["path"] == "docs/large.md");
+    REQUIRE(summary["canvas"]["open_documents"][0].contains("lines_read"));
+    CHECK(summary["canvas"]["open_documents"][0]["lines_read"] == Json::array({"1-150"}));
+    CHECK_FALSE(summary.dump().find("line_199_padding_text") != std::string::npos);
+    CHECK(summary.dump().size() < 512);
+
+    // Adjacent read_region ranges coalesce cleanly in export_context_summary().
+    const auto res2 = m.execute_action("read_region", Json{
+        {"file", "docs/large.md"},
+        {"start_line", 151},
+        {"end_line", 200}
+    });
+    REQUIRE(res2.success);
+    const Json summary2 = m.export_context_summary();
+    CHECK(summary2["canvas"]["open_documents"][0]["lines_read"] == Json::array({"1-200"}));
 }

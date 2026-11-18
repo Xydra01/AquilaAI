@@ -14,7 +14,7 @@ namespace detail {
 // src/core/agent/recipes/code_smoke_file.recipe.json, verbatim.
 inline constexpr std::string_view kCodeSmokeFileRecipeJson = R"AQ({
   "recipe_id": "code_smoke_file",
-  "goal_template": "Create a Python smoke file named harness_smoke.py somewhere in the workspace whose contents include the marker HARNESS_OK, then complete the recipe. Objective: {{user_instructions}}",
+  "goal_template": "Create a valid executable Python smoke script named harness_smoke.py in the workspace that prints HARNESS_OK and exits with code 0, then complete the recipe. Objective: {{user_instructions}}",
   "load_modules": [
     {
       "module": "WorkspaceModule",
@@ -29,7 +29,7 @@ inline constexpr std::string_view kCodeSmokeFileRecipeJson = R"AQ({
     {
       "module": "ExecutionModule",
       "initial_state": {
-        "test_cmd": "python -c 'import pathlib,sys; m=[p for p in pathlib.Path(\".\").rglob(\"harness_smoke.py\") if \"HARNESS_OK\" in p.read_text(encoding=\"utf-8\",errors=\"ignore\")]; sys.exit(0 if m else 1)'"
+        "test_cmd": "python -c 'import pathlib,subprocess,sys; m=[p for p in pathlib.Path(\".\").rglob(\"harness_smoke.py\") if \"HARNESS_OK\" in p.read_text(encoding=\"utf-8\",errors=\"ignore\")]; ok=bool(m) and all(subprocess.run([sys.executable,str(p)],timeout=10).returncode==0 for p in m); sys.exit(0 if ok else 1)'"
       },
       "expose_actions": []
     },
@@ -43,21 +43,22 @@ inline constexpr std::string_view kCodeSmokeFileRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Record the active objective and the next immediate action before completing",
-    "Create harness_smoke.py containing the HARNESS_OK marker via create_file",
+    "Create valid executable Python file harness_smoke.py printing HARNESS_OK via create_file",
     "Call complete_recipe so the deterministic exit gate verifies the smoke file"
   ],
   "post_llm_validation_hook": {
     "module": "ExecutionModule",
     "action": "run_test_suite",
     "must_succeed": true,
-    "on_failure_instruction": "No file matching **/harness_smoke.py containing the marker HARNESS_OK was found. Use WorkspaceModule.create_file to write harness_smoke.py with HARNESS_OK in its contents, then complete the recipe again."
+    "on_failure_instruction": "No valid runnable **/harness_smoke.py containing HARNESS_OK was found. Use WorkspaceModule.create_file to write executable Python code (e.g. print('HARNESS_OK')) to harness_smoke.py, then complete the recipe again."
   }
 }
 )AQ";
@@ -95,7 +96,8 @@ inline constexpr std::string_view kKnowledgeSmokeRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -120,15 +122,25 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
   "goal_template": "Conduct comprehensive research on: {{user_instructions}}",
   "load_modules": [
     {
+      "module": "BrowserModule",
+      "initial_state": {},
+      "expose_actions": [
+        "browser_search",
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_scroll",
+        "browser_extract_text",
+        "browser_screenshot"
+      ]
+    },
+    {
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
-        "web_search",
-        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
-        "get_all_facts",
-        "verify_research_deliverable"
+        "get_all_facts"
       ]
     },
     {
@@ -155,22 +167,24 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Search web or local documentation for relevant material using KnowledgeModule web_search",
+    "Search the web using BrowserModule browser_search or inspect local docs with KnowledgeModule search_local_docs",
+    "Open authoritative source pages with BrowserModule browser_navigate, scroll deeper sections with browser_scroll when content continues below the fold, and click relevant links/tabs/controls with browser_click to gather thorough primary evidence",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
-    "Write comprehensive final research report to research_report.md (with markdown headers and citations like [1]) using WorkspaceModule create_file",
+    "Write comprehensive final research report to research_report.md (with markdown headers and [1]/URL citations) using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {
     "module": "KnowledgeModule",
     "action": "verify_research_deliverable",
     "must_succeed": true,
-    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and citations like [1] or [Author, Year]) to research_report.md before completing."
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and real http(s):// source URLs from your visited/retrieved pages) to research_report.md before completing."
   }
 }
 )AQ";
@@ -181,11 +195,22 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
   "goal_template": "Perform dynamic hypothesis-driven research: {{user_instructions}}",
   "load_modules": [
     {
+      "module": "BrowserModule",
+      "initial_state": {},
+      "expose_actions": [
+        "browser_search",
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_scroll",
+        "browser_extract_text",
+        "browser_screenshot"
+      ]
+    },
+    {
       "module": "KnowledgeModule",
       "initial_state": {},
       "expose_actions": [
-        "web_search",
-        "fetch_and_clean_url",
         "search_local_docs",
         "store_fact",
         "get_all_facts"
@@ -228,16 +253,24 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Search local documentation or investigate question using KnowledgeModule search_local_docs",
+    "Investigate the question with BrowserModule browser_search/browser_navigate (scrolling deeper sections with browser_scroll and clicking relevant links/tabs/controls with browser_click) or KnowledgeModule search_local_docs",
     "Store verified findings into knowledge memory using KnowledgeModule store_fact",
+    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and [1]/URL citations using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "KnowledgeModule",
+    "action": "verify_research_deliverable",
+    "must_succeed": true,
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and real http(s):// source URLs from your visited/retrieved pages) to research_report.md or findings_report.md before completing."
+  }
 }
 )AQ";
 
@@ -276,16 +309,24 @@ inline constexpr std::string_view kFnResearchOfflineRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Examine local docs and files using KnowledgeModule search_local_docs or WorkspaceModule outline",
-    "Record verified facts using KnowledgeModule store_fact",
+    "Examine local docs and files using KnowledgeModule search_local_docs, WorkspaceModule outline, or read_region",
+    "Checkpoint key findings with OrchestratorModule checkpoint_notes and record verified facts using KnowledgeModule store_fact",
+    "Write any requested synthesis or report file using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "KnowledgeModule",
+    "action": "verify_research_deliverable",
+    "must_succeed": true,
+    "on_failure_instruction": "Offline research verification failed. Ensure you have recorded at least one verified fact via KnowledgeModule.store_fact and written a comprehensive cited markdown synthesis/report file (>= 350 chars, markdown headings, and [source] citations) before calling complete_recipe."
+  }
 }
 )AQ";
 
@@ -314,7 +355,8 @@ inline constexpr std::string_view kFnResearchChatLightRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -364,7 +406,8 @@ inline constexpr std::string_view kFnWritingFullRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
@@ -431,7 +474,8 @@ inline constexpr std::string_view kFnWritingDynamicRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
@@ -477,7 +521,8 @@ inline constexpr std::string_view kFnWritingSourcesRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -542,7 +587,8 @@ inline constexpr std::string_view kFnLearnSyllabusRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -616,7 +662,8 @@ inline constexpr std::string_view kFnLearnSyllabusWebRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -666,7 +713,8 @@ inline constexpr std::string_view kFnPersonaBuildRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -718,7 +766,8 @@ inline constexpr std::string_view kFnPersonaLoreRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -775,14 +824,15 @@ inline constexpr std::string_view kFnDevImplementRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Analyze requirements and codebase",
-    "Ensure workspace virtualenv and install required dependencies",
+    "Ensure workspace virtualenv and install required dependencies (on Windows, include tzdata or a fixed-offset fallback when using zoneinfo)",
     "Implement necessary code changes (ensure scripts are strictly non-interactive with no input() calls)",
     "Run script or test suite to verify implementation",
     "Complete task"
@@ -830,7 +880,8 @@ inline constexpr std::string_view kFnDevDocumentationRecipeJson = R"AQ({
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
@@ -888,7 +939,8 @@ inline constexpr std::string_view kFnDevTddRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
@@ -956,14 +1008,15 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility, and ensure non-interactive with no input() calls)",
-    "Run and verify execution using ExecutionModule run_python",
+    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility, zero-arg runnable via sensible defaults for any CLI flags, and non-interactive with no input() calls)",
+    "Run and verify zero-arg execution (no required args) using ExecutionModule run_python",
     "Verify implementation quality via ExecutionModule verify_implementation",
     "Call OrchestratorModule complete_recipe"
   ],
@@ -971,7 +1024,7 @@ inline constexpr std::string_view kFnDevDynamicRecipeJson = R"AQ({
     "module": "ExecutionModule",
     "action": "verify_implementation",
     "must_succeed": true,
-    "on_failure_instruction": "Implementation verification failed. Ensure you have written a complete, substantive script without stub bodies (no pass or TODO), that it is strictly non-interactive (no input(); use CLI args or defaults), and that it executes cleanly with exit code 0."
+    "on_failure_instruction": "Implementation verification failed. Ensure your script has no stub bodies (no pass or TODO), is strictly non-interactive (no input()), and executes cleanly with exit code 0 when run directly with ZERO CLI arguments (provide sensible defaults like '127.0.0.1' if sys.argv has no args). Inspect [VALIDATION FAILURE DETAIL] below and fix the script before calling complete_recipe."
   }
 }
 )AQ";

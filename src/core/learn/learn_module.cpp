@@ -4,6 +4,7 @@
 #include "aquila/knowledge/web_fetcher.hpp"
 #include "aquila/workspace/path_firewall.hpp"
 
+#include <array>
 #include <chrono>
 #include <ctime>
 #include <fstream>
@@ -56,6 +57,22 @@ std::string strip_code_fences(std::string text) {
     return text;
 }
 
+std::string format_available_node_ids(const std::vector<SyllabusNode>& nodes, std::size_t limit = 24,
+                                      bool roots_only = false) {
+    std::string out;
+    std::size_t count = 0;
+    for (const auto& n : nodes) {
+        if (roots_only && n.parent_id && !n.parent_id->empty()) continue;
+        if (!out.empty()) out += ", ";
+        out += n.id;
+        if (++count >= limit) break;
+    }
+    if (nodes.size() > count && !roots_only) {
+        out += " ...";
+    }
+    return out;
+}
+
 std::string repair_truncated_json(std::string text) {
     bool in_string = false;
     bool escaped = false;
@@ -98,6 +115,54 @@ std::string repair_truncated_json(std::string text) {
         stack.pop_back();
         if (open == '{') text.push_back('}');
         else if (open == '[') text.push_back(']');
+    }
+    return text;
+}
+
+std::string strip_excess_closing_braces(std::string text) {
+    bool in_string = false;
+    bool escaped = false;
+    int depth = 0;
+    std::size_t root_end = std::string::npos;
+
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (c == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) continue;
+        if (c == '{' || c == '[') {
+            ++depth;
+        } else if (c == '}' || c == ']') {
+            --depth;
+            if (depth == 0) {
+                root_end = i + 1;
+                break;
+            }
+            if (depth < 0) break;
+        }
+    }
+    if (root_end != std::string::npos && root_end < text.size()) {
+        bool only_trailing_closers = true;
+        for (std::size_t j = root_end; j < text.size(); ++j) {
+            const char c = text[j];
+            if (c != '}' && c != ']' && c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+                only_trailing_closers = false;
+                break;
+            }
+        }
+        if (only_trailing_closers) {
+            text.resize(root_end);
+        }
     }
     return text;
 }
@@ -369,7 +434,7 @@ std::vector<ActionSchema> LearnModule::get_actions() const {
             Json::object({
                 {"type", "object"},
                 {"properties", Json::object({
-                    {"content", Json::object({{"type", "string"}, {"description", "Syllabus JSON string (tree of learning units)"}})}
+                    {"content", Json::object({{"type", "string"}, {"description", "Syllabus JSON string (>= 8 total units, >= 5 child nodes with parent_id). Example: {\"nodes\":[{\"id\":\"root\",\"title\":\"Course\",\"parent_id\":null},{\"id\":\"m1\",\"title\":\"Module 1\",\"parent_id\":\"root\"},{\"id\":\"l1\",\"title\":\"Lesson 1\",\"parent_id\":\"m1\"}]}"}})}
                 })},
                 {"required", Json::array({"content"})}
             })
@@ -593,26 +658,115 @@ void LearnModule::restore_state_snapshot(const Json& snapshot) {
 
 namespace {
 
+void extract_nodes_recursive(const Json& item, const std::string& parent_id, std::vector<SyllabusNode>& out);
+
+void extract_collection_value(const Json& coll, const std::string& parent_id, std::vector<SyllabusNode>& out) {
+    if (coll.is_array()) {
+        for (const auto& child : coll) {
+            extract_nodes_recursive(child, parent_id, out);
+        }
+        return;
+    }
+    if (!coll.is_object()) {
+        return;
+    }
+    const bool looks_like_single_node =
+        coll.contains("id") || coll.contains("title") || coll.contains("name") ||
+        coll.contains("label") || coll.contains("topic") || coll.contains("heading");
+    if (looks_like_single_node) {
+        extract_nodes_recursive(coll, parent_id, out);
+        return;
+    }
+    for (const auto& [map_key, val] : coll.items()) {
+        if (val.is_object()) {
+            Json entry = val;
+            if (!entry.contains("id") && !entry.contains("node_id") && !entry.contains("unit_id")) {
+                entry["id"] = map_key;
+            }
+            const bool has_title =
+                (entry.contains("title") && entry["title"].is_string() && !entry["title"].get<std::string>().empty()) ||
+                (entry.contains("name") && entry["name"].is_string() && !entry["name"].get<std::string>().empty()) ||
+                (entry.contains("topic") && entry["topic"].is_string() && !entry["topic"].get<std::string>().empty()) ||
+                (entry.contains("label") && entry["label"].is_string() && !entry["label"].get<std::string>().empty()) ||
+                (entry.contains("heading") && entry["heading"].is_string() && !entry["heading"].get<std::string>().empty());
+            if (!has_title) {
+                entry["title"] = map_key;
+            }
+            extract_nodes_recursive(entry, parent_id, out);
+        } else if (val.is_array()) {
+            SyllabusNode grp;
+            grp.id = map_key;
+            grp.title = map_key;
+            if (!parent_id.empty()) {
+                grp.parent_id = parent_id;
+            }
+            out.push_back(grp);
+            for (const auto& child : val) {
+                extract_nodes_recursive(child, grp.id, out);
+            }
+        } else if (val.is_string()) {
+            extract_nodes_recursive(val, parent_id, out);
+        }
+    }
+}
+
 void extract_nodes_recursive(const Json& item, const std::string& parent_id, std::vector<SyllabusNode>& out) {
+    if (item.is_string()) {
+        const std::string text = item.get<std::string>();
+        if (!text.empty()) {
+            SyllabusNode leaf;
+            leaf.id = (parent_id.empty() ? std::string("unit_") : (parent_id + "_u")) +
+                      std::to_string(out.size() + 1);
+            leaf.title = text;
+            if (!parent_id.empty()) {
+                leaf.parent_id = parent_id;
+            }
+            out.push_back(std::move(leaf));
+        }
+        return;
+    }
     if (!item.is_object()) return;
     SyllabusNode n = SyllabusNode::from_json(item);
     if ((!n.parent_id || n.parent_id->empty()) && !parent_id.empty()) {
         n.parent_id = parent_id;
     }
     if (n.id.empty()) {
+        if (item.contains("node_id") && item["node_id"].is_string()) {
+            n.id = item["node_id"].get<std::string>();
+        } else if (item.contains("unit_id") && item["unit_id"].is_string()) {
+            n.id = item["unit_id"].get<std::string>();
+        }
+    }
+    if (n.id.empty()) {
         n.id = "unit_" + std::to_string(out.size() + 1);
     }
     if (n.title.empty()) {
-        n.title = item.value("name", item.value("topic", "Learning Unit " + std::to_string(out.size() + 1)));
+        for (const char* tk : {"name", "topic", "label", "heading"}) {
+            if (item.contains(tk) && item[tk].is_string() && !item[tk].get<std::string>().empty()) {
+                n.title = item[tk].get<std::string>();
+                break;
+            }
+        }
+        if (n.title.empty() && item.contains("week")) {
+            n.title = item["week"].is_string() ? item["week"].get<std::string>()
+                                               : ("Week " + item["week"].dump());
+        } else if (n.title.empty() && item.contains("chapter")) {
+            n.title = item["chapter"].is_string() ? item["chapter"].get<std::string>()
+                                                  : ("Chapter " + item["chapter"].dump());
+        }
+        if (n.title.empty()) {
+            n.title = "Learning Unit " + std::to_string(out.size() + 1);
+        }
     }
     const std::string this_id = n.id;
-    out.push_back(n);
+    out.push_back(std::move(n));
 
-    for (const char* key : {"children", "subtopics", "lessons", "units", "modules", "topics", "subunits", "sub-units", "sub_units", "sections", "lectures"}) {
-        if (item.contains(key) && item[key].is_array()) {
-            for (const auto& child : item[key]) {
-                extract_nodes_recursive(child, this_id, out);
-            }
+    for (const char* key : {"children", "nodes", "lessons", "subtopics", "sub_topics", "units",
+                            "modules", "weeks", "chapters", "topics", "subunits",
+                            "sub-units", "sub_units", "sections", "lectures",
+                            "syllabus", "curriculum", "outline", "course_outline", "key_concepts"}) {
+        if (item.contains(key)) {
+            extract_collection_value(item[key], this_id, out);
         }
     }
 }
@@ -656,14 +810,18 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
                     parsed = Json::parse(clean);
                 } catch (...) {
                     try {
-                        parsed = Json::parse(repair_truncated_json(clean));
+                        parsed = Json::parse(strip_excess_closing_braces(clean));
                     } catch (...) {
-                        // Check if clean is a file path in workspace
-                        const auto p = ctx_.workspace_root.empty() ? fs::path(clean) : ctx_.workspace_root / clean;
-                        std::error_code ec;
-                        if (fs::is_regular_file(p, ec)) {
-                            std::ifstream f(p);
-                            try { f >> parsed; } catch (...) {}
+                        try {
+                            parsed = Json::parse(repair_truncated_json(clean));
+                        } catch (...) {
+                            // Check if clean is a file path in workspace
+                            const auto p = ctx_.workspace_root.empty() ? fs::path(clean) : ctx_.workspace_root / clean;
+                            std::error_code ec;
+                            if (fs::is_regular_file(p, ec)) {
+                                std::ifstream f(p);
+                                try { f >> parsed; } catch (...) {}
+                            }
                         }
                     }
                 }
@@ -694,18 +852,34 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
                 extract_nodes_recursive(item, "", candidate_nodes);
             }
         } else if (parsed.is_object()) {
-            bool found_array = false;
-            for (const char* key : {"nodes", "modules", "topics", "units", "syllabus", "subunits", "sub-units", "sub_units", "sections"}) {
-                if (parsed.contains(key) && parsed[key].is_array()) {
-                    for (const auto& item : parsed[key]) {
-                        extract_nodes_recursive(item, "", candidate_nodes);
-                    }
-                    found_array = true;
-                    break;
+            constexpr std::array<const char*, 11> kTopCollectionKeys = {
+                "nodes", "modules", "weeks", "chapters", "topics",
+                "units", "syllabus", "subunits", "sub-units", "sub_units", "sections"
+            };
+            std::string sibling_root_id;
+            if (parsed.contains("root") && parsed["root"].is_object()) {
+                extract_nodes_recursive(parsed["root"], "", candidate_nodes);
+                if (!candidate_nodes.empty()) {
+                    sibling_root_id = candidate_nodes.front().id;
                 }
             }
-            if (!found_array) {
+
+            const bool object_is_node =
+                parsed.contains("id") || parsed.contains("title") || parsed.contains("name");
+            if (object_is_node && sibling_root_id.empty()) {
                 extract_nodes_recursive(parsed, "", candidate_nodes);
+            } else {
+                bool found_collection = !sibling_root_id.empty();
+                for (const char* key : kTopCollectionKeys) {
+                    if (parsed.contains(key) && (parsed[key].is_array() || parsed[key].is_object())) {
+                        extract_collection_value(parsed[key], sibling_root_id, candidate_nodes);
+                        found_collection = true;
+                        break;
+                    }
+                }
+                if (!found_collection) {
+                    extract_nodes_recursive(parsed, "", candidate_nodes);
+                }
             }
         } else {
             return fail("invalid_format", "❌ Syllabus must be a JSON array of nodes or an object containing nodes.");
@@ -723,7 +897,9 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         syllabus_.nodes = std::move(candidate_nodes);
         save_syllabus_record();
         return ok("✅ Syllabus successfully written and validated (" +
-                  std::to_string(syllabus_.nodes.size()) + " units). Call finalize_course when ready.");
+                  std::to_string(syllabus_.nodes.size()) + " units; top-level node_ids: [" +
+                  format_available_node_ids(syllabus_.nodes, 12, true) + "]; all node_ids sample: [" +
+                  format_available_node_ids(syllabus_.nodes) + "]). Call finalize_course when ready.");
     }
 
     if (action_name == "finalize_course") {
@@ -773,14 +949,16 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         save_course_record();
         save_syllabus_record();
         return ok("✅ Course '" + course_.title + "' finalized with " +
-                  std::to_string(syllabus_.nodes.size()) + " learning units. The course build is complete; now call OrchestratorModule.complete_recipe to finish the recipe.");
+                  std::to_string(syllabus_.nodes.size()) + " learning units (top-level node_ids: [" +
+                  format_available_node_ids(syllabus_.nodes, 12, true) +
+                  "]). The course build is complete; now call OrchestratorModule.complete_recipe to finish the recipe.");
     }
 
     if (action_name == "generate_assessment") {
         if (!has_active_course()) {
             return fail("no_active_course", "❌ Error: No active course loaded.");
         }
-        const std::string node_id = args.value("node_id", "");
+        const std::string node_id = json_io::opt_string(args, "node_id");
         bool node_found = false;
         for (auto& n : syllabus_.nodes) {
             if (n.id == node_id) {
@@ -789,7 +967,8 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
             }
         }
         if (!node_found) {
-            return fail("node_not_found", "❌ Node '" + node_id + "' not found in syllabus.");
+            return fail("node_not_found", "❌ Node '" + node_id + "' not found in syllabus. Available node_ids: [" +
+                                              format_available_node_ids(syllabus_.nodes) + "]");
         }
         std::error_code ec;
         std::filesystem::create_directories(assessments_dir(), ec);
@@ -806,8 +985,8 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         if (!has_active_course()) {
             return fail("no_active_course", "❌ Error: No active course loaded.");
         }
-        const std::string node_id = args.value("node_id", "");
-        const bool passed = args.value("passed", false);
+        const std::string node_id = json_io::opt_string(args, "node_id");
+        const bool passed = json_io::opt_bool(args, "passed", false);
         for (auto& n : syllabus_.nodes) {
             if (n.id == node_id) {
                 if (passed && n.mastery_tier < kMasteryTierMax) {
@@ -818,7 +997,8 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
                           std::to_string(n.mastery_tier) + "/" + std::to_string(kMasteryTierMax) + ").");
             }
         }
-        return fail("node_not_found", "❌ Node '" + node_id + "' not found in syllabus.");
+        return fail("node_not_found", "❌ Node '" + node_id + "' not found in syllabus. Available node_ids: [" +
+                                          format_available_node_ids(syllabus_.nodes) + "]");
     }
 
     if (action_name == "add_archive_source") {
@@ -1097,6 +1277,11 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
         j["active"] = true;
         j["status"] = syllabus_.status;
         j["units"] = syllabus_.nodes.size();
+        Json node_ids = Json::array();
+        for (const auto& n : syllabus_.nodes) {
+            node_ids.push_back(n.id);
+        }
+        j["node_ids"] = std::move(node_ids);
         return ok(j.dump(2));
     }
 
@@ -1105,13 +1290,15 @@ ActionResult LearnModule::run(const std::string& action_name, const Json& args) 
             return fail("no_active_course", "❌ No active course found. Create a course first.");
         }
 
-        const bool require_finalized = args.value("require_finalized", true);
+        const bool require_finalized = json_io::opt_bool(args, "require_finalized", true);
         if (require_finalized && !course_.build_complete && syllabus_.status != "ready") {
             return fail("course_not_finalized", "❌ Course '" + course_.title + "' is not finalized. Call LearnModule.finalize_course before finishing.");
         }
 
-        const std::size_t min_nodes = args.value("min_nodes", static_cast<int>(kSyllabusMinNodes));
-        const std::size_t min_children = args.value("min_children", static_cast<int>(kSyllabusMinChildNodes));
+        const std::size_t min_nodes = static_cast<std::size_t>(
+            std::max(1, json_io::opt_int(args, "min_nodes", static_cast<int>(kSyllabusMinNodes))));
+        const std::size_t min_children = static_cast<std::size_t>(
+            std::max(0, json_io::opt_int(args, "min_children", static_cast<int>(kSyllabusMinChildNodes))));
 
         // Validate syllabus structure hierarchy
         const auto [valid, err] = validate_syllabus_structure(syllabus_.nodes);

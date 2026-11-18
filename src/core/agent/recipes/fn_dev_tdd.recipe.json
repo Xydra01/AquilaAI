@@ -42,7 +42,8 @@
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],

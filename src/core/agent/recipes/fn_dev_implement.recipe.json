@@ -41,14 +41,15 @@
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Analyze requirements and codebase",
-    "Ensure workspace virtualenv and install required dependencies",
+    "Ensure workspace virtualenv and install required dependencies (on Windows, include tzdata or a fixed-offset fallback when using zoneinfo)",
     "Implement necessary code changes (ensure scripts are strictly non-interactive with no input() calls)",
     "Run script or test suite to verify implementation",
     "Complete task"

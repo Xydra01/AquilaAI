@@ -52,11 +52,15 @@ void to_json(Json& j, const ActionResult& v) {
     j["error_code"] = v.error_code;
     j["llm_facing_output"] = v.llm_facing_output;
     j["token_estimate"] = v.token_estimate;
+    if (!v.images.empty()) {
+        j["images"] = v.images;
+    }
 }
 
 void from_json(const Json& j, ActionResult& v, const std::string& path) {
     expect_object(j, path);
-    reject_unknown(j, path, {"success", "error_code", "llm_facing_output", "token_estimate"});
+    reject_unknown(j, path,
+                   {"success", "error_code", "llm_facing_output", "token_estimate", "images"});
     v.success = read_bool(require(j, path, "success"), child_path(path, "success"));
 
     const auto code_path = child_path(path, "error_code");
@@ -74,6 +78,18 @@ void from_json(const Json& j, ActionResult& v, const std::string& path) {
     v.llm_facing_output =
         read_string(require(j, path, "llm_facing_output"), child_path(path, "llm_facing_output"));
     v.token_estimate = read_u64(require(j, path, "token_estimate"), child_path(path, "token_estimate"));
+    v.images.clear();
+    if (j.contains("images")) {
+        const Json& arr = j.at("images");
+        const std::string imgs_path = child_path(path, "images");
+        if (!arr.is_array()) {
+            throw SchemaError(imgs_path, "must be an array of strings");
+        }
+        v.images.reserve(arr.size());
+        for (std::size_t i = 0; i < arr.size(); ++i) {
+            v.images.push_back(read_string(arr[i], imgs_path + "[" + std::to_string(i) + "]"));
+        }
+    }
 }
 
 }  // namespace aquila

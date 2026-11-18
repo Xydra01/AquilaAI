@@ -49,6 +49,21 @@ endif()
 
 enable_testing()
 
+# Standalone Chromium/WebEngine headless browser helper (optional unless AQUILA_REQUIRE_WEBENGINE=ON).
+if(AQUILA_REQUIRE_WEBENGINE)
+    find_package(Qt6 6.11 REQUIRED COMPONENTS Widgets Network WebEngineWidgets)
+else()
+    find_package(Qt6 6.11 QUIET COMPONENTS Widgets Network WebEngineWidgets)
+endif()
+if(Qt6WebEngineWidgets_FOUND)
+    message(STATUS "Qt6 WebEngineWidgets ${Qt6WebEngineWidgets_VERSION}: ${Qt6WebEngineWidgets_DIR}")
+    if(NOT DEFINED AQUILA_QT_BIN_DIR AND TARGET Qt6::qmake)
+        get_target_property(_aquila_qmake Qt6::qmake IMPORTED_LOCATION)
+        get_filename_component(AQUILA_QT_BIN_DIR "${_aquila_qmake}" DIRECTORY)
+    endif()
+    add_subdirectory(apps/aquila_browser)
+endif()
+
 add_subdirectory(src/core)
 add_subdirectory(apps/aquila_cli)
 if(AQUILA_BUILD_GUI)

@@ -50,14 +50,15 @@
       "expose_actions": [
         "checkpoint_notes",
         "complete_recipe",
-        "trigger_context_condense"
+        "trigger_context_condense",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility, and ensure non-interactive with no input() calls)",
-    "Run and verify execution using ExecutionModule run_python",
+    "Write the script or implementation file using WorkspaceModule create_file (use pure Python standard library e.g. urllib or socket for cross-platform compatibility, zero-arg runnable via sensible defaults for any CLI flags, and non-interactive with no input() calls)",
+    "Run and verify zero-arg execution (no required args) using ExecutionModule run_python",
     "Verify implementation quality via ExecutionModule verify_implementation",
     "Call OrchestratorModule complete_recipe"
   ],
@@ -65,6 +66,6 @@
     "module": "ExecutionModule",
     "action": "verify_implementation",
     "must_succeed": true,
-    "on_failure_instruction": "Implementation verification failed. Ensure you have written a complete, substantive script without stub bodies (no pass or TODO), that it is strictly non-interactive (no input(); use CLI args or defaults), and that it executes cleanly with exit code 0."
+    "on_failure_instruction": "Implementation verification failed. Ensure your script has no stub bodies (no pass or TODO), is strictly non-interactive (no input()), and executes cleanly with exit code 0 when run directly with ZERO CLI arguments (provide sensible defaults like '127.0.0.1' if sys.argv has no args). Inspect [VALIDATION FAILURE DETAIL] below and fix the script before calling complete_recipe."
   }
 }

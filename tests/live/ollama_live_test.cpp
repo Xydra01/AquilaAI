@@ -63,6 +63,23 @@ std::string raw_chat(const OllamaConfig& c, Json payload) {
     return Json::parse(res->body)["message"]["content"].get<std::string>();
 }
 
+std::optional<double> inspect_modelfile_temperature(const OllamaConfig& c) {
+    if (c.base_url != "http://127.0.0.1:11434") return std::nullopt;
+    httplib::Client cli("127.0.0.1", 11434);
+    cli.set_read_timeout(std::chrono::seconds(30));
+    const auto res = cli.Post("/api/show", Json{{"model", c.model}}.dump(), "application/json");
+    if (!res || res->status != 200) return std::nullopt;
+    try {
+        const Json j = Json::parse(res->body);
+        const std::string params = j.value("parameters", "");
+        std::smatch m;
+        if (std::regex_search(params, m, std::regex(R"(temperature\s+([0-9]+(?:\.[0-9]+)?))"))) {
+            return std::stod(m[1].str());
+        }
+    } catch (...) {}
+    return std::nullopt;
+}
+
 }  // namespace
 
 TEST_CASE("live: plain pong") {
@@ -144,11 +161,55 @@ TEST_CASE("live: top-level temperature is ignored, options.temperature is honore
     const auto top2 = python_style(2.0);
     const auto opt0 = in_options(0.0);
     const auto opt2 = in_options(2.0);
-    const auto opt_modelfile = in_options(0.2);
-    std::printf("top-level 0.0: [%s]\ntop-level 2.0: [%s]\noptions 0.0:   [%s]\noptions 2.0:   [%s]\noptions 0.2:   [%s]\n",
-                top0.c_str(), top2.c_str(), opt0.c_str(), opt2.c_str(), opt_modelfile.c_str());
+    const auto model_default_temp = inspect_modelfile_temperature(b.config());
+    std::printf("top-level 0.0: [%s]\ntop-level 2.0: [%s]\noptions 0.0:   [%s]\noptions 2.0:   [%s]\n",
+                top0.c_str(), top2.c_str(), opt0.c_str(), opt2.c_str());
 
     CHECK(top0 == top2);            // ignored: both use the model default
     CHECK(opt0 != opt2);            // honored
-    CHECK(top0 == opt_modelfile);   // the default is the Modelfile's 0.2 (aquila:latest)
+    if (model_default_temp.has_value()) {
+        const auto opt_modelfile = in_options(*model_default_temp);
+        std::printf("modelfile default temp=%.3f: [%s]\n", *model_default_temp, opt_modelfile.c_str());
+        CHECK(top0 == opt_modelfile);
+    } else if (b.config().model.rfind("aquila:", 0) == 0 || b.config().model == "aquila") {
+        const auto opt_modelfile = in_options(0.2);
+        CHECK(top0 == opt_modelfile);
+    } else {
+        std::printf("note: %s has no explicit Modelfile temperature override in /api/show\n",
+                    b.config().model.c_str());
+    }
+}
+
+TEST_CASE("live: temperature sweep across persona and writing prompts reports distinct outputs") {
+    auto b = live_backend();
+    require_stock_server(b);
+
+    const std::vector<double> temps = {0.0, 0.2, 0.7, 1.2};
+    const std::string prompt =
+        "In one atmospheric sentence, describe a clockmaker waiting for midnight rain.";
+
+    std::vector<std::string> outputs;
+    outputs.reserve(temps.size());
+    for (std::size_t i = 0; i < temps.size(); ++i) {
+        const double t = temps[i];
+        GenerationParams p = base_params();
+        p.temperature = t;
+        p.max_tokens = 48;
+        p.seed = static_cast<std::int64_t>(100 + i);
+        const auto text = raw_chat(b.config(), ollama::build_chat_payload(
+            b.config().model, {{Role::user, prompt, {}}}, p, false));
+        std::printf("TEMP SWEEP T=%.1f (seed=%lld): %s\n",
+                    t, static_cast<long long>(*p.seed), text.c_str());
+        REQUIRE(!text.empty());
+        outputs.push_back(text);
+    }
+
+    // Repeated T=0.0 must remain greedy-deterministic across seeds; higher temperatures should vary.
+    GenerationParams g0 = base_params();
+    g0.temperature = 0.0;
+    g0.max_tokens = 48;
+    g0.seed = 999;
+    const auto greedy_repeat = raw_chat(b.config(), ollama::build_chat_payload(
+        b.config().model, {{Role::user, prompt, {}}}, g0, false));
+    CHECK(greedy_repeat == outputs.front());
 }

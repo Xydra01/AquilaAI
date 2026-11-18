@@ -9,7 +9,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -251,7 +254,7 @@ TEST_CASE("Property 13: scratchpad snapshot round-trip", "[rapidcheck][orchestra
 // {checkpoint_notes, trigger_context_condense, complete_recipe}, each with an
 // object-typed parameters schema; complete_recipe sets Intent::completion_requested
 // and records the completion output.
-TEST_CASE("OrchestratorModule exposes three object-schema actions and signals completion") {
+TEST_CASE("OrchestratorModule exposes three object-schema actions and signals completion", "[orchestrator]") {
     OrchestratorModule module(make_ctx());
 
     // Requirement 3.1: exactly the three actions, each with an object schema.
@@ -265,7 +268,8 @@ TEST_CASE("OrchestratorModule exposes three object-schema actions and signals co
         CHECK(a.parameters_json_schema.at("type").get<std::string>() == "object");
     }
     CHECK(names == std::set<std::string>{"checkpoint_notes", "complete_recipe",
-                                         "register_new_recipe", "trigger_context_condense"});
+                                         "register_new_recipe", "trigger_context_condense",
+                                         "update_task_ledger"});
 
     // No intent before any action runs.
     CHECK(module.take_intent() == OrchestratorModule::Intent::none);
@@ -281,6 +285,88 @@ TEST_CASE("OrchestratorModule exposes three object-schema actions and signals co
 
     // take_intent clears: a second read returns none.
     CHECK(module.take_intent() == OrchestratorModule::Intent::none);
+}
+
+TEST_CASE("OrchestratorModule: task ledger lifecycle, tolerant queries, and completion gate", "[orchestrator][ledger]") {
+    namespace fs = std::filesystem;
+    const fs::path test_dir = fs::temp_directory_path() / "aquila_ledger_test_ws";
+    fs::remove_all(test_dir);
+    fs::create_directories(test_dir);
+
+    ModuleContext ctx;
+    ctx.workspace_root = test_dir;
+    OrchestratorModule module(ctx);
+
+    Json init_state = Json::object();
+    init_state["checklist"] = Json::array({
+        Json{{"id", "read_spec"}, {"text", "Read specifications and requirements"}},
+        Json{{"id", "write_code"}, {"text", "Implement core solution"}},
+        Json{{"id", "verify_tests"}, {"text", "Run unit tests and verify pass"}}
+    });
+    module.configure(init_state);
+
+    // Verify initial ledger has seeded steps from checklist
+    REQUIRE(module.ledger().steps.size() == 3);
+    CHECK(module.ledger().steps[0].id == "read_spec");
+    CHECK(module.ledger().steps[0].status == LedgerStepStatus::pending);
+
+    // complete_recipe MUST FAIL (Option A gate) when steps are incomplete
+    ActionResult early_complete = module.execute_action("complete_recipe", Json{{"output", "premature"}});
+    CHECK_FALSE(early_complete.success);
+    CHECK(early_complete.error_code == "incomplete_ledger_steps");
+    CHECK(early_complete.llm_facing_output.find("read_spec") != std::string::npos);
+
+    // Update step 1 by 1-based index string "1" and mark in-progress step 2
+    ActionResult upd1 = module.execute_action("update_task_ledger", Json{
+        {"completed_steps", Json::array({"1"})},
+        {"in_progress_step", "2"},
+        {"current_status", "Working on implementation"}
+    });
+    CHECK(upd1.success);
+    CHECK(module.ledger().steps[0].status == LedgerStepStatus::completed);
+    CHECK(module.ledger().steps[1].status == LedgerStepStatus::in_progress);
+    CHECK(module.ledger().current_status == "Working on implementation");
+
+    // Atomic co-update via checkpoint_notes: complete step 2 by keyword "implement"
+    ActionResult cp_res = module.execute_action("checkpoint_notes", Json{
+        {"completed_steps", Json::array({"implement"})}
+    });
+    CHECK(cp_res.success);
+    CHECK(module.ledger().steps[1].status == LedgerStepStatus::completed);
+
+    // Still cannot complete recipe because step 3 (verify_tests) is pending
+    ActionResult mid_complete = module.execute_action("complete_recipe", Json{{"output", "almost"}});
+    CHECK_FALSE(mid_complete.success);
+    CHECK(mid_complete.error_code == "incomplete_ledger_steps");
+
+    // Skip step 3 via skipped_steps
+    ActionResult upd2 = module.execute_action("update_task_ledger", Json{
+        {"skipped_steps", Json::array({"verify_tests"})},
+        {"notes", "Verification skipped per explicit override"}
+    });
+    CHECK(upd2.success);
+    CHECK(module.ledger().steps[2].status == LedgerStepStatus::skipped);
+
+    // Now all mandatory steps are completed/skipped -> complete_recipe succeeds
+    ActionResult final_complete = module.execute_action("complete_recipe", Json{{"output", "all done"}});
+    CHECK(final_complete.success);
+    CHECK(module.take_intent() == OrchestratorModule::Intent::completion_requested);
+
+    // Verify task ledger was synced to disk at Agent-Tasks/task_ledger.md
+    const fs::path ledger_file = test_dir / "Agent-Tasks" / "task_ledger.md";
+    CHECK(fs::exists(ledger_file));
+    {
+        std::ifstream ifs(ledger_file);
+        std::stringstream ss;
+        ss << ifs.rdbuf();
+        const std::string content = ss.str();
+        CHECK(content.find("[x] Step 1 (read_spec)") != std::string::npos);
+        CHECK(content.find("[x] Step 2 (write_code)") != std::string::npos);
+        CHECK(content.find("[-] Step 3 (verify_tests)") != std::string::npos);
+    }
+
+    std::error_code ec;
+    fs::remove_all(test_dir, ec);
 }
 
 TEST_CASE("OrchestratorModule: register_new_recipe validation and persistence") {
@@ -304,4 +390,38 @@ TEST_CASE("OrchestratorModule: register_new_recipe validation and persistence") 
     CHECK(res_good.success);
     CHECK(module.registered_recipes().contains("custom_workflow"));
     CHECK(module.registered_recipes().at("custom_workflow").goal_template == "Do something: {{task}}");
+
+    module.execute_action("checkpoint_notes", Json{
+        {"active_objective", "research"},
+        {"verified_facts", Json::array({"fact one"})}
+    });
+    const Json ctx_summary = module.export_context_summary();
+    CHECK_FALSE(ctx_summary.contains("scratchpad"));
+    REQUIRE(ctx_summary.contains("registered_recipe_ids"));
+    CHECK(ctx_summary["registered_recipe_ids"] == Json::array({"custom_workflow"}));
+}
+
+TEST_CASE("OrchestratorModule: complete_recipe auto-satisfies trailing complete_recipe meta-step without weakening Option A gate",
+          "[orchestrator][ledger]") {
+    OrchestratorModule module(make_ctx());
+    module.configure(Json{{"checklist", Json::array({
+        Json{{"id", "step_1"}, {"text", "Browse authoritative sources"}},
+        Json{{"id", "step_2"}, {"text", "Write research_report.md"}},
+        Json{{"id", "step_3"}, {"text", "Call OrchestratorModule complete_recipe to finish"}}
+    })}});
+
+    // Substantive steps still pending -> MUST block!
+    const ActionResult blocked = module.execute_action("complete_recipe", Json{{"output", "early"}});
+    CHECK_FALSE(blocked.success);
+    CHECK(blocked.error_code == "incomplete_ledger_steps");
+    CHECK(blocked.llm_facing_output.find("step_1") != std::string::npos);
+    CHECK(blocked.llm_facing_output.find("step_2") != std::string::npos);
+
+    // Mark real work steps completed; leave meta-step step_3 pending -> complete_recipe succeeds!
+    REQUIRE(module.execute_action("update_task_ledger",
+        Json{{"completed_steps", Json::array({"step_1", "step_2"})}}).success);
+    const ActionResult ok_res = module.execute_action("complete_recipe", Json{{"output", "all done"}});
+    CHECK(ok_res.success);
+    CHECK(module.ledger().all_mandatory_completed());
+    CHECK(module.take_intent() == OrchestratorModule::Intent::completion_requested);
 }

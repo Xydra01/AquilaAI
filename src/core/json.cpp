@@ -139,5 +139,32 @@ Json read_object(const Json& value, const std::string& path) {
     return value;
 }
 
+std::string opt_string(const Json& object, std::string_view key, std::string_view fallback) {
+    if (!object.is_object()) return std::string(fallback);
+    const auto it = object.find(std::string(key));
+    if (it != object.end() && it->is_string()) {
+        return it->get<std::string>();
+    }
+    return std::string(fallback);
+}
+
+bool opt_bool(const Json& object, std::string_view key, bool fallback) {
+    if (!object.is_object()) return fallback;
+    const auto it = object.find(std::string(key));
+    if (it != object.end() && it->is_boolean()) {
+        return it->get<bool>();
+    }
+    return fallback;
+}
+
+int opt_int(const Json& object, std::string_view key, int fallback) {
+    if (!object.is_object()) return fallback;
+    const auto it = object.find(std::string(key));
+    if (it != object.end() && it->is_number_integer()) {
+        return it->get<int>();
+    }
+    return fallback;
+}
+
 }  // namespace json_io
 }  // namespace aquila

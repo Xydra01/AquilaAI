@@ -20,8 +20,11 @@ OrchestratorModule::OrchestratorModule(const ModuleContext& ctx) : ctx_(ctx) {}
 std::vector<ActionSchema> OrchestratorModule::get_actions() const {
     return {
         {"checkpoint_notes",
-         "Save progress into the scratchpad. Required fields must be non-empty before a context wipe.",
-         schema(R"({"type":"object","properties":{"active_objective":{"type":"string"},"current_hypothesis":{"type":"string"},"verified_facts":{"type":"array","items":{"type":"string"}},"failed_approaches_do_not_repeat":{"type":"array","items":{"type":"string"}},"next_immediate_action":{"type":"string"},"checklist":{"type":"array"},"notes":{"type":"object"}},"additionalProperties":true})")},
+         "Save progress into the scratchpad and optionally update ledger milestones. Required fields must be non-empty before a context wipe.",
+         schema(R"({"type":"object","properties":{"active_objective":{"type":"string"},"current_hypothesis":{"type":"string"},"verified_facts":{"type":"array","items":{"type":"string"}},"failed_approaches_do_not_repeat":{"type":"array","items":{"type":"string"}},"next_immediate_action":{"type":"string"},"checklist":{"type":"array"},"notes":{"type":"object"},"current_status":{"type":"string"},"completed_steps":{"type":"array","items":{"type":"string"}},"in_progress_step":{"type":"string"}},"additionalProperties":true})")},
+        {"update_task_ledger",
+         "Update procedural progress in the active Task Ledger. Mark steps completed, set current focus, or add notes.",
+         schema(R"({"type":"object","properties":{"current_status":{"type":"string"},"completed_steps":{"type":"array","items":{"type":"string"}},"in_progress_step":{"type":"string"},"blocked_steps":{"type":"array","items":{"type":"string"}},"skipped_steps":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"},"new_steps":{"type":"array","items":{"type":"string"}}},"additionalProperties":true})")},
         {"trigger_context_condense",
          "Request a context condense (wipe) once the scratchpad is saved and valid.",
          schema(R"({"type":"object","properties":{},"additionalProperties":false})")},
@@ -36,7 +39,7 @@ std::vector<ActionSchema> OrchestratorModule::get_actions() const {
 
 void OrchestratorModule::configure(const Json& initial_state) {
     expect_object(initial_state, "");
-    reject_unknown(initial_state, "", {"required_fields", "checklist"});
+    reject_unknown(initial_state, "", {"required_fields", "checklist", "task_ledger"});
     if (initial_state.contains("required_fields")) {
         required_fields_ =
             read_string_array(initial_state["required_fields"], "/required_fields");
@@ -49,7 +52,16 @@ void OrchestratorModule::configure(const Json& initial_state) {
                 from_json(e, item, p);
                 return item;
             });
+        if (ledger_.steps.empty()) {
+            for (const auto& item : pad_.checklist) {
+                ledger_.steps.push_back(LedgerStep{item.id, item.text, LedgerStepStatus::pending, {}});
+            }
+        }
     }
+    if (initial_state.contains("task_ledger")) {
+        from_json(initial_state["task_ledger"], ledger_, "/task_ledger");
+    }
+    sync_ledger_to_disk();
 }
 
 Json OrchestratorModule::export_state_snapshot() const {
@@ -58,6 +70,9 @@ Json OrchestratorModule::export_state_snapshot() const {
     Json pad;
     to_json(pad, pad_);
     s["scratchpad"] = std::move(pad);
+    Json led;
+    to_json(led, ledger_);
+    s["task_ledger"] = std::move(led);
     s["registered_recipes"] = Json::array();
     for (const auto& [id, c] : registered_recipes_) {
         (void)id;
@@ -68,12 +83,28 @@ Json OrchestratorModule::export_state_snapshot() const {
     return s;
 }
 
+Json OrchestratorModule::export_context_summary() const {
+    // ContextCondenser already renders scratchpad and task_ledger top-level in the anchored block,
+    // so omit duplicate payloads here and list recipe IDs only.
+    Json s = Json::object();
+    s["required_fields"] = required_fields_;
+    s["registered_recipe_ids"] = Json::array();
+    for (const auto& [id, c] : registered_recipes_) {
+        (void)c;
+        s["registered_recipe_ids"].push_back(id);
+    }
+    return s;
+}
+
 void OrchestratorModule::restore_state_snapshot(const Json& snapshot) {
     expect_object(snapshot, "");
-    reject_unknown(snapshot, "", {"required_fields", "scratchpad", "registered_recipes"});
+    reject_unknown(snapshot, "", {"required_fields", "scratchpad", "registered_recipes", "task_ledger"});
     required_fields_ =
         read_string_array(require(snapshot, "", "required_fields"), "/required_fields");
     from_json(require(snapshot, "", "scratchpad"), pad_, "/scratchpad");
+    if (snapshot.contains("task_ledger")) {
+        from_json(snapshot["task_ledger"], ledger_, "/task_ledger");
+    }
     registered_recipes_.clear();
     if (snapshot.contains("registered_recipes")) {
         for (const auto& r_json : snapshot["registered_recipes"]) {
@@ -82,12 +113,38 @@ void OrchestratorModule::restore_state_snapshot(const Json& snapshot) {
             registered_recipes_[c.recipe_id] = std::move(c);
         }
     }
+    sync_ledger_to_disk();
+}
+
+void OrchestratorModule::set_task_ledger(TaskLedger ledger) {
+    ledger_ = std::move(ledger);
+    sync_ledger_to_disk();
+}
+
+void OrchestratorModule::sync_ledger_to_disk() const {
+    if (ctx_.workspace_root.empty() || (ledger_.steps.empty() && ledger_.objective.empty())) {
+        return;
+    }
+    try {
+        const auto tasks_dir = ctx_.workspace_root / "Agent-Tasks";
+        std::error_code ec;
+        std::filesystem::create_directories(tasks_dir, ec);
+        std::string fname = ledger_.task_id.empty() ? "task_ledger.md" : (ledger_.task_id + "_ledger.md");
+        const auto out_path = tasks_dir / fname;
+        std::ofstream ofs(out_path, std::ios::binary | std::ios::trunc);
+        if (ofs) {
+            ofs << ledger_.render_markdown();
+        }
+    } catch (...) {
+        // Best-effort disk persistence
+    }
 }
 
 // --- Action bodies + intent coordination (Req 3.2-3.4) ---------------------
 
 ActionResult OrchestratorModule::run(const std::string& action_name, const Json& args) {
     if (action_name == "checkpoint_notes") return checkpoint_notes(args);
+    if (action_name == "update_task_ledger") return update_task_ledger(args);
     if (action_name == "trigger_context_condense") return trigger_context_condense(args);
     if (action_name == "complete_recipe") return complete_recipe(args);
     if (action_name == "register_new_recipe") return register_new_recipe(args);
@@ -148,7 +205,124 @@ ActionResult OrchestratorModule::checkpoint_notes(const Json& raw_args) {
     }
 
     pad_ = std::move(merged);  // commit only after validation succeeds
+
+    // Optional atomic co-update of task ledger
+    bool ledger_modified = false;
+    if (raw_args.contains("current_status") && raw_args["current_status"].is_string()) {
+        ledger_.current_status = raw_args["current_status"].get<std::string>();
+        ledger_modified = true;
+    }
+    auto apply_ledger_items = [&](const std::string& key, LedgerStepStatus st) {
+        if (!raw_args.contains(key)) return;
+        const auto& val = raw_args[key];
+        auto process = [&](const Json& item) {
+            std::string q;
+            if (item.is_string()) q = item.get<std::string>();
+            else if (item.is_number_integer()) q = std::to_string(item.get<int64_t>());
+            if (!q.empty() && ledger_.mark_step(q, st)) ledger_modified = true;
+        };
+        if (val.is_array()) {
+            for (const auto& item : val) process(item);
+        } else {
+            process(val);
+        }
+    };
+    apply_ledger_items("completed_steps", LedgerStepStatus::completed);
+    apply_ledger_items("in_progress_step", LedgerStepStatus::in_progress);
+
+    if (ledger_modified) {
+        sync_ledger_to_disk();
+    }
+
     return ok("scratchpad checkpoint saved");
+}
+
+ActionResult OrchestratorModule::update_task_ledger(const Json& args) {
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Arguments must be a JSON object");
+    }
+
+    bool modified = false;
+    if (args.contains("objective") && args["objective"].is_string()) {
+        ledger_.objective = args["objective"].get<std::string>();
+        modified = true;
+    }
+    if (args.contains("current_status") && args["current_status"].is_string()) {
+        ledger_.current_status = args["current_status"].get<std::string>();
+        modified = true;
+    }
+
+    std::string general_notes;
+    if (args.contains("notes") && args["notes"].is_string()) {
+        general_notes = args["notes"].get<std::string>();
+    }
+
+    auto apply_steps = [&](const std::string& key, LedgerStepStatus st) {
+        if (!args.contains(key)) return;
+        const auto& val = args[key];
+        auto process = [&](const Json& item) {
+            std::string q;
+            if (item.is_string()) q = item.get<std::string>();
+            else if (item.is_number_integer()) q = std::to_string(item.get<int64_t>());
+            if (!q.empty() && ledger_.mark_step(q, st, general_notes)) {
+                modified = true;
+            }
+        };
+        if (val.is_array()) {
+            for (const auto& item : val) process(item);
+        } else {
+            process(val);
+        }
+    };
+
+    apply_steps("completed_steps", LedgerStepStatus::completed);
+    apply_steps("in_progress_step", LedgerStepStatus::in_progress);
+    apply_steps("in_progress_steps", LedgerStepStatus::in_progress);
+    apply_steps("blocked_steps", LedgerStepStatus::blocked);
+    apply_steps("skipped_steps", LedgerStepStatus::skipped);
+    apply_steps("mark_completed", LedgerStepStatus::completed);
+
+    if (args.contains("step_id")) {
+        std::string q;
+        if (args["step_id"].is_string()) q = args["step_id"].get<std::string>();
+        else if (args["step_id"].is_number_integer()) q = std::to_string(args["step_id"].get<int64_t>());
+        LedgerStepStatus st = LedgerStepStatus::completed;
+        if (args.contains("status") && args["status"].is_string()) {
+            st = parse_ledger_status(args["status"].get<std::string>());
+        }
+        if (!q.empty() && ledger_.mark_step(q, st, general_notes)) {
+            modified = true;
+        }
+    }
+
+    if (args.contains("new_steps") && args["new_steps"].is_array()) {
+        for (const auto& item : args["new_steps"]) {
+            if (item.is_string()) {
+                ledger_.add_step(item.get<std::string>());
+                modified = true;
+            } else if (item.is_object() && item.contains("description") && item["description"].is_string()) {
+                std::string id = item.value("id", "");
+                std::string desc = item["description"].get<std::string>();
+                ledger_.add_step(desc, id);
+                modified = true;
+            }
+        }
+    }
+
+    if (modified) {
+        sync_ledger_to_disk();
+    }
+
+    const auto incomplete = ledger_.incomplete_steps();
+    std::string msg = "Task ledger updated (" +
+                      std::to_string(ledger_.steps.size() - incomplete.size()) +
+                      "/" + std::to_string(ledger_.steps.size()) + " steps completed).";
+    if (incomplete.empty()) {
+        msg += " All mandatory steps completed!";
+    } else {
+        msg += " Remaining incomplete steps: " + std::to_string(incomplete.size()) + ".";
+    }
+    return ok(msg);
 }
 
 ActionResult OrchestratorModule::trigger_context_condense(const Json& /*args*/) {
@@ -170,6 +344,39 @@ ActionResult OrchestratorModule::trigger_context_condense(const Json& /*args*/) 
 }
 
 ActionResult OrchestratorModule::complete_recipe(const Json& args) {
+    // Auto-satisfy trailing meta-steps whose sole purpose is calling complete_recipe
+    // (avoiding a circular trap where calling complete_recipe is rejected because the
+    // "Call OrchestratorModule complete_recipe to finish" step is still pending).
+    auto is_completion_meta_step = [](const std::string& desc) {
+        std::string lower = desc;
+        for (char& ch : lower) {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return lower.find("complete_recipe") != std::string::npos ||
+               lower == "complete recipe" ||
+               lower.find("complete the recipe") != std::string::npos;
+    };
+    bool meta_auto_marked = false;
+    for (auto& step : ledger_.steps) {
+        if ((step.status == LedgerStepStatus::pending || step.status == LedgerStepStatus::in_progress) &&
+            is_completion_meta_step(step.description)) {
+            step.status = LedgerStepStatus::completed;
+            meta_auto_marked = true;
+        }
+    }
+    if (meta_auto_marked) {
+        sync_ledger_to_disk();
+    }
+
+    if (!ledger_.all_mandatory_completed()) {
+        const auto incomplete = ledger_.incomplete_steps();
+        std::string msg = "Cannot complete recipe: mandatory task ledger step(s) still incomplete:\n";
+        for (std::size_t i = 0; i < incomplete.size(); ++i) {
+            msg += "  - " + incomplete[i] + "\n";
+        }
+        msg += "Mark them completed or skipped via update_task_ledger first.";
+        return fail("incomplete_ledger_steps", msg);
+    }
     // Req 3.4: record the optional completion output and signal the loop to run
     // the deterministic exit gate; the module itself never runs the hook.
     completion_output_ = args.value("output", std::string{});

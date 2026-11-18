@@ -80,6 +80,8 @@ public:
     [[nodiscard]] std::string disk_diff(const PendingPatch& patch) const;
 
     [[nodiscard]] Json snapshot() const;
+    // Metadata-only summary for LLM context anchoring (omits raw document text).
+    [[nodiscard]] Json summary() const;
     void restore(const Json& snapshot);  // throws SchemaError
 
 private:

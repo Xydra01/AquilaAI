@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // LlamaSession (M5): owns a llama.cpp model + context and the logical KV position,
 // and implements the KV-aware primitives the IInferenceBackend contract needs
@@ -30,6 +30,10 @@
 #if AQUILA_HAS_LLAMACPP
 #include <llama.h>
 #endif
+#if defined(AQUILA_HAS_MTMD) && AQUILA_HAS_MTMD
+#include <mtmd.h>
+#include <mtmd-helper.h>
+#endif
 
 namespace aquila {
 
@@ -43,11 +47,20 @@ namespace aquila {
 // is the documented, cleaner placement for the 2.1 -> 4.1 ordering.
 struct LlamaConfig {
     std::string model_path;                                        // GGUF path
+    std::string mmproj_path;                                       // Optional multimodal projector GGUF path
     ComputeProfile profile = ComputeProfile::cpu_low_spec_edge;
-    std::uint32_t n_ctx = 8192;                                    // from the tier/request
+    std::uint32_t n_ctx = 16384;                                   // 16K CPU / 32K GPU default for Qwen 3.5
     std::int32_t n_gpu_layers = 0;                                 // 0 CPU tiers, 999 gpu_high_vram (R16)
     std::optional<std::uint32_t> n_threads;                        // default: llama.cpp's own (R17 seam)
+    bool flash_attn = true;                                        // Enable FlashAttention on GPU (AUTO on CPU)
+    bool kv_quant_q8 = true;                                       // Quantize K/V cache to Q8_0 on GPU
+    bool auto_discover_mmproj = true;                              // Auto-discover companion mmproj*.gguf when mmproj_path is empty
+    bool eager_load_mmproj = false;                                // Defer mtmd projector load until first multimodal turn when false
 };
+
+// Best-effort dimension-safe companion mmproj*.gguf resolver for a GGUF model path.
+// Matches size tags (e.g. "4b" vs "9b") to avoid loading mismatched projectors.
+[[nodiscard]] std::string discover_mmproj_for_model(const std::string& model_path);
 
 #if AQUILA_HAS_LLAMACPP
 
@@ -68,6 +81,12 @@ struct LlamaSamplerDeleter {
 using ModelPtr = std::unique_ptr<llama_model, LlamaModelDeleter>;
 using ContextPtr = std::unique_ptr<llama_context, LlamaCtxDeleter>;
 using SamplerPtr = std::unique_ptr<llama_sampler, LlamaSamplerDeleter>;
+#if defined(AQUILA_HAS_MTMD) && AQUILA_HAS_MTMD
+struct MtmdCtxDeleter {
+    void operator()(mtmd_context* c) const noexcept { mtmd_free(c); }
+};
+using MtmdContextPtr = std::unique_ptr<mtmd_context, MtmdCtxDeleter>;
+#endif
 
 // llama_batch is a value type (not a pointer) allocated by llama_batch_init and
 // released by llama_batch_free(llama_batch). A small move-only owning wrapper gives
@@ -177,24 +196,29 @@ public:
     // tokenize to anything.
     std::size_t decode_text(const std::string& text);
 
+    // Evaluate a templated prompt containing `mtmd_default_marker()` placeholders alongside
+    // base64-encoded or file-path images via libmtmd (handles M-RoPE 2D spatial positions).
+    std::size_t decode_multimodal(const std::string& templated_text,
+                                  const std::vector<std::string>& images);
+
     // Decode a single-token batch at the current position and return the logits
     // index to sample from (always 0 -- the one and only token in the batch has its
     // logits requested). Advances the position by 1. Used by the generate loop
     // (task 4.2). Throws LlamaError{"context_overflow"|"decode_failed", ...}.
     int decode_one(llama_token tok);
 
+    // Capture a state snapshot at the current position on hybrid/recurrent models so
+    // subsequent rollback_to(pos) restores exact GatedDeltaNet + KV states without replay.
+    void capture_snapshot() const;
+
     // Number of tokens decoded so far == the checkpoint value. Mirrors
     // llama_memory_seq_pos_max(mem, 0) + 1 (0 for an empty sequence). pos_ is the
     // source of truth; a debug assertion checks it against the memory.
     [[nodiscard]] std::size_t position() const noexcept;
 
-    // Remove KV entries for [pos, end) via llama_memory_seq_rm(mem, 0, pos, -1) and
-    // reset the logical position to pos. Throws std::out_of_range when
-    // pos > position() (the M2 interface contract, Req 3.4).
-    //
-    // NOTE: prefill_tokens_ is deliberately NOT reset here -- it is a cumulative
-    // "tokens actually decoded" counter for the Req 5 prefix-reuse measurement, so
-    // a wipe-then-resume shows fewer newly decoded tokens than a full resend.
+    // Remove KV entries for [pos, end) (or restore state snapshot + replay text delta
+    // on hybrid/recurrent architectures) and reset the logical position to pos.
+    // Throws std::out_of_range when pos > position() (Req 3.4).
     void rollback_to(std::size_t pos);
 
     // Cumulative count of tokens actually fed through llama_decode over this
@@ -202,30 +226,52 @@ public:
     // rollback_to, so (post-wipe decoded) < (full-prompt decoded) is observable.
     [[nodiscard]] std::size_t prefill_tokens() const noexcept { return prefill_tokens_; }
 
-    // Ensure the context's cached logits correspond to the token at position()-1,
-    // so a following generate() samples from the RIGHT position. After rollback_to
-    // the KV cells are correct but the context still holds the logits of the token
-    // that WAS last decoded (now removed), so the logits are stale. This re-decodes
-    // the current last token (removing + re-adding its single KV cell, net position
-    // unchanged) to recompute its logits. A no-op when logits are already fresh
-    // (no rollback since the last decode) or the sequence is empty. The reprime
-    // decode is NOT counted toward prefill_tokens_ (it is a logits refresh, not
-    // prompt processing, so the Req 5 post-wipe prefill measurement stays clean).
+    // Ensure the context's cached logits correspond to the token at position()-1.
     void ensure_logits_fresh();
 
-    // --- Accessors implemented in 2.1 (construction is done, so these are live) --
+    // --- Accessors -----------------------------------------------------------
+    [[nodiscard]] const llama_model* model() const noexcept { return model_.get(); }
     [[nodiscard]] const llama_vocab* vocab() const noexcept;
     [[nodiscard]] llama_context* ctx() const noexcept { return ctx_.get(); }
     [[nodiscard]] std::size_t n_ctx() const noexcept { return n_ctx_; }
+    [[nodiscard]] bool is_hybrid_or_recurrent() const noexcept { return is_hybrid_or_recurrent_; }
+    [[nodiscard]] bool has_vision() const noexcept;
+    [[nodiscard]] bool is_vision_loaded() const noexcept {
+#if defined(AQUILA_HAS_MTMD) && AQUILA_HAS_MTMD
+        return mtmd_ctx_ != nullptr;
+#else
+        return false;
+#endif
+    }
+    [[nodiscard]] const std::string& resolved_mmproj_path() const noexcept { return mmproj_path_; }
 
 private:
+    struct SeqSnapshot {
+        std::size_t pos = 0;
+        std::vector<llama_token> tokens;
+        std::vector<std::uint8_t> state;
+    };
+
+    void ensure_vision_loaded();
+
     ModelPtr model_;
     ContextPtr ctx_;
+#if defined(AQUILA_HAS_MTMD) && AQUILA_HAS_MTMD
+    MtmdContextPtr mtmd_ctx_;
+#endif
+    std::string mmproj_path_;
+    bool mmproj_explicit_ = false;
+    int vision_n_threads_ = 4;
+    std::int32_t vision_n_gpu_layers_ = 0;
+    bool vision_flash_attn_ = true;
     std::size_t n_ctx_ = 0;             // the context size the context was created with
-    std::size_t pos_ = 0;              // mirrors the KV sequence end; the checkpoint value
-    std::size_t prefill_tokens_ = 0;   // tokens actually decoded (Req 5)
-    std::vector<llama_token> tokens_;  // decoded token history [0, pos_); truncated on rollback
-    bool logits_fresh_ = true;         // false after rollback_to (cached logits are stale)
+    std::int32_t n_batch_ = 2048;       // batch size for mtmd/prefill helpers
+    std::size_t pos_ = 0;               // mirrors the KV sequence end; the checkpoint value
+    std::size_t prefill_tokens_ = 0;    // tokens actually decoded (Req 5)
+    std::vector<llama_token> tokens_;   // decoded token history [0, pos_); LLAMA_TOKEN_NULL for image spans
+    bool logits_fresh_ = true;          // false after rollback_to (cached logits are stale)
+    bool is_hybrid_or_recurrent_ = false;
+    mutable std::vector<SeqSnapshot> snapshots_;
 };
 
 #endif  // AQUILA_HAS_LLAMACPP

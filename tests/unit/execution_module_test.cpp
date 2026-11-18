@@ -163,7 +163,7 @@ TEST_CASE("registry: the design doc recipe (D:L433-477) validates against the bu
     tmp.write("src/keep.txt", "x\n");  // the recipe's root_dir is ./src
     const auto reg = ModuleRegistry::builtin();
     CHECK(reg.ids() ==
-          std::vector<std::string>{"DocumentModule", "ExecutionModule", "KnowledgeModule", "LearnModule", "OrchestratorModule", "PersonaModule", "WorkspaceModule"});
+          std::vector<std::string>{"BrowserModule", "DocumentModule", "ExecutionModule", "KnowledgeModule", "LearnModule", "OrchestratorModule", "PersonaModule", "WorkspaceModule"});
     CHECK_NOTHROW(reg.validate_recipe(recipe, {tmp.path(), 4500}));
 
     auto typo = recipe;
@@ -246,6 +246,11 @@ TEST_CASE("execution: verify_implementation utility gates", "[execution]") {
     r = m.execute_action("verify_implementation", Json{{"file_path", "web_app.py"}});
     CHECK(r.success);
     CHECK(r.llm_facing_output.find("Verified web/server application") != std::string::npos);
+
+    tmp.write("pass_comment_ok.py", "def run():\n    # Verify status is pass/fail without stubbing\n    return 42\nprint('ok', run())\n");
+    r = m.execute_action("verify_implementation", Json{{"file_path", "pass_comment_ok.py"}});
+    INFO(r.llm_facing_output);
+    CHECK(r.success);
 }
 
 TEST_CASE("execution: cancellation callback halts child process promptly", "[execution]") {

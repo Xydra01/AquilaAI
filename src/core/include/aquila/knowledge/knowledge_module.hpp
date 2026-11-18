@@ -58,6 +58,7 @@ private:
     std::unique_ptr<LocalDocIndex> doc_index_;
     WebSearchEngine search_engine_;
     std::unordered_map<std::string, int> host_visits_;
+    std::unordered_map<std::string, int> auto_scrape_visits_;
 };
 
 } // namespace aquila::knowledge

@@ -160,11 +160,11 @@ ActionResult ExecutionModule::run(const std::string& action, const Json& args) {
     }
     if (action == "exec_sandboxed_cmd") {
         auto argv = args["argv"].get<std::vector<std::string>>();
-        const auto cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
+        const auto cwd = json_io::opt_string(args, "cwd", cwd_);
         return execute(action, std::move(argv), cwd, false, "command_failed");
     }
     if (action == "ensure_venv") {
-        const std::string venv_dir = args.contains("venv_dir") ? args["venv_dir"].get<std::string>() : ".venv";
+        const std::string venv_dir = json_io::opt_string(args, "venv_dir", ".venv");
         return ensure_venv_action(venv_dir);
     }
     if (action == "pip_install") {
@@ -172,17 +172,17 @@ ActionResult ExecutionModule::run(const std::string& action, const Json& args) {
             return fail("invalid_args", "pip_install requires a non-empty 'packages' array");
         }
         const auto pkgs = args["packages"].get<std::vector<std::string>>();
-        const bool upgrade = args.contains("upgrade") ? args["upgrade"].get<bool>() : false;
+        const bool upgrade = json_io::opt_bool(args, "upgrade", false);
         return pip_install_action(pkgs, upgrade);
     }
     if (action == "run_python") {
-        const std::string script = args.contains("script") ? args["script"].get<std::string>() : "";
-        const std::string code = args.contains("code") ? args["code"].get<std::string>() : "";
+        const std::string script = json_io::opt_string(args, "script");
+        const std::string code = json_io::opt_string(args, "code");
         std::vector<std::string> sargs;
         if (args.contains("args") && args["args"].is_array()) {
             sargs = args["args"].get<std::vector<std::string>>();
         }
-        const std::string cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
+        const std::string cwd = json_io::opt_string(args, "cwd", cwd_);
         return run_python_action(script, code, sargs, cwd);
     }
     if (action == "pip_list") {
@@ -192,14 +192,17 @@ ActionResult ExecutionModule::run(const std::string& action, const Json& args) {
         return verify_implementation_action(args);
     }
     if (action == "run" || action == "execute") {
-        const std::string cwd = args.contains("cwd") ? args["cwd"].get<std::string>() : cwd_;
-        if (args.contains("cmd") || args.contains("command")) {
-            const auto cmd_str = args.value("cmd", args.value("command", ""));
+        const std::string cwd = json_io::opt_string(args, "cwd", cwd_);
+        std::string cmd_str = json_io::opt_string(args, "cmd");
+        if (cmd_str.empty()) {
+            cmd_str = json_io::opt_string(args, "command");
+        }
+        if (!cmd_str.empty()) {
             auto argv = exec::split_command(cmd_str);
             return execute(action, std::move(argv), cwd, false, "command_failed");
         }
-        const std::string script = args.value("script", "");
-        const std::string code = args.value("code", "");
+        const std::string script = json_io::opt_string(args, "script");
+        const std::string code = json_io::opt_string(args, "code");
         std::vector<std::string> sargs;
         if (args.contains("args") && args["args"].is_array()) {
             sargs = args["args"].get<std::vector<std::string>>();
@@ -529,8 +532,46 @@ ActionResult ExecutionModule::verify_implementation_action(const Json& args) {
     if (trimmed.empty() || trimmed.size() < 20) {
         return fail("stub_implementation", "❌ Script '" + script_path + "' is too short or empty (" + std::to_string(trimmed.size()) + " bytes). Provide the full functional code.");
     }
-    static const std::regex stub_re(R"(\b(pass|raise\s+NotImplementedError|TO\s*DO|FIXME)\b)", std::regex_constants::icase);
-    if (std::regex_search(trimmed, stub_re)) {
+    static const std::regex pass_stmt_re(R"(^(?:\s*|\s*.*:\s*)pass\s*$)");
+    static const std::regex not_impl_re(R"(\braise\s+NotImplementedError\b)");
+    static const std::regex comment_todo_re(R"(\b(?:TODO|TO\s+DO|FIXME)\b)");
+    static const std::regex comment_todo_colon_re(R"(#\s*(?:todo|to\s+do|fixme)\s*[:\-])", std::regex_constants::icase);
+    static const std::regex code_todo_re(R"(\b(?:TODO|TO\s+DO|FIXME)\b)");
+    bool has_stub = false;
+    std::size_t pos = 0;
+    while (pos <= trimmed.size() && !has_stub) {
+        const std::size_t nl = trimmed.find('\n', pos);
+        std::string line = (nl == std::string::npos) ? trimmed.substr(pos) : trimmed.substr(pos, nl - pos);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const std::size_t first_nb = line.find_first_not_of(" \t");
+        if (first_nb != std::string::npos) {
+            if (line[first_nb] == '#') {
+                const std::string cmt = line.substr(first_nb);
+                if (std::regex_search(cmt, comment_todo_re) || std::regex_search(cmt, comment_todo_colon_re)) {
+                    has_stub = true;
+                }
+            } else {
+                const std::size_t hash_pos = line.find('#');
+                const std::string code_part = (hash_pos == std::string::npos) ? line : line.substr(0, hash_pos);
+                const std::string comment_part = (hash_pos == std::string::npos) ? std::string{} : line.substr(hash_pos);
+                if (std::regex_search(code_part, pass_stmt_re) ||
+                    std::regex_search(code_part, not_impl_re) ||
+                    std::regex_search(code_part, code_todo_re) ||
+                    (!comment_part.empty() &&
+                     (std::regex_search(comment_part, comment_todo_re) ||
+                      std::regex_search(comment_part, comment_todo_colon_re)))) {
+                    has_stub = true;
+                }
+            }
+        }
+        if (nl == std::string::npos) {
+            break;
+        }
+        pos = nl + 1;
+    }
+    if (has_stub) {
         return fail("stub_implementation", "❌ Script '" + script_path + "' contains placeholder stubs (pass/TODO/NotImplementedError). Implement the actual functional logic.");
     }
 

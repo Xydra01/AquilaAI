@@ -1,5 +1,6 @@
 #include "aquila/agent/orchestrator_module.hpp"
 #include "aquila/document/document_module.hpp"
+#include "aquila/knowledge/browser_module.hpp"
 #include "aquila/knowledge/knowledge_module.hpp"
 #include "aquila/learn/learn_module.hpp"
 #include "aquila/modules/execution_module.hpp"
@@ -11,6 +12,7 @@ namespace aquila {
 
 ModuleRegistry ModuleRegistry::builtin() {
     ModuleRegistry r;
+    r.register_module<knowledge::BrowserModule>("BrowserModule");
     r.register_module<WorkspaceModule>("WorkspaceModule");
     r.register_module<ExecutionModule>("ExecutionModule");
     r.register_module<OrchestratorModule>("OrchestratorModule");

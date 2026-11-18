@@ -30,11 +30,14 @@ public:
     void cancel();
     void deliverUserResponse(const QString& text);
     void setChatHistory(std::vector<Message> history) { chat_history_ = std::move(history); }
+    void setUserImages(std::vector<std::string> images) { user_images_ = std::move(images); }
 
 signals:
     void tokenStreamed(const QString& token);
+    void thinkingStreamed(const QString& token);
     void turnCompleted(int index, const QString& thought, const QString& module,
                        const QString& action, bool success, const QString& output);
+    void screenshotCaptured(const QString& filePath, const QString& title, const QString& url);
     void scratchpadUpdated(const QString& objective, const QString& hypothesis,
                            const QStringList& facts, const QStringList& checklist);
     void statusChanged(const QString& statusText);
@@ -51,6 +54,7 @@ private:
     std::string user_request_;
     LoopConfig config_;
     std::vector<Message> chat_history_;
+    std::vector<std::string> user_images_;
     std::filesystem::path workspace_root_;
 
     std::atomic<bool> cancel_flag_{false};

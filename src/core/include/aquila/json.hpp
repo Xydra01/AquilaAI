@@ -53,6 +53,11 @@ std::vector<std::string> read_string_array(const Json& value, const std::string&
 // A free-form JSON object (contents unchecked).
 Json read_object(const Json& value, const std::string& path);
 
+// Safe optional extractors: return `fallback` when the key is missing or null/wrong type.
+std::string opt_string(const Json& object, std::string_view key, std::string_view fallback = "");
+bool opt_bool(const Json& object, std::string_view key, bool fallback = false);
+int opt_int(const Json& object, std::string_view key, int fallback = 0);
+
 template <class T, class ReadElem>
 std::vector<T> read_array(const Json& value, const std::string& path, ReadElem&& read_elem) {
     if (!value.is_array()) {

@@ -89,3 +89,12 @@ if(NOT WIN32)
     set_property(TEST gui.headless PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 aquila_test_env(gui.headless "${AQUILA_QT_BIN_DIR}")
+
+add_test(NAME gui.visual COMMAND aquila_gui --visual-audit "${CMAKE_CURRENT_BINARY_DIR}/visual_audit_out")
+set_tests_properties(gui.visual PROPERTIES
+    PASS_REGULAR_EXPRESSION "\\[VISUAL-AUDIT-OK\\]"
+    TIMEOUT 120)
+if(NOT WIN32)
+    set_property(TEST gui.visual PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+aquila_test_env(gui.visual "${AQUILA_QT_BIN_DIR}")

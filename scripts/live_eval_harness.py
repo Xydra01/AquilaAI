@@ -27,7 +27,7 @@ SUITES = {
     "dev": [
         {
             "recipe": "code_smoke_file",
-            "task": "Create a smoke test script smoke.py that prints 'smoke test ok' and verify",
+            "task": "Create a runnable Python smoke script harness_smoke.py with a helper function and print('HARNESS_OK'), then verify",
         },
         {
             "recipe": "fn_dev_implement",
@@ -49,23 +49,23 @@ SUITES = {
     "research": [
         {
             "recipe": "knowledge_smoke",
-            "task": "Search knowledge base for architectural invariants and store summary fact",
+            "task": "Search local documentation for architectural invariants and store summary facts",
         },
         {
             "recipe": "fn_research_full",
-            "task": "Conduct comprehensive research on Context Condenser SAC strategy, record verified facts, and write research_report.md",
+            "task": "Research Model Context Protocol (MCP) architecture and transport mechanisms using web sources, record verified facts, and write research_report.md with citations",
         },
         {
             "recipe": "fn_research_dynamic",
-            "task": "Investigate GPU VRAM budgeting and tier configurations, record facts, and generate findings summary",
+            "task": "Investigate GPU VRAM budgeting and tier configurations, record facts, and write findings_report.md with citations",
         },
         {
             "recipe": "fn_research_offline",
-            "task": "Analyze local documentation and synthesize core system capabilities",
+            "task": "Analyze local documentation in docs/, record verified facts, and write cited system_capabilities_synthesis.md (include source refs like [1] or [aquila-cpp-design.md])",
         },
         {
             "recipe": "fn_research_chat_light",
-            "task": "Synthesize the main differences between llama.cpp CUDA and Ollama backends",
+            "task": "Research llama.cpp CUDA vs Ollama backends via web search, record verified facts with store_fact, and summarize differences with source citations",
         },
     ],
     "writing": [
@@ -85,7 +85,7 @@ SUITES = {
     "learn": [
         {
             "recipe": "fn_learn_syllabus",
-            "task": "Create a 4-week Modern C++20 syllabus with 3 quiz questions per module",
+            "task": "Create a 4-week Modern C++20 syllabus (>=8 units, >=5 sub-units) with a 3-question quiz assessment generated for each of the 4 week modules",
         },
         {
             "recipe": "fn_learn_syllabus_web",
@@ -127,7 +127,7 @@ class ArtifactUtilityVerifier:
     """Rigorous semantic and execution utility evaluation for generated artifacts."""
 
     @staticmethod
-    def verify(recipe: str, task: str, workspace_dir: str) -> dict:
+    def verify(recipe: str, task: str, workspace_dir: str, report: dict | None = None) -> dict:
         ws = Path(workspace_dir).resolve()
         result = {
             "score": 100,
@@ -138,10 +138,12 @@ class ArtifactUtilityVerifier:
         }
 
         # Route by domain / recipe
-        if any(dev_prefix in recipe for dev_prefix in ["code_", "dev_"]):
+        if recipe == "fn_dev_documentation":
+            ArtifactUtilityVerifier._verify_doc_deliverable(recipe, task, ws, result)
+        elif any(dev_prefix in recipe for dev_prefix in ["code_", "dev_"]):
             ArtifactUtilityVerifier._verify_dev_deliverable(recipe, task, ws, result)
         elif "research" in recipe or "knowledge" in recipe:
-            ArtifactUtilityVerifier._verify_research_deliverable(recipe, task, ws, result)
+            ArtifactUtilityVerifier._verify_research_deliverable(recipe, task, ws, result, report or {})
         elif "writing" in recipe:
             ArtifactUtilityVerifier._verify_writing_deliverable(recipe, task, ws, result)
         elif "learn" in recipe:
@@ -157,8 +159,77 @@ class ArtifactUtilityVerifier:
         return result
 
     @staticmethod
+    def _verify_doc_deliverable(recipe, task, ws, result):
+        result["domain"] = "dev"
+        docs = [f for f in ws.glob("*.md") if f.name != "README.md"]
+        if not docs:
+            result["score"] = 0
+            result["passed"] = False
+            result["findings"].append("❌ No architecture markdown documentation file found in workspace.")
+            return
+        target_doc = max(docs, key=lambda f: f.stat().st_mtime)
+        result["deliverables"].append(str(target_doc.relative_to(ws)))
+        text = target_doc.read_text(encoding="utf-8", errors="ignore")
+        if len(text.strip()) < 500:
+            result["score"] -= 50
+            result["passed"] = False
+            result["findings"].append(f"❌ Documentation {target_doc.name} is too brief ({len(text.strip())} chars, min 500).")
+        else:
+            result["findings"].append(f"✓ Documentation {target_doc.name} has substantive depth ({len(text.strip())} chars).")
+        headings = [line for line in text.splitlines() if line.startswith("#")]
+        if len(headings) < 3:
+            result["score"] -= 25
+            result["findings"].append(f"⚠️ Documentation {target_doc.name} has only {len(headings)} headings.")
+        else:
+            result["findings"].append(f"✓ Documentation contains {len(headings)} section headings.")
+        if re.search(r"\b(TODO|TBD|Lorem ipsum)\b", text, re.IGNORECASE):
+            result["score"] -= 40
+            result["passed"] = False
+            result["findings"].append("❌ Documentation contains placeholder tokens.")
+
+    @staticmethod
     def _verify_dev_deliverable(recipe, task, ws, result):
         result["domain"] = "dev"
+        if recipe == "fn_dev_tdd":
+            impl_files = [
+                p for p in ws.rglob("*.py")
+                if not any(s in str(p.relative_to(ws)) for s in [".venv", "build", "test_"])
+            ]
+            test_files = [
+                p for p in ws.rglob("test_*.py")
+                if not any(s in str(p.relative_to(ws)) for s in [".venv", "build"])
+            ]
+            if not impl_files or not test_files:
+                result["score"] = 0
+                result["passed"] = False
+                result["findings"].append("❌ Missing implementation script or test_*.py file for TDD recipe.")
+                return
+            for f in impl_files + test_files:
+                result["deliverables"].append(str(f.relative_to(ws)))
+                code = f.read_text(encoding="utf-8", errors="ignore")
+                try:
+                    tree = ast.parse(code)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Pass) or (isinstance(node, ast.Raise) and "NotImplementedError" in ast.dump(node)):
+                            result["score"] -= 40
+                            result["passed"] = False
+                            result["findings"].append(f"❌ {f.name} contains stub body.")
+                            break
+                except SyntaxError as e:
+                    result["score"] = 0
+                    result["passed"] = False
+                    result["findings"].append(f"❌ SyntaxError in {f.name}: {e}")
+                    return
+            py_exe = str(ws / ".venv" / "Scripts" / "python.exe") if (ws / ".venv" / "Scripts" / "python.exe").exists() else sys.executable
+            pt = subprocess.run([py_exe, "-m", "pytest", "-q"], cwd=str(ws), capture_output=True, text=True, timeout=60)
+            if pt.returncode != 0:
+                result["score"] -= 60
+                result["passed"] = False
+                result["findings"].append(f"❌ pytest failed (exit {pt.returncode}):\n{(pt.stdout + pt.stderr)[:300]}")
+            else:
+                result["findings"].append(f"✓ pytest passed in {py_exe}: {pt.stdout.strip().splitlines()[-1] if pt.stdout.strip() else 'OK'}")
+            return
+
         candidates = []
         for p in ws.rglob("*.py"):
             rel = str(p.relative_to(ws))
@@ -228,7 +299,8 @@ class ArtifactUtilityVerifier:
                     result["findings"].append(f"✓ Script executed cleanly with exit code 0. Stdout preview: {preview}...")
                     if "world clock" in task.lower():
                         cities = ["UTC", "New York", "London", "Tokyo"]
-                        missing = [c for c in cities if c.lower() not in stdout.lower()]
+                        low_out = stdout.lower()
+                        missing = [c for c in cities if c.lower() not in low_out and c.lower().replace(" ", "_") not in low_out]
                         if missing:
                             result["score"] -= 20
                             result["findings"].append(f"⚠️ World clock output missing timezones: {', '.join(missing)}")
@@ -243,9 +315,55 @@ class ArtifactUtilityVerifier:
             result["findings"].append(f"⚠️ Could not execute script: {e}")
 
     @staticmethod
-    def _verify_research_deliverable(recipe, task, ws, result):
+    def _verify_research_deliverable(recipe, task, ws, result, report=None):
         result["domain"] = "research"
-        report_files = list(ws.glob("*.md"))
+        report = report or {}
+        fact_count = 0
+        db_path = ws / ".aquila" / "knowledge.db"
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.cursor()
+                cursor.execute("SELECT count(*) FROM facts")
+                fact_count = cursor.fetchone()[0]
+                conn.close()
+                if fact_count > 0:
+                    result["findings"].append(f"✓ SQLite FactStore contains {fact_count} recorded facts.")
+                else:
+                    result["score"] -= 25
+                    result["findings"].append("❌ SQLite FactStore has 0 recorded facts.")
+            except Exception as e:
+                result["score"] -= 25
+                result["findings"].append(f"⚠️ SQLite check error: {e}")
+        else:
+            result["score"] -= 25
+            result["findings"].append("❌ SQLite FactStore (.aquila/knowledge.db) not created.")
+
+        completion_out = (report.get("completion_output") or "").strip()
+        if recipe == "knowledge_smoke":
+            if fact_count == 0 or len(completion_out) < 20:
+                result["passed"] = False
+                result["score"] -= 40
+                result["findings"].append("❌ knowledge_smoke must store >=1 fact and return a summary output.")
+            else:
+                result["findings"].append(f"✓ Smoke output present ({len(completion_out)} chars) with {fact_count} stored fact(s).")
+            return
+
+        if recipe == "fn_research_chat_light":
+            if len(completion_out) < 250:
+                result["score"] -= 45
+                result["passed"] = False
+                result["findings"].append(f"❌ Conversational response too brief ({len(completion_out)} chars, min 250).")
+            else:
+                result["findings"].append(f"✓ Conversational response has substantive depth ({len(completion_out)} chars).")
+            if not ("http" in completion_out or ("[" in completion_out and "]" in completion_out)):
+                result["score"] -= 25
+                result["findings"].append("⚠️ Conversational response lacks explicit source URLs or citation brackets.")
+            else:
+                result["findings"].append("✓ Conversational response includes cited sources.")
+            return
+
+        report_files = [f for f in ws.glob("*.md") if f.name != "README.md"]
         valid_reports = [f for f in report_files if "report" in f.name.lower() or "research" in f.name.lower() or f.name == "research_report.md"]
 
         if not valid_reports:
@@ -276,29 +394,16 @@ class ArtifactUtilityVerifier:
         else:
             result["findings"].append(f"✓ Report contains {len(headings)} structured section headers.")
 
-        has_citations = ("[" in text and "]" in text)
+        has_citations = ("[" in text and "]" in text) or ("http://" in text or "https://" in text)
         if not has_citations:
             result["score"] -= 30
             result["passed"] = False
-            result["findings"].append("❌ Report lacks citations or grounded references ([1] or [Source]).")
+            result["findings"].append("❌ Report lacks citations or grounded references ([1] or URLs).")
         else:
             result["findings"].append("✓ Report contains grounded citation markers.")
 
-        db_path = ws / ".aquila" / "knowledge.db"
-        if db_path.exists():
-            try:
-                conn = sqlite3.connect(str(db_path))
-                cursor = conn.cursor()
-                cursor.execute("SELECT count(*) FROM facts")
-                count = cursor.fetchone()[0]
-                conn.close()
-                if count > 0:
-                    result["findings"].append(f"✓ SQLite FactStore contains {count} recorded facts.")
-                else:
-                    result["score"] -= 20
-                    result["findings"].append("⚠️ SQLite FactStore has 0 recorded facts.")
-            except Exception as e:
-                result["findings"].append(f"⚠️ SQLite check error: {e}")
+        if fact_count == 0:
+            result["passed"] = False
 
     @staticmethod
     def _verify_writing_deliverable(recipe, task, ws, result):
@@ -337,7 +442,9 @@ class ArtifactUtilityVerifier:
     @staticmethod
     def _verify_learn_deliverable(recipe, task, ws, result):
         result["domain"] = "learn"
-        syllabus_files = list(ws.rglob("syllabus.json"))
+        syllabus_files = list(ws.glob("Agent-Learn/**/courses/*/syllabus.json"))
+        if not syllabus_files:
+            syllabus_files = list(ws.rglob("syllabus.json"))
         if not syllabus_files:
             result["score"] = 0
             result["passed"] = False
@@ -380,6 +487,34 @@ class ArtifactUtilityVerifier:
     @staticmethod
     def _verify_persona_deliverable(recipe, task, ws, result):
         result["domain"] = "persona"
+        if recipe == "fn_persona_lore":
+            persona_files = list(ws.rglob("persona.json"))
+            if not persona_files:
+                result["score"] = 0
+                result["passed"] = False
+                result["findings"].append("❌ No persona.json found in Agent-Personas/ after load_persona.")
+                return
+            result["deliverables"].append(str(persona_files[0].relative_to(ws)))
+            result["findings"].append(f"✓ Persona record loaded/persisted ({persona_files[0].name}).")
+            db_path = ws / ".aquila" / "knowledge.db"
+            fact_count = 0
+            if db_path.exists():
+                try:
+                    conn = sqlite3.connect(str(db_path))
+                    cur = conn.cursor()
+                    cur.execute("SELECT count(*) FROM facts")
+                    fact_count = cur.fetchone()[0]
+                    conn.close()
+                except Exception as e:
+                    result["findings"].append(f"⚠️ SQLite check error: {e}")
+            if fact_count < 1:
+                result["score"] = 30
+                result["passed"] = False
+                result["findings"].append("❌ SQLite FactStore contains 0 lore facts.")
+            else:
+                result["findings"].append(f"✓ SQLite FactStore contains {fact_count} worldbuilding lore fact(s).")
+            return
+
         init_files = list(ws.rglob("initialization.md"))
         if not init_files:
             result["score"] = 0
@@ -415,14 +550,62 @@ class ArtifactUtilityVerifier:
             result["findings"].append("✓ Passed anti-assistant leakage screening (pure in-character immersion).")
 
 
-def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, report_path):
+def _kill_process_tree(pid: int) -> None:
+    if pid <= 0:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        try:
+            import signal
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            try:
+                os.kill(pid, 9)
+            except Exception:
+                pass
+
+
+def _latest_activity_timestamp(watch_paths) -> float:
+    latest = 0.0
+    for wp in watch_paths:
+        try:
+            if wp.is_file():
+                latest = max(latest, wp.stat().st_mtime)
+            elif wp.is_dir():
+                for child in wp.rglob("*"):
+                    if child.is_file():
+                        latest = max(latest, child.stat().st_mtime)
+        except Exception:
+            pass
+    return latest
+
+
+def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, report_path,
+                    recipe_timeout=900, stall_timeout=300):
+    ws_path = Path(workspace).resolve()
+    ws_path.mkdir(parents=True, exist_ok=True)
+    if recipe in ("fn_research_offline", "knowledge_smoke") and not (ws_path / "docs").exists():
+        import shutil
+        docs_dst = ws_path / "docs"
+        docs_dst.mkdir(parents=True, exist_ok=True)
+        for src in list(Path("docs").rglob("*.md"))[:5]:
+            shutil.copy2(src, docs_dst / src.name)
+        if Path("AGENTS.md").is_file():
+            shutil.copy2("AGENTS.md", docs_dst / "AGENTS.md")
+
     cmd = [
         str(bin_path),
         "eval",
         "--live",
         "--recipe", recipe,
         "--task", task,
-        "--workspace", str(Path(workspace).resolve()),
+        "--workspace", str(ws_path),
         "--backend", backend,
         "--model", model,
         "--tier", tier,
@@ -433,6 +616,7 @@ def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, rep
     print(f"RUNNING LIVE EVAL: {recipe}")
     print(f"Task: {task}")
     print(f"Command: {' '.join(cmd)}")
+    print(f"Watchdogs: wall_timeout={recipe_timeout}s, stall_timeout={stall_timeout}s")
     print("=" * 70)
 
     start_time = time.time()
@@ -443,12 +627,64 @@ def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, rep
         except Exception:
             pass
 
-    try:
-        proc = subprocess.run(cmd, timeout=600)
-        returncode = proc.returncode
-    except subprocess.TimeoutExpired:
-        print(f"[TIMEOUT] Evaluation timed out after 600s for recipe {recipe}", file=sys.stderr)
-        returncode = -1
+    proc_log = rep_path_obj.with_suffix(".subprocess.log")
+    proc_log.parent.mkdir(parents=True, exist_ok=True)
+
+    # Stream stdout/stderr directly to a file to prevent 64 KB pipe deadlocks on Windows.
+    returncode = -1
+    termination_reason = ""
+    with open(proc_log, "w", encoding="utf-8", errors="replace") as log_f:
+        popen_kwargs = {
+            "stdout": log_f,
+            "stderr": subprocess.STDOUT,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        last_activity = time.time()
+        last_log_size = 0
+        last_ws_mtime = _latest_activity_timestamp([ws_path, proc_log])
+        last_heartbeat_print = start_time
+
+        while proc.poll() is None:
+            now = time.time()
+            try:
+                cur_size = proc_log.stat().st_size if proc_log.exists() else 0
+            except Exception:
+                cur_size = last_log_size
+            cur_ws_mtime = _latest_activity_timestamp([ws_path / ".aquila", proc_log])
+            if cur_size > last_log_size or cur_ws_mtime > last_ws_mtime:
+                last_activity = now
+                last_log_size = cur_size
+                last_ws_mtime = cur_ws_mtime
+
+            elapsed_now = now - start_time
+            idle_now = now - last_activity
+            if now - last_heartbeat_print >= 30.0:
+                print(f"[WATCHDOG {recipe}] elapsed={elapsed_now:.0f}s idle={idle_now:.0f}s log_bytes={cur_size}", flush=True)
+                last_heartbeat_print = now
+
+            if elapsed_now > recipe_timeout:
+                termination_reason = f"WALL_TIMEOUT ({recipe_timeout}s)"
+                print(f"[TIMEOUT] {recipe} exceeded wall timeout {recipe_timeout}s; killing process tree.", file=sys.stderr, flush=True)
+                _kill_process_tree(proc.pid)
+                returncode = -2
+                break
+
+            if idle_now > stall_timeout:
+                termination_reason = f"STALL_TIMEOUT (no activity for {stall_timeout}s)"
+                print(f"[STALL] {recipe} had no log/workspace progress for {stall_timeout}s; killing process tree.", file=sys.stderr, flush=True)
+                _kill_process_tree(proc.pid)
+                returncode = -3
+                break
+
+            time.sleep(2.0)
+
+        if not termination_reason:
+            returncode = proc.returncode
     elapsed = time.time() - start_time
 
     report = {}
@@ -461,13 +697,18 @@ def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, rep
             print(f"[WARN] Failed to parse report file {report_file}: {e}")
 
     # Evaluate substantive artifact utility
-    utility = ArtifactUtilityVerifier.verify(recipe, task, workspace)
+    utility = ArtifactUtilityVerifier.verify(recipe, task, workspace, report=report)
+    if termination_reason:
+        utility.setdefault("findings", []).append(f"❌ Terminated by harness watchdog: {termination_reason}")
+        utility["passed"] = False
+        utility["score"] = 0
     overall_passed = (returncode == 0 and report.get("success", False) and utility.get("passed", False))
 
     return {
         "recipe": recipe,
         "task": task,
         "returncode": returncode,
+        "termination_reason": termination_reason,
         "elapsed_seconds": round(elapsed, 2),
         "report": report,
         "utility": utility,
@@ -559,12 +800,37 @@ def main():
                         help="Task prompt for single recipe eval (defaults to suite catalog task)")
     parser.add_argument("--workspace", default=".", help="Workspace root directory")
     parser.add_argument("--backend", default="llama", choices=["llama", "ollama"], help="Inference backend")
-    parser.add_argument("--model", default="D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-                        help="Model path (GGUF) or model name")
-    parser.add_argument("--tier", default="gpu", choices=["cpu", "gpu"], help="Hardware tier profile")
+    parser.add_argument("--model", default="",
+                        help="Model path (GGUF) or model name (auto-selects Qwen3.5-4B for cpu, 9B for gpu)")
+    parser.add_argument("--tier", default="cpu", choices=["cpu", "gpu"], help="Hardware tier profile (default: cpu Qwen3.5-4B)")
     parser.add_argument("--report", default="eval_report.json", help="Path for output JSON dissection report")
     parser.add_argument("--bin", help="Explicit path to aquila_cli executable")
+    parser.add_argument("--recipe-timeout", type=int, default=0,
+                        help="Hard wall timeout per recipe in seconds (default: 900 GPU / 2400 CPU)")
+    parser.add_argument("--stall-timeout", type=int, default=0,
+                        help="Inactivity timeout without log/workspace progress in seconds (default: 300 GPU / 480 CPU)")
     args = parser.parse_args()
+
+    if args.recipe_timeout <= 0:
+        args.recipe_timeout = 2400 if args.tier == "cpu" else 900
+    if args.stall_timeout <= 0:
+        args.stall_timeout = 480 if args.tier == "cpu" else 300
+
+    if not args.model:
+        if args.backend == "llama":
+            prefer_9b = (args.tier == "gpu")
+            candidates_9b = [
+                "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+                "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+            ]
+            candidates_4b = [
+                "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+                "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+            ]
+            cand_list = (candidates_9b + candidates_4b) if prefer_9b else (candidates_4b + candidates_9b)
+            args.model = next((c for c in cand_list if os.path.isfile(c)), cand_list[0])
+        else:
+            args.model = "qwen3.5:9b" if args.tier == "gpu" else "qwen3.5:4b"
 
     bin_path = find_cli_binary(args.bin)
     if not bin_path:
@@ -581,18 +847,32 @@ def main():
     if args.suite:
         suites_to_run = list(SUITES.keys()) if args.suite == "all" else [args.suite]
         battery_results = []
-        reports_dir = Path("eval_reports")
-        reports_dir.mkdir(exist_ok=True)
+        base_ws = Path(args.workspace).resolve()
+        reports_dir = (base_ws / "eval_reports") if str(args.workspace) != "." else Path("eval_reports")
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        summary_file = (base_ws / "eval_battery_summary.json") if str(args.workspace) != "." else Path("eval_battery_summary.json")
 
         for s_name in suites_to_run:
             print(f"\n>>> EXECUTING SUITE: {s_name.upper()} ({len(SUITES[s_name])} recipes) <<<")
             for item in SUITES[s_name]:
                 rec = item["recipe"]
                 tsk = item["task"]
+                rec_ws = base_ws / rec
                 rep_path = reports_dir / f"eval_{rec}.json"
-                res = run_single_eval(bin_path, rec, tsk, args.workspace, args.backend, args.model, args.tier, str(rep_path))
+                res = run_single_eval(
+                    bin_path, rec, tsk, str(rec_ws), args.backend, args.model, args.tier, str(rep_path),
+                    recipe_timeout=args.recipe_timeout, stall_timeout=args.stall_timeout,
+                )
                 dissect_and_print_autopsy(res)
                 battery_results.append(res)
+                with open(summary_file, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "suite": args.suite,
+                        "passed": sum(1 for x in battery_results if x.get("overall_passed")),
+                        "total_completed": len(battery_results),
+                        "results": battery_results,
+                    }, f, indent=2)
 
         # Summary Table
         print("\n" + "=" * 90)
@@ -621,7 +901,6 @@ def main():
         print(f"Summary: {passed_count}/{total} recipes PASSED ({(passed_count/total)*100:.1f}%)")
         print("=" * 90)
 
-        summary_file = Path("eval_battery_summary.json")
         with open(summary_file, "w", encoding="utf-8") as f:
             json.dump({
                 "suite": args.suite,
@@ -644,7 +923,10 @@ def main():
                     break
         if not task:
             task = "Execute recipe autonomously to completion"
-        res = run_single_eval(bin_path, args.recipe, task, args.workspace, args.backend, args.model, args.tier, args.report)
+        res = run_single_eval(
+            bin_path, args.recipe, task, args.workspace, args.backend, args.model, args.tier, args.report,
+            recipe_timeout=args.recipe_timeout, stall_timeout=args.stall_timeout,
+        )
         dissect_and_print_autopsy(res)
         sys.exit(0 if res.get("overall_passed") else 1)
 

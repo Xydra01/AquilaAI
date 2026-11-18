@@ -327,6 +327,50 @@ TEST_CASE("decode_text raises a typed context_overflow and decodes nothing",
     CHECK(kv_position(session) == before);
 }
 
+TEST_CASE("Qwen3.5-4B hybrid state snapshot restore avoids replay on rollback",
+          "[llama_session][llamacpp][hybrid]") {
+    std::filesystem::path qwen4b = "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf";
+    if (!std::filesystem::exists(qwen4b)) {
+        qwen4b = "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf";
+    }
+    if (!std::filesystem::exists(qwen4b)) {
+        SKIP("Local Qwen3.5-4B GGUF not present; skipping hybrid snapshot unit test");
+    }
+
+    LlamaConfig cfg;
+    cfg.model_path = qwen4b.string();
+    cfg.profile = ComputeProfile::cpu_low_spec_edge;
+    cfg.n_ctx = 1024;
+    cfg.n_gpu_layers = 0;
+    cfg.n_threads = std::uint32_t{4};
+    cfg.flash_attn = true;
+
+    LlamaSession session(qwen4b.string(), cfg);
+    REQUIRE(session.is_hybrid_or_recurrent());
+    // Text-only session construction must defer projector loading until an image turn.
+    CHECK_FALSE(session.is_vision_loaded());
+
+    session.decode_text("Pinned system prompt for hybrid snapshot test. ");
+    const std::size_t prefix_pos = session.position();
+    REQUIRE(prefix_pos > 0);
+    session.capture_snapshot();
+
+    session.decode_text("Disposable turn content that will be rolled back cleanly.");
+    REQUIRE(session.position() > prefix_pos);
+    const std::size_t pre_rollback_prefill = session.prefill_tokens();
+
+    session.rollback_to(prefix_pos);
+    CHECK(session.position() == prefix_pos);
+    CHECK(kv_position(session) == prefix_pos);
+    // Exact host snapshot restore does not increment decode prefill counters.
+    CHECK(session.prefill_tokens() == pre_rollback_prefill);
+
+    // Logit re-prime restores deterministic next-token sampling from prefix_pos.
+    session.ensure_logits_fresh();
+    CHECK(session.position() == prefix_pos);
+    CHECK(kv_position(session) == prefix_pos);
+}
+
 #else  // !AQUILA_HAS_LLAMACPP
 
 // Stub lanes (mingw-san / msvc-asan): the backend is compiled out, so there is no
@@ -338,3 +382,73 @@ TEST_CASE("LlamaSession tests are stubbed out on this lane (AQUILA_HAS_LLAMACPP=
 }
 
 #endif  // AQUILA_HAS_LLAMACPP
+
+// Unconditional mmproj dimension-safety tests (compile & run on every lane).
+#include "aquila/inference/llama_session.hpp"
+
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+namespace {
+
+struct ScopedMmprojTestDir {
+    std::filesystem::path dir;
+    ScopedMmprojTestDir() {
+        static std::atomic<std::uint64_t> counter{0};
+        const auto id = counter.fetch_add(1, std::memory_order_relaxed);
+        dir = std::filesystem::temp_directory_path() /
+              ("aquila_mmproj_test_" + std::to_string(id) + "_" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(dir);
+    }
+    ~ScopedMmprojTestDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+};
+
+void touch_dummy_file(const std::filesystem::path& p) {
+    std::ofstream f(p, std::ios::binary);
+    f << "GGUF";
+}
+
+}  // namespace
+
+TEST_CASE("discover_mmproj_for_model enforces model family & parameter size match",
+          "[llama_session][vision][mmproj]") {
+    ScopedMmprojTestDir tmp;
+    const auto model_4b = tmp.dir / "Qwen3.5-4B-Q4_K_M.gguf";
+    const auto model_9b = tmp.dir / "Qwen3.5-9B-Q4_K_M.gguf";
+    const auto model_14b = tmp.dir / "Qwen3.5-14B-Q4_K_M.gguf";
+    const auto mmproj_9b = tmp.dir / "mmproj-Qwen3.5-9B-BF16.gguf";
+    touch_dummy_file(model_4b);
+    touch_dummy_file(model_9b);
+    touch_dummy_file(model_14b);
+    touch_dummy_file(mmproj_9b);
+
+    // 4B MUST NOT pick 9B's mmproj (would fail tensor hidden-size assertion).
+    // (May match a real F16 4B mmproj in sibling default roots, so verify != 9B.)
+    CHECK(aquila::discover_mmproj_for_model(model_4b.string()) != mmproj_9b.generic_string());
+    // 14B MUST NOT pick 9B's mmproj either (no 14B mmproj exists in test or fallback roots).
+    CHECK(aquila::discover_mmproj_for_model(model_14b.string()).empty());
+    // 9B MUST pick 9B's mmproj cleanly.
+    CHECK(aquila::discover_mmproj_for_model(model_9b.string()) == mmproj_9b.generic_string());
+
+    // Once 4B's own mmproj exists in the same directory, 4B picks 4B (not 9B).
+    const auto mmproj_4b = tmp.dir / "mmproj-Qwen3.5-4B-F16.gguf";
+    touch_dummy_file(mmproj_4b);
+    CHECK(aquila::discover_mmproj_for_model(model_4b.string()) == mmproj_4b.generic_string());
+    CHECK(aquila::discover_mmproj_for_model(model_9b.string()) == mmproj_9b.generic_string());
+}
+
+TEST_CASE("LlamaConfig defaults defer mmproj loading until first image turn",
+          "[llama_session][vision][mmproj]") {
+    aquila::LlamaConfig cfg;
+    CHECK(cfg.auto_discover_mmproj == true);
+    CHECK(cfg.eager_load_mmproj == false);
+    CHECK(cfg.n_gpu_layers == 0);
+}
+

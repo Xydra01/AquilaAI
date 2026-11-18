@@ -1,5 +1,6 @@
 #include "aquila/knowledge/web_search.hpp"
 #include "aquila/knowledge/html_cleaner.hpp"
+#include "aquila/knowledge/searxng_manager.hpp"
 #include "aquila/knowledge/web_fetcher.hpp"
 
 #include <httplib.h>
@@ -7,9 +8,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <iomanip>
 #include <regex>
 #include <sstream>
+#include <thread>
 
 namespace aquila::knowledge {
 
@@ -67,6 +70,50 @@ std::string strip_html_tags(std::string_view html) {
     return normalized.substr(start, end - start + 1);
 }
 
+std::string simplify_keywords_for_fallback(std::string_view query, std::size_t max_terms = 4) {
+    static const std::vector<std::string_view> kStops = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does",
+        "for", "from", "guide", "how", "in", "into", "is", "it", "of", "on",
+        "or", "that", "the", "this", "to", "tutorial", "using", "vs", "what",
+        "when", "where", "which", "who", "why", "with", "comprehensive",
+        "overview", "methods", "research", "tools", "best"
+    };
+    std::vector<std::string> kept;
+    std::string cur;
+    auto flush = [&]() {
+        if (cur.size() < 2) { cur.clear(); return; }
+        std::string low = cur;
+        std::transform(low.begin(), low.end(), low.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        // Skip 4-digit years like 2023/2024/2025/2026
+        const bool is_year = low.size() == 4 &&
+                             std::all_of(low.begin(), low.end(), [](unsigned char c) { return std::isdigit(c); }) &&
+                             (low.starts_with("19") || low.starts_with("20"));
+        const bool is_stop = std::find(kStops.begin(), kStops.end(), low) != kStops.end();
+        if (!is_year && !is_stop) {
+            if (std::find(kept.begin(), kept.end(), cur) == kept.end()) {
+                kept.push_back(cur);
+            }
+        }
+        cur.clear();
+    };
+    for (unsigned char c : query) {
+        if (std::isalnum(c) || c == '_' || c == '+' || c == '#') {
+            cur.push_back(static_cast<char>(c));
+        } else {
+            flush();
+            if (kept.size() >= max_terms) break;
+        }
+    }
+    if (kept.size() < max_terms) flush();
+    std::string out;
+    for (std::size_t i = 0; i < kept.size() && i < max_terms; ++i) {
+        if (i > 0) out += ' ';
+        out += kept[i];
+    }
+    return out;
+}
+
 } // namespace
 
 std::string_view to_string(SearchProvider provider) noexcept {
@@ -122,13 +169,29 @@ std::vector<SearchResult> WebSearchEngine::search_duckduckgo_lite(
     fetch_opts.timeout_seconds = options_.timeout_seconds;
 
     FetchResponse res;
-    try {
-        res = execute_http("https://lite.duckduckgo.com/lite/", fetch_opts);
-    } catch (...) {
-        return results;
+    bool fetched = false;
+    last_ddg_status_ = 200;
+    // Retry at most once only for transient network/TLS drops (status_code() == 0);
+    // never retry or bypass non-200 anti-bot/rate-limit HTTP status responses.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        try {
+            res = execute_http("https://lite.duckduckgo.com/lite/", fetch_opts);
+            last_ddg_status_ = res.status_code;
+            fetched = true;
+            break;
+        } catch (const FetchError& e) {
+            last_ddg_status_ = e.status_code();
+            if (e.status_code() != 0 || attempt == 1) {
+                return results;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        } catch (...) {
+            last_ddg_status_ = 0;
+            return results;
+        }
     }
 
-    if (res.status_code != 200 || res.body.empty()) {
+    if (!fetched || res.status_code != 200 || res.body.empty()) {
         return results;
     }
 
@@ -197,37 +260,22 @@ std::vector<SearchResult> WebSearchEngine::search_searxng(
         return results;
     }
 
+    // Auto-start local SearXNG if configured on loopback and not yet serving.
+    (void)SearxngManager::instance().ensure_running(options_.searxng_endpoint, 5000);
+
     // Parse endpoint host and port
     std::string host = "127.0.0.1";
     int port = 8888;
-    std::string endpoint = options_.searxng_endpoint;
-    if (endpoint.starts_with("http://")) {
-        endpoint = endpoint.substr(7);
-    } else if (endpoint.starts_with("https://")) {
-        endpoint = endpoint.substr(8);
-    }
-    auto slash = endpoint.find('/');
-    if (slash != std::string::npos) {
-        endpoint = endpoint.substr(0, slash);
-    }
-    auto colon = endpoint.find(':');
-    if (colon != std::string::npos) {
-        host = endpoint.substr(0, colon);
-        try {
-            port = std::stoi(endpoint.substr(colon + 1));
-        } catch (...) {
-            port = 8888;
-        }
-    } else {
-        host = endpoint;
-        port = 80;
+    if (!SearxngManager::parse_endpoint(options_.searxng_endpoint, host, port)) {
+        return results;
     }
 
     httplib::Client cli(host, port);
     cli.set_connection_timeout(options_.timeout_seconds, 0);
     cli.set_read_timeout(options_.timeout_seconds, 0);
 
-    const std::string path = "/search?q=" + url_encode(clean_query) + "&format=json";
+    const std::string path = "/search?q=" + url_encode(clean_query) +
+                             "&format=json&limit=" + std::to_string(std::max(max_results, 10));
     auto res = cli.Get(path.c_str());
     if (!res || res->status != 200) {
         return results;
@@ -308,6 +356,54 @@ std::vector<SearchResult> WebSearchEngine::search_wikipedia(
             }
         }
     } catch (...) {}
+
+    if (!results.empty()) {
+        return results;
+    }
+
+    // OpenSearch only matches page title prefixes; fall back to Wikipedia full-text search
+    // (retrying with simplified keywords if verbose queries with years/quotes yield 0 hits).
+    const std::vector<std::string> fulltext_queries = {
+        clean_query,
+        simplify_keywords_for_fallback(clean_query, 4),
+        simplify_keywords_for_fallback(clean_query, 2),
+    };
+    std::string last_tried;
+    for (const std::string& ftq : fulltext_queries) {
+        if (ftq.empty() || ftq == last_tried) continue;
+        last_tried = ftq;
+        const std::string search_path = "/w/api.php?action=query&list=search&srsearch=" +
+                                        url_encode(ftq) +
+                                        "&srlimit=" + std::to_string(max_results) +
+                                        "&utf8=1&format=json";
+        try {
+            const FetchResponse full_res = execute_http("https://en.wikipedia.org" + search_path, fetch_opts);
+            if (full_res.status_code == 200 && !full_res.body.empty()) {
+                const Json j = Json::parse(full_res.body);
+                if (j.contains("query") && j["query"].contains("search") && j["query"]["search"].is_array()) {
+                    for (const auto& item : j["query"]["search"]) {
+                        if (static_cast<int>(results.size()) >= max_results) {
+                            break;
+                        }
+                        const std::string title = item.value("title", "");
+                        if (title.empty()) continue;
+                        std::string slug = title;
+                        std::replace(slug.begin(), slug.end(), ' ', '_');
+                        SearchResult sr;
+                        sr.title = title;
+                        sr.snippet = strip_html_tags(item.value("snippet", ""));
+                        sr.url = "https://en.wikipedia.org/wiki/" + url_encode(slug);
+                        sr.engine = "wikipedia";
+                        sr.score = PageScorer::score_url(sr.url, clean_query, sr.title, sr.snippet);
+                        results.push_back(std::move(sr));
+                    }
+                }
+            }
+        } catch (...) {}
+        if (!results.empty()) {
+            break;
+        }
+    }
 
     return results;
 }

@@ -9,6 +9,8 @@ CMakeUserPresets.json
 .vscode/
 .idea/
 .cursor/
+.clangd
+compile_commands.json
 
 # Model weights
 *.gguf
@@ -33,12 +35,29 @@ __pycache__/
 /bakeoff-debug.log
 .aquila/
 eval_reports/
+eval_reports_*/
 eval_battery_summary.json
+eval_battery_*_summary.json
 eval_report.json
+eval_report*.log
 debug.log
 Agent-Drafts/
 Agent-Learn/
 Agent-Personas/
 Agent-Logs/
+Agent-Tasks/
 research_report.md
+findings_report.md
 compiled_document.md
+system_capabilities_synthesis.md
+# Live evaluation harness scratch workspaces & outputs in repo root
+/code_smoke_file/
+/knowledge_smoke/
+/fn_dev_*/
+/fn_research_*/
+/fn_writing_*/
+/fn_persona_*/
+/fn_learn_*/
+/harness_smoke.py
+/ping_health.py
+/world_clock.py

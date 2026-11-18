@@ -55,7 +55,7 @@ struct LoopConfig {
     std::string mode;
     std::string instance_id;
     Json ground_truth = Json::object();
-    CondenserStrategy context_strategy = CondenserStrategy::sac;
+    CondenserStrategy context_strategy = CondenserStrategy::eocc;
     std::uint32_t max_repeated_calls = 0;
 
     // M8 Streaming, Progress & Cancellation Callbacks:

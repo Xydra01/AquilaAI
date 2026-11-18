@@ -25,12 +25,12 @@ struct SearchResult {
     std::string title;
     std::string url;
     std::string snippet;
-    std::string engine{"duckduckgo"};
+    std::string engine{"searxng"};
     double score{0.0};
 };
 
 struct SearchOptions {
-    SearchProvider provider{SearchProvider::duckduckgo};
+    SearchProvider provider{SearchProvider::searxng};
     std::string searxng_endpoint{"http://127.0.0.1:8888"};
     int max_results{5};
     int timeout_seconds{10};
@@ -64,10 +64,12 @@ public:
 
     [[nodiscard]] const SearchOptions& options() const noexcept { return options_; }
     void set_options(SearchOptions options) noexcept { options_ = std::move(options); }
+    [[nodiscard]] int last_duckduckgo_status() const noexcept { return last_ddg_status_; }
 
 private:
     SearchOptions options_;
     MockHandler mock_handler_;
+    mutable int last_ddg_status_{200};
 };
 
 } // namespace aquila::knowledge

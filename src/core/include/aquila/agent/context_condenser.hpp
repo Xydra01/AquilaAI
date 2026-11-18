@@ -3,10 +3,12 @@
 #include "aquila/agent/runtime_tier.hpp"
 #include "aquila/types/message.hpp"
 #include "aquila/types/scratchpad.hpp"
+#include "aquila/types/task_ledger.hpp"
 #include "aquila/types/tool_interaction.hpp"
 
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -20,25 +22,25 @@ struct SpillEntry {
     std::string full_text;
 };
 
-// Context compaction strategy (M5 bake-off / D14).
+// Context compaction strategy: EOCC is the framework standard.
 enum class CondenserStrategy {
-    eocc,   // End-of-Context Compaction: accumulates turns in rolling tail up to rolling_tools
-    sac     // Single-Action-per-Context: fresh minimal context per action, prior turns folded into running summary (Llama bake-off winner)
+    eocc,   // End-of-Context Compaction: accumulates turns in rolling tail up to rolling_tools (standard)
+    sac     // Retained for backward enum compatibility; operates as eocc
 };
 
 // Three-segment prompt assembler (Req 2, R6, R8):
 //   pinned prefix  -> system prompt + active recipe schema (never evicted)
-//   anchored block -> a snapshot of the scratchpad + module state snapshots
-//   rolling tail   -> the last K tool interactions (or single turn under SAC), oversized outputs spilled
+//   anchored block -> rendered TaskLedger markdown + scratchpad + module snapshots
+//   rolling tail   -> the last K tool interactions, oversized outputs spilled
 // All thresholds come from TierLimits; the condenser hardcodes nothing (Req 4.4).
 class ContextCondenser {
 public:
-    explicit ContextCondenser(TierLimits limits, CondenserStrategy strategy = CondenserStrategy::sac);
+    explicit ContextCondenser(TierLimits limits, CondenserStrategy strategy = CondenserStrategy::eocc);
 
     [[nodiscard]] CondenserStrategy strategy() const noexcept { return strategy_; }
     void set_strategy(CondenserStrategy strategy) noexcept { strategy_ = strategy; }
 
-    // Returns the current running summary folded under SAC strategy (or empty for EoCC).
+    // Returns running summary (empty under unified EOCC).
     [[nodiscard]] const std::string& running_summary() const noexcept { return running_summary_; }
 
     // Pinned prefix [0..P]: system prompt + active recipe schema. Set once; never
@@ -49,10 +51,11 @@ public:
     void set_initial_user_prompt(std::string prompt) { user_prompt_ = std::move(prompt); }
     [[nodiscard]] const std::string& initial_user_prompt() const noexcept { return user_prompt_; }
 
-    // Anchored block [P+1..S]: a snapshot of the scratchpad + module state snapshots.
+    // Anchored block [P+1..S]: a rendered snapshot of the TaskLedger / scratchpad + module state snapshots.
     // Refreshed on wipe; otherwise stable (Req 2.1, 2.4).
     void set_anchored(const AgentScratchpad& scratchpad,
-                      const std::vector<std::pair<std::string, Json>>& module_snapshots);
+                      const std::vector<std::pair<std::string, Json>>& module_snapshots,
+                      const TaskLedger* ledger = nullptr);
 
     // Rolling tail [S+1..end]: records one interaction, evicting the oldest when the
     // tail already holds K = limits.rolling_tools entries (Req 2.2). Oversized outputs
@@ -74,6 +77,8 @@ public:
 
     // True once the assembled footprint reaches limits.condense_threshold (Req 2.6).
     [[nodiscard]] bool should_condense() const;
+    // True when rolling tail holds history that condense() can clear.
+    [[nodiscard]] bool has_collapsible_history() const noexcept;
 
     // Wipe: pinned prefix unchanged, anchored block refreshed from the latest
     // set_anchored() inputs, rolling tail cleared (Req 2.4).
@@ -85,22 +90,23 @@ public:
 private:
     [[nodiscard]] std::string head_tail_truncate(const std::string& text, std::string& out_ref);
 
-    // Renders the cached scratchpad + module snapshots into `anchored_`. Shared by
+    // Renders the cached scratchpad + TaskLedger + module snapshots into `anchored_`. Shared by
     // set_anchored() and condense() so the wipe refresh is byte-identical to the
     // most recent set_anchored() rendering (Req 2.4).
     void render_anchored();
 
     TierLimits limits_;
-    CondenserStrategy strategy_ = CondenserStrategy::sac;
+    CondenserStrategy strategy_ = CondenserStrategy::eocc;
     std::string user_prompt_;
     std::string running_summary_;
     std::string system_prompt_;
     std::string recipe_schema_;
-    Message anchored_;                         // rendered scratchpad + snapshots
+    Message anchored_;                         // rendered TaskLedger + scratchpad + snapshots
     // Raw inputs behind `anchored_`, retained so condense() can re-render the block
     // from the latest set_anchored() inputs without the caller re-supplying them.
     AgentScratchpad anchored_scratchpad_;
     std::vector<std::pair<std::string, Json>> anchored_snapshots_;
+    std::optional<TaskLedger> anchored_ledger_;
     std::deque<ToolInteraction> tail_;         // ring buffer, cap = rolling_tools
     std::vector<std::string> guidance_;        // pending corrective messages
     std::unordered_map<std::string, std::string> spill_;  // ref -> full_text

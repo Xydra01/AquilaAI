@@ -540,3 +540,49 @@ TEST_CASE("LlamaCppBackend tests are stubbed out on this lane (AQUILA_HAS_LLAMAC
 }
 
 #endif  // AQUILA_HAS_LLAMACPP
+
+// Unconditional header-only / pure-C++ tests (run on every lane including stub lanes).
+#include "aquila/inference/llama_backend.hpp"
+
+#include <string>
+
+TEST_CASE("ThinkStreamSplitter separates <think> blocks across chunk boundaries",
+          "[llama_backend][think]") {
+    aquila::ThinkStreamSplitter splitter(/*start_in_think=*/false);
+    std::string content;
+    std::string thinking;
+
+    // Split <think> and </think> across tiny irregular chunks, checking leading newline trim.
+    const char* chunks[] = {
+        "Pre ", "<thi", "nk>\n", "Step 1\n", "Step 2</th", "ink>\n\n", "{\"ok\":", "true}"
+    };
+    for (const char* chunk : chunks) {
+        splitter.push(chunk, content, thinking);
+    }
+    splitter.flush(content, thinking);
+
+    CHECK(thinking == "Step 1\nStep 2");
+    CHECK(content == "Pre {\"ok\":true}");
+}
+
+TEST_CASE("ThinkStreamSplitter handles template-opened <think> blocks",
+          "[llama_backend][think]") {
+    REQUIRE_FALSE(aquila::opener_starts_in_think(""));
+    REQUIRE_FALSE(aquila::opener_starts_in_think("<|im_start|>assistant\n"));
+    REQUIRE_FALSE(aquila::opener_starts_in_think("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+    REQUIRE(aquila::opener_starts_in_think("<|im_start|>assistant\n<think>\n"));
+    REQUIRE(aquila::opener_starts_in_think("<think>old</think><think>"));
+
+    aquila::ThinkStreamSplitter splitter(
+        aquila::opener_starts_in_think("<|im_start|>assistant\n<think>\n"));
+    std::string content;
+    std::string thinking;
+
+    splitter.push("Plan first.</thi", content, thinking);
+    splitter.push("nk>\n\nFinal answer.", content, thinking);
+    splitter.flush(content, thinking);
+
+    CHECK(thinking == "Plan first.");
+    CHECK(content == "Final answer.");
+}
+

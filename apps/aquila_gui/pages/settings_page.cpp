@@ -55,16 +55,16 @@ SettingsPage::SettingsPage(QWidget* parent)
 
     tierCombo_ = new QComboBox(tierGroup);
     tierCombo_->addItems({
-        QStringLiteral("CPU Base (8GB RAM tier, tight 2048 token window)"),
-        QStringLiteral("GPU Boost (RTX 4070 VRAM offload, 8192 token window)")
+        QStringLiteral("CPU Base (Qwen3.5-4B, 16384 token window)"),
+        QStringLiteral("GPU Boost (RTX 4070 CUDA Qwen3.5-9B, 32768 token window)")
     });
     connect(tierCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &SettingsPage::onTierComboChanged);
     tierForm->addRow(QStringLiteral("Compute Profile:"), tierCombo_);
 
     contextSpin_ = new QSpinBox(tierGroup);
-    contextSpin_->setRange(512, 131072);
-    contextSpin_->setValue(2048);
-    contextSpin_->setSingleStep(512);
+    contextSpin_->setRange(512, 262144);
+    contextSpin_->setValue(16384);
+    contextSpin_->setSingleStep(1024);
     tierForm->addRow(QStringLiteral("Context Window:"), contextSpin_);
 
     tempSpin_ = new QDoubleSpinBox(tierGroup);
@@ -78,7 +78,7 @@ SettingsPage::SettingsPage(QWidget* parent)
     tierForm->addRow(gbnfCheck_);
 
     kvRollbackCheck_ = new QCheckBox(QStringLiteral("Enable Single-Action-per-Context (SAC) context condenser"), tierGroup);
-    kvRollbackCheck_->setChecked(true);
+    kvRollbackCheck_->setChecked(false);
     tierForm->addRow(kvRollbackCheck_);
 
     ngramCheck_ = new QCheckBox(QStringLiteral("Speculative N-Gram prompt lookup acceleration"), tierGroup);
@@ -113,8 +113,8 @@ SettingsPage::SettingsPage(QWidget* parent)
 
     searchProviderCombo_ = new QComboBox(searchGroup);
     searchProviderCombo_->addItems({
+        QStringLiteral("Local SearXNG (http://127.0.0.1:8888 — Auto-Start Default)"),
         QStringLiteral("DuckDuckGo Lite (Free / Zero Docker / Built-in)"),
-        QStringLiteral("Local SearXNG (http://127.0.0.1:8888)"),
         QStringLiteral("Wikipedia OpenSearch")
     });
     searchForm->addRow(QStringLiteral("Default Search Engine:"), searchProviderCombo_);
@@ -152,43 +152,68 @@ void SettingsPage::onBrowseWorkspace() {
 }
 
 void SettingsPage::onBrowseModel() {
+    const QString startDir = QFile::exists(QStringLiteral("F:/aquila-models"))
+        ? QStringLiteral("F:/aquila-models")
+        : QStringLiteral("F:/Users/myfri/agent-projects");
     const QString file = QFileDialog::getOpenFileName(
         this, QStringLiteral("Select Model Weights (.gguf)"),
-        QStringLiteral("D:/aquila-models"),
+        startDir,
         QStringLiteral("GGUF Model Files (*.gguf);;All Files (*.*)"));
     if (!file.isEmpty()) {
         modelInput_->setText(file);
     }
 }
 
+namespace {
+QString findQwenGguf(bool preferGpu9B) {
+    const std::initializer_list<const char*> candidates = preferGpu9B
+        ? std::initializer_list<const char*>{
+              "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+              "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+          }
+        : std::initializer_list<const char*>{
+              "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+              "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+          };
+    std::error_code ec;
+    for (const char* p : candidates) {
+        if (std::filesystem::is_regular_file(p, ec)) {
+            return QString::fromUtf8(p);
+        }
+    }
+    return {};
+}
+}  // namespace
+
 void SettingsPage::onBackendComboChanged(int index) {
     const bool isLlama = (index == 1);
     hostInput_->setEnabled(!isLlama);
     if (isLlama) {
         const QString cur = modelInput_->text().trimmed();
-        if (cur.isEmpty() || cur == QStringLiteral("aquila")) {
-            if (computeTier() == QStringLiteral("gpu") &&
-                std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
-                modelInput_->setText(QStringLiteral("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"));
-            } else if (std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
-                modelInput_->setText(QStringLiteral("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+        if (cur.isEmpty() || cur == QStringLiteral("aquila") || cur.startsWith(QStringLiteral("qwen3.5:"))) {
+            const QString found = findQwenGguf(computeTier() == QStringLiteral("gpu"));
+            if (!found.isEmpty()) {
+                modelInput_->setText(found);
             }
         }
     }
 }
 
 void SettingsPage::onTierComboChanged(int index) {
-    if (index == 1) { // GPU
-        contextSpin_->setValue(8192);
-        if (backendCombo_->currentIndex() == 1 &&
-            std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
-            modelInput_->setText(QStringLiteral("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"));
-        }
-    } else { // CPU
-        contextSpin_->setValue(2048);
-        if (backendCombo_->currentIndex() == 1 &&
-            std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
-            modelInput_->setText(QStringLiteral("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+    const bool isGpu = (index == 1);
+    contextSpin_->setValue(isGpu ? 32768 : 16384);
+    if (backendCombo_->currentIndex() == 1) {
+        const QString found = findQwenGguf(isGpu);
+        if (!found.isEmpty()) {
+            modelInput_->setText(found);
         }
     }
 }
@@ -206,6 +231,7 @@ void SettingsPage::saveSettings() {
     s.setValue(QStringLiteral("ngram"), ngramCheck_->isChecked());
     s.setValue(QStringLiteral("workspacePath"), workspaceInput_->text());
     s.setValue(QStringLiteral("themeIndex"), themeCombo_->currentIndex());
+    s.setValue(QStringLiteral("searchProvider"), searchProvider());
     s.setValue(QStringLiteral("searchProviderIndex"), searchProviderCombo_->currentIndex());
     s.setValue(QStringLiteral("searxngEndpoint"), searxngEndpointInput_->text());
     s.setValue(QStringLiteral("autoScrape"), autoScrapeCheck_->isChecked());
@@ -222,31 +248,50 @@ void SettingsPage::loadSettings() {
     if (s.contains(QStringLiteral("backendIndex"))) {
         backendCombo_->setCurrentIndex(s.value(QStringLiteral("backendIndex"), 0).toInt());
         hostInput_->setText(s.value(QStringLiteral("ollamaHost"), QStringLiteral("http://127.0.0.1:11434")).toString());
-        modelInput_->setText(s.value(QStringLiteral("modelPath")).toString());
         tierCombo_->setCurrentIndex(s.value(QStringLiteral("tierIndex"), 0).toInt());
-        contextSpin_->setValue(s.value(QStringLiteral("contextWindow"), 2048).toInt());
+
+        QString loadedModel = s.value(QStringLiteral("modelPath")).toString().trimmed();
+        const bool isGpu = (tierCombo_->currentIndex() == 1);
+        const bool isLlama = (backendCombo_->currentIndex() == 1);
+        if (isLlama && (loadedModel.isEmpty() ||
+                        loadedModel.startsWith(QStringLiteral("D:/"), Qt::CaseInsensitive) ||
+                        loadedModel.contains(QStringLiteral("llama"), Qt::CaseInsensitive) ||
+                        !QFile::exists(loadedModel))) {
+            const QString found = findQwenGguf(isGpu);
+            if (!found.isEmpty()) {
+                loadedModel = found;
+                s.setValue(QStringLiteral("modelPath"), loadedModel);
+                s.sync();
+            }
+        }
+        modelInput_->setText(loadedModel);
+        contextSpin_->setValue(s.value(QStringLiteral("contextWindow"), 16384).toInt());
         tempSpin_->setValue(s.value(QStringLiteral("temperature"), 0.2).toDouble());
         gbnfCheck_->setChecked(s.value(QStringLiteral("gbnf"), true).toBool());
-        kvRollbackCheck_->setChecked(s.value(QStringLiteral("kvRollback"), true).toBool());
+        kvRollbackCheck_->setChecked(s.value(QStringLiteral("kvRollback"), false).toBool());
         ngramCheck_->setChecked(s.value(QStringLiteral("ngram"), true).toBool());
         workspaceInput_->setText(s.value(QStringLiteral("workspacePath"), QStringLiteral(".")).toString());
         themeCombo_->setCurrentIndex(s.value(QStringLiteral("themeIndex"), 0).toInt());
-        searchProviderCombo_->setCurrentIndex(s.value(QStringLiteral("searchProviderIndex"), 0).toInt());
+        const QString savedProvider = s.value(QStringLiteral("searchProvider")).toString().trimmed().toLower();
+        if (savedProvider == QStringLiteral("duckduckgo")) {
+            searchProviderCombo_->setCurrentIndex(1);
+        } else if (savedProvider == QStringLiteral("wikipedia")) {
+            searchProviderCombo_->setCurrentIndex(2);
+        } else {
+            // Default to Local SearXNG (also migrates legacy installs cleanly).
+            searchProviderCombo_->setCurrentIndex(0);
+        }
         searxngEndpointInput_->setText(s.value(QStringLiteral("searxngEndpoint"), QStringLiteral("http://127.0.0.1:8888")).toString());
         autoScrapeCheck_->setChecked(s.value(QStringLiteral("autoScrape"), true).toBool());
     } else {
-        // Auto-detect optimal hardware profile on initial run
-        if (std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
+        // Default CPU-first Qwen3.5-4B (16K), or auto-upgrade if only 9B is present.
+        const QString found4b = findQwenGguf(false);
+        if (!found4b.isEmpty()) {
+            const bool is9bOnly = found4b.contains(QStringLiteral("9B"), Qt::CaseInsensitive);
             backendCombo_->setCurrentIndex(1); // Llama.cpp (Direct C++ in-process)
-            tierCombo_->setCurrentIndex(1);    // GPU Boost (RTX 4070 VRAM offload)
-            modelInput_->setText(QStringLiteral("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"));
-            contextSpin_->setValue(8192);
-            saveSettings();
-        } else if (std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
-            backendCombo_->setCurrentIndex(1); // Llama.cpp
-            tierCombo_->setCurrentIndex(0);    // CPU Base
-            modelInput_->setText(QStringLiteral("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
-            contextSpin_->setValue(2048);
+            tierCombo_->setCurrentIndex(is9bOnly ? 1 : 0);
+            modelInput_->setText(found4b);
+            contextSpin_->setValue(is9bOnly ? 32768 : 16384);
             saveSettings();
         }
     }
@@ -292,9 +337,9 @@ QString SettingsPage::workspacePath() const {
 }
 
 QString SettingsPage::searchProvider() const {
-    if (searchProviderCombo_->currentIndex() == 1) return QStringLiteral("searxng");
+    if (searchProviderCombo_->currentIndex() == 1) return QStringLiteral("duckduckgo");
     if (searchProviderCombo_->currentIndex() == 2) return QStringLiteral("wikipedia");
-    return QStringLiteral("duckduckgo");
+    return QStringLiteral("searxng");
 }
 
 QString SettingsPage::searxngEndpoint() const {

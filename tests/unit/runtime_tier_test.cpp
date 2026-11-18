@@ -7,22 +7,22 @@ using namespace aquila;
 
 namespace {
 
-// Asserts a config carries the CPU console-first table (Req 4.1): 2048 / 2 / 1500 / 45 / 0.
+// Asserts a config carries the Qwen 3.5 4B CPU table: 8192 / 3 / 3000 / 128 / 0.
 void check_cpu_limits(const TierLimits& limits) {
-    CHECK(limits.condense_threshold == 2048u);
-    CHECK(limits.rolling_tools == std::size_t{2});
-    CHECK(limits.tool_output_chars == std::size_t{1500});
-    CHECK(limits.max_thought_tokens == 45u);
+    CHECK(limits.condense_threshold == 8192u);
+    CHECK(limits.rolling_tools == std::size_t{3});
+    CHECK(limits.tool_output_chars == std::size_t{3000});
+    CHECK(limits.max_thought_tokens == 128u);
     CHECK(limits.gpu_layers == 0u);
     CHECK(limits.max_turns == 16u);
 }
 
-// Asserts a config carries the GPU boost table (Req 4.1): 6144 / 4 / 4500 / 150 / 999.
+// Asserts a config carries the Qwen 3.5 9B GPU table: 16384 / 6 / 8000 / 192 / 999.
 void check_gpu_limits(const TierLimits& limits) {
-    CHECK(limits.condense_threshold == 6144u);
-    CHECK(limits.rolling_tools == std::size_t{4});
-    CHECK(limits.tool_output_chars == std::size_t{4500});
-    CHECK(limits.max_thought_tokens == 150u);
+    CHECK(limits.condense_threshold == 16384u);
+    CHECK(limits.rolling_tools == std::size_t{6});
+    CHECK(limits.tool_output_chars == std::size_t{8000});
+    CHECK(limits.max_thought_tokens == 192u);
     CHECK(limits.gpu_layers == 999u);
     CHECK(limits.max_turns == 16u);
 }

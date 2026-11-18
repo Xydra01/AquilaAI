@@ -31,6 +31,10 @@ struct OutputConstraint {
 // server or model default applies.
 struct GenerationParams {
     double temperature = 0.6;
+    std::optional<int> top_k;
+    std::optional<double> top_p;
+    std::optional<double> min_p;
+    std::optional<double> presence_penalty;
     std::optional<std::uint32_t> max_tokens;  // Ollama num_predict
     std::optional<std::uint32_t> num_ctx;
     std::optional<double> repeat_penalty;

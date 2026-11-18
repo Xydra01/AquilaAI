@@ -11,10 +11,10 @@ namespace aquila {
 // GPU tier is an explicit boost. The loop and condenser read every threshold from
 // here; there are no hardcoded limits in loop or condenser code (Req 4.4).
 struct TierLimits {
-    std::uint32_t condense_threshold = 2048;  // prompt tokens that trigger a wipe
-    std::size_t rolling_tools = 2;             // K: tool cycles kept in the rolling tail
-    std::size_t tool_output_chars = 1500;      // head+tail truncation budget per result
-    std::uint32_t max_thought_tokens = 45;     // cap on the action call's `thought`
+    std::uint32_t condense_threshold = 8192;   // prompt tokens that trigger a wipe
+    std::size_t rolling_tools = 3;             // K: tool cycles kept in the rolling tail
+    std::size_t tool_output_chars = 3000;      // head+tail truncation budget per result
+    std::uint32_t max_thought_tokens = 128;    // cap on the action call's `thought`
     std::uint32_t gpu_layers = 0;              // layers offloaded to the GPU (0 = CPU-only)
     std::uint32_t max_turns = 16;              // loop turn cap (parity: code_agent.py `_max_turns`)
 };
@@ -54,9 +54,9 @@ struct RuntimeTierConfig {
     TierLimits limits{};
     UniversalFlags flags{};
 
-    // Exact tier table (Req 4.1):
-    //   cpu_low_spec_edge / cpu_moe_fast -> 2048 / 2 / 1500 / 45 / 0
-    //   gpu_high_vram                    -> 6144 / 4 / 4500 / 150 / 999
+    // Exact tier table (Qwen 3.5 hybrid contexts: 16K CPU / 32K GPU):
+    //   cpu_low_spec_edge / cpu_moe_fast -> 8192 / 3 / 3000 / 128 / 0
+    //   gpu_high_vram                    -> 16384 / 6 / 8000 / 192 / 999
     [[nodiscard]] static RuntimeTierConfig for_profile(ComputeProfile profile) noexcept;
 
     // CPU-first default: the cpu_low_spec_edge tier (Req 4.2). GPU is an explicit

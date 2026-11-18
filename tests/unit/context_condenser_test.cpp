@@ -454,96 +454,98 @@ TEST_CASE("Property 14: behavior follows tier limits, not hardcoded constants",
 }
 
 // ---------------------------------------------------------------------------
-// SAC Strategy Tests (M5 bake-off Option A / Llama winner)
+// EOCC Strategy & Task Ledger Tests
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SAC strategy: single turn tail with running summary accumulation",
-          "[context_condenser][sac]") {
+TEST_CASE("EOCC strategy: rolling tail accumulation up to limit and clean condensation with TaskLedger",
+          "[context_condenser][eocc]") {
     TierLimits limits;
     limits.rolling_tools = 4;
-    ContextCondenser condenser(limits, CondenserStrategy::sac);
+    ContextCondenser condenser(limits, CondenserStrategy::eocc);
 
     condenser.set_pinned_prefix("sys_prompt", "recipe_schema");
-    condenser.set_anchored(AgentScratchpad{}, {});
 
-    ToolInteraction it1;
-    it1.module = "WorkspaceModule";
-    it1.action = "list_dir";
-    it1.args = Json::object({{"path", "."}});
-    it1.result.success = true;
-    it1.result.llm_facing_output = "file1.txt\nfile2.txt";
+    TaskLedger ledger;
+    ledger.task_id = "test_task";
+    ledger.objective = "Implement ping utility script";
+    ledger.current_status = "Executing implementation checks";
+    ledger.add_step("Create ping_health.py", "create");
+    ledger.add_step("Verify execution", "verify");
+    ledger.mark_step("create", LedgerStepStatus::completed, "File written cleanly");
+    ledger.mark_step("verify", LedgerStepStatus::in_progress);
 
-    condenser.record_tool_cycle(it1);
+    AgentScratchpad pad;
+    pad.current_hypothesis = "Standard library socket and urllib provide cross-platform ping";
+    pad.verified_facts = {"DNS resolution functional"};
 
-    // Turn 1: single turn in tail, running summary empty
-    CHECK(condenser.running_summary().empty());
+    condenser.set_anchored(pad, {}, &ledger);
+
+    // Initial check: Anchored message contains rendered markdown Task Ledger
     auto msgs = condenser.build_messages();
-    // Prefix (2) + Anchor (1) + Tail (2) = 5 messages
-    REQUIRE(msgs.size() == 5);
-    CHECK(msgs[3].role == Role::assistant);
-    CHECK(msgs[4].role == Role::tool);
-    CHECK(msgs[4].content == "file1.txt\nfile2.txt");
-
-    // Turn 2: it1 should fold into running summary, it2 becomes the only tail turn
-    ToolInteraction it2;
-    it2.module = "ExecutionModule";
-    it2.action = "run_shell";
-    it2.args = Json::object({{"command", "ninja"}});
-    it2.result.success = true;
-    it2.result.llm_facing_output = "Build complete";
-
-    condenser.record_tool_cycle(it2);
-
-    CHECK_FALSE(condenser.running_summary().empty());
-    CHECK(condenser.running_summary().find("[WorkspaceModule.list_dir]") != std::string::npos);
-    CHECK(condenser.running_summary().find("file1.txt") != std::string::npos);
-
-    msgs = condenser.build_messages();
-    // Prefix (2) + Anchor (1) + Summary (1) + Tail (2) = 6 messages
-    REQUIRE(msgs.size() == 6);
+    REQUIRE(msgs.size() == 3);
     CHECK(msgs[0].role == Role::system);
     CHECK(msgs[1].role == Role::system);
-    CHECK(msgs[2].role == Role::system); // anchored
-    CHECK(msgs[3].role == Role::system); // summary
-    CHECK(msgs[3].content.rfind("State so far:\n", 0) == 0);
-    CHECK(msgs[4].role == Role::assistant);   // it2
-    CHECK(msgs[5].role == Role::tool);   // it2 output
-    CHECK(msgs[5].content == "Build complete");
+    CHECK(msgs[2].role == Role::system);
+    CHECK(msgs[2].content.find("# 📋 ACTIVE TASK LEDGER") != std::string::npos);
+    CHECK(msgs[2].content.find("- [x] Step 1 (create): Create ping_health.py") != std::string::npos);
+    CHECK(msgs[2].content.find("↳ Proof/Note: File written cleanly") != std::string::npos);
+    CHECK(msgs[2].content.find("- [/] Step 2 (verify): Verify execution ◀ [ACTIVE FOCUS]") != std::string::npos);
+    CHECK(msgs[2].content.find("Standard library socket and urllib provide cross-platform ping") != std::string::npos);
 
-    // Turn 3: it2 folds into running summary, it3 becomes the only tail turn
-    ToolInteraction it3;
-    it3.module = "KnowledgeModule";
-    it3.action = "store_fact";
-    it3.args = Json::object({{"topic", "t"}, {"fact", "f"}});
-    it3.result.success = true;
-    it3.result.llm_facing_output = "Stored";
-
-    condenser.record_tool_cycle(it3);
-    CHECK(condenser.running_summary().find("[ExecutionModule.run_shell]") != std::string::npos);
+    // Turn 1..4: EOCC retains all interaction cycles in the tail up to rolling_tools (4)
+    for (int i = 1; i <= 4; ++i) {
+        ToolInteraction it;
+        it.module = "WorkspaceModule";
+        it.action = "action_" + std::to_string(i);
+        it.args = Json::object({{"idx", i}});
+        it.result.success = true;
+        it.result.llm_facing_output = "result_" + std::to_string(i);
+        condenser.record_tool_cycle(it);
+    }
 
     msgs = condenser.build_messages();
-    REQUIRE(msgs.size() == 6);
-    CHECK(msgs[5].content == "Stored");
+    // Prefix (2) + Anchor (1) + Tail (4 * 2) = 11 messages
+    REQUIRE(msgs.size() == 11);
+    CHECK(msgs[3].role == Role::assistant);
+    CHECK(msgs[4].role == Role::tool);
+    CHECK(msgs[4].content == "result_1");
+    CHECK(msgs[9].role == Role::assistant);
+    CHECK(msgs[10].role == Role::tool);
+    CHECK(msgs[10].content == "result_4");
 
-    // Wipe clears the running summary and the tail
+    // Turn 5: EOCC evicts oldest (result_1), keeps rolling window of 4 (result_2..result_5)
+    ToolInteraction it5;
+    it5.module = "ExecutionModule";
+    it5.action = "action_5";
+    it5.result.success = true;
+    it5.result.llm_facing_output = "result_5";
+    condenser.record_tool_cycle(it5);
+
+    msgs = condenser.build_messages();
+    REQUIRE(msgs.size() == 11);
+    CHECK(msgs[4].content == "result_2");
+    CHECK(msgs[10].content == "result_5");
+
+    // Condensation wipe: tail is cleared, anchored Task Ledger is re-rendered intact
     condenser.condense();
-    CHECK(condenser.running_summary().empty());
     msgs = condenser.build_messages();
-    REQUIRE(msgs.size() == 3); // prefix (2) + anchor (1)
+    REQUIRE(msgs.size() == 3);
+    CHECK(msgs[2].content.find("# 📋 ACTIVE TASK LEDGER") != std::string::npos);
+    CHECK(msgs[2].content.find("- [x] Step 1 (create): Create ping_health.py") != std::string::npos);
 }
 
-TEST_CASE("Property: SAC tail invariant (always at most 1 tool cycle)",
-          "[rapidcheck][context_condenser][sac]") {
-    rc::prop("SAC keeps at most 1 interaction in tail regardless of interaction count", [] {
+TEST_CASE("Property: EOCC tail invariant (never exceeds rolling_tools)",
+          "[rapidcheck][context_condenser][eocc]") {
+    rc::prop("EOCC keeps exactly min(N, K) interactions in tail", [] {
         TierLimits limits;
         limits.rolling_tools = *rc::gen::inRange<std::size_t>(1, 10);
         limits.tool_output_chars = 1000;
 
-        ContextCondenser condenser(limits, CondenserStrategy::sac);
+        ContextCondenser condenser(limits, CondenserStrategy::eocc);
         condenser.set_pinned_prefix("sys", "schema");
         condenser.set_anchored(AgentScratchpad{}, {});
 
-        const std::size_t n = *rc::gen::inRange<std::size_t>(0, 15);
+        const std::size_t n = *rc::gen::inRange<std::size_t>(0, 25);
         for (std::size_t i = 0; i < n; ++i) {
             ToolInteraction it;
             it.module = "Mod" + std::to_string(i);
@@ -559,15 +561,55 @@ TEST_CASE("Property: SAC tail invariant (always at most 1 tool cycle)",
             if (m.role == Role::tool) ++tool_count;
         }
 
-        if (n == 0) {
-            RC_ASSERT(tool_count == 0);
-            RC_ASSERT(condenser.running_summary().empty());
-        } else {
-            // SAC strictly caps tail tool interactions to 1
-            RC_ASSERT(tool_count == 1);
-            if (n > 1) {
-                RC_ASSERT(!condenser.running_summary().empty());
-            }
-        }
+        RC_ASSERT(tool_count == std::min(n, limits.rolling_tools));
     });
 }
+
+TEST_CASE("ContextCondenser propagates ActionResult images and caps active images to 2",
+          "[context_condenser][vision]") {
+    TierLimits limits;
+    limits.rolling_tools = 6;
+    ContextCondenser condenser(limits, CondenserStrategy::eocc);
+    condenser.set_pinned_prefix("sys_prompt", "recipe_schema");
+
+    // Mix direct ToolInteraction::images and fallback ActionResult::images across 3 cycles.
+    ToolInteraction it1;
+    it1.module = "BrowserModule";
+    it1.action = "screenshot";
+    it1.result.success = true;
+    it1.result.llm_facing_output = "view 1";
+    it1.result.images = {"img_1_b64"};
+    condenser.record_tool_cycle(it1);
+
+    ToolInteraction it2;
+    it2.module = "BrowserModule";
+    it2.action = "screenshot";
+    it2.result.success = true;
+    it2.result.llm_facing_output = "view 2";
+    it2.images = {"img_2_b64"};
+    it2.result.images = {"ignored_duplicate"};
+    condenser.record_tool_cycle(it2);
+
+    ToolInteraction it3;
+    it3.module = "BrowserModule";
+    it3.action = "screenshot";
+    it3.result.success = true;
+    it3.result.llm_facing_output = "view 3";
+    it3.result.images = {"img_3_b64"};
+    condenser.record_tool_cycle(it3);
+
+    const auto msgs = condenser.build_messages();
+    std::vector<const Message*> tool_msgs;
+    for (const auto& m : msgs) {
+        if (m.role == Role::tool) {
+            tool_msgs.push_back(&m);
+        }
+    }
+    REQUIRE(tool_msgs.size() == 3);
+    CHECK(tool_msgs[0]->images.empty());
+    REQUIRE(tool_msgs[1]->images.size() == 1);
+    CHECK(tool_msgs[1]->images[0] == "img_2_b64");
+    REQUIRE(tool_msgs[2]->images.size() == 1);
+    CHECK(tool_msgs[2]->images[0] == "img_3_b64");
+}
+

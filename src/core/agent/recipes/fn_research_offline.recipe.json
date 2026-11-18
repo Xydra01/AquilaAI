@@ -32,14 +32,22 @@
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Examine local docs and files using KnowledgeModule search_local_docs or WorkspaceModule outline",
-    "Record verified facts using KnowledgeModule store_fact",
+    "Examine local docs and files using KnowledgeModule search_local_docs, WorkspaceModule outline, or read_region",
+    "Checkpoint key findings with OrchestratorModule checkpoint_notes and record verified facts using KnowledgeModule store_fact",
+    "Write any requested synthesis or report file using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
-  ]
+  ],
+  "post_llm_validation_hook": {
+    "module": "KnowledgeModule",
+    "action": "verify_research_deliverable",
+    "must_succeed": true,
+    "on_failure_instruction": "Offline research verification failed. Ensure you have recorded at least one verified fact via KnowledgeModule.store_fact and written a comprehensive cited markdown synthesis/report file (>= 350 chars, markdown headings, and [source] citations) before calling complete_recipe."
+  }
 }

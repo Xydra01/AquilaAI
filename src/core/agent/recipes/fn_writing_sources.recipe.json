@@ -30,7 +30,8 @@
       },
       "expose_actions": [
         "checkpoint_notes",
-        "complete_recipe"
+        "complete_recipe",
+        "update_task_ledger"
       ]
     }
   ],

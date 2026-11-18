@@ -34,6 +34,9 @@ public:
     virtual ActionResult execute_action(const std::string& action_name, const Json& args) = 0;
 
     [[nodiscard]] virtual Json export_state_snapshot() const = 0;
+    // Lightweight context summary for LLM prompt anchoring; avoids embedding huge
+    // multi-version document buffers or duplicate scratchpads in every prompt turn.
+    [[nodiscard]] virtual Json export_context_summary() const { return export_state_snapshot(); }
     // Throws SchemaError for a malformed snapshot.
     virtual void restore_state_snapshot(const Json& snapshot) = 0;
 };

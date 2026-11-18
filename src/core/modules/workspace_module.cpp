@@ -107,9 +107,9 @@ std::vector<ActionSchema> WorkspaceModule::get_actions() const {
         {"surgical_edit", "Replace one exact, unique block of text in a file. The edit is rejected if it breaks the file's syntax.",
          schema(R"({"type":"object","properties":{"file":{"type":"string"},"search_block":{"type":"string"},"replace_block":{"type":"string"}},"required":["file","search_block","replace_block"],"additionalProperties":false})")},
         {"create_file", "Create a new file with the given content (or overwrite an existing file).",
-         schema(R"({"type":"object","properties":{"file":{"type":"string"},"file_name":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":true})")},
+         schema(R"({"type":"object","properties":{"file":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["file","content"],"additionalProperties":false})")},
         {"write_file", "Write content to a file, creating it if it does not exist or overwriting it if it does.",
-         schema(R"({"type":"object","properties":{"file":{"type":"string"},"file_name":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"additionalProperties":true})")},
+         schema(R"({"type":"object","properties":{"file":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["file","content"],"additionalProperties":false})")},
         {"revert_file", "Restore a file to its content when it was first opened.",
          schema(R"({"type":"object","properties":{"file":{"type":"string"}},"required":["file"],"additionalProperties":false})")},
     };
@@ -144,6 +144,7 @@ void WorkspaceModule::configure(const Json& s) {
         max_output_chars_ = static_cast<std::size_t>(n);
     }
     canvas_.reset();
+    read_ranges_.clear();
 }
 
 CanvasBuffer& WorkspaceModule::canvas() {
@@ -262,15 +263,25 @@ ActionResult WorkspaceModule::read_region(const Json& args) {
     const auto& d = canvas().open(args["file"].get<std::string>());
     const auto lines = lines_of(d.text());
     std::size_t first = args["start_line"].get<std::size_t>();
-    std::size_t last = args.contains("end_line") ? args["end_line"].get<std::size_t>() : first + kMaxRegionLines - 1;
-    if (last < first) std::swap(first, last);
+    std::size_t requested_last = args.contains("end_line") ? args["end_line"].get<std::size_t>() : first + kMaxRegionLines - 1;
+    if (requested_last < first) std::swap(first, requested_last);
     if (first > lines.size()) {
         return fail("out_of_range", "start_line " + std::to_string(first) + " is past the end of " + d.path + " (" +
                                         std::to_string(lines.size()) + " lines)");
     }
-    last = std::min({last, first + kMaxRegionLines - 1, lines.size()});
-    return ok("--- " + d.path + " lines " + std::to_string(first) + "-" + std::to_string(last) + " of " +
-              std::to_string(lines.size()) + " ---\n" + numbered(lines, first, last));
+    const std::size_t last = std::min({requested_last, first + kMaxRegionLines - 1, lines.size()});
+    std::string out = "--- " + d.path + " lines " + std::to_string(first) + "-" + std::to_string(last) + " of " +
+                      std::to_string(lines.size()) + " ---\n";
+    if (last < requested_last && last < lines.size()) {
+        out += "[Note: read_region is capped at " + std::to_string(kMaxRegionLines) +
+               " lines/call; call read_region starting at line " + std::to_string(last + 1) +
+               " to read remaining lines.]\n";
+    }
+    if (last >= first && last > 0) {
+        record_read_range(d.path, std::max<std::size_t>(1, first), last);
+    }
+    out += numbered(lines, first, last);
+    return ok(std::move(out));
 }
 
 ActionResult WorkspaceModule::inspect_symbol(const Json& args) {
@@ -326,6 +337,7 @@ ActionResult WorkspaceModule::submit(const std::string& path, const std::string&
         c.reject(id);
         throw;
     }
+    read_ranges_.erase(path);
     return ok(summary + note);
 }
 
@@ -361,18 +373,18 @@ ActionResult WorkspaceModule::surgical_edit(const Json& args) {
 }
 
 ActionResult WorkspaceModule::create_file(const Json& args) {
-    std::string file_param;
-    if (args.contains("file") && args["file"].is_string()) {
-        file_param = args["file"].get<std::string>();
-    } else if (args.contains("file_name") && args["file_name"].is_string()) {
-        file_param = args["file_name"].get<std::string>();
-    } else if (args.contains("path") && args["path"].is_string()) {
-        file_param = args["path"].get<std::string>();
-    } else {
-        return fail("invalid_args", "/file: missing required key ('file', 'file_name', or 'path')");
+    if (!args.contains("file") || !args["file"].is_string()) {
+        return fail("invalid_args", "/file: missing required string key 'file'");
     }
-    const auto content = args.value("content", std::string{});
-    const bool overwrite = args.contains("overwrite") && args["overwrite"].is_boolean() && args["overwrite"].get<bool>();
+    const std::string file_param = args["file"].get<std::string>();
+    if (file_param.empty() || file_param == "." || file_param == "./" || file_param == ".\\") {
+        return fail("invalid_args", "/file: 'file' must name a specific file path (e.g. 'app.py'), not a directory");
+    }
+    if (!args.contains("content") || !args["content"].is_string()) {
+        return fail("invalid_args", "/content: missing required string key 'content'");
+    }
+    const auto content = args["content"].get<std::string>();
+    const bool overwrite = json_io::opt_bool(args, "overwrite", false);
 
     // If file already exists in canvas or disk, check overwrite flag
     try {
@@ -475,6 +487,46 @@ Json WorkspaceModule::export_state_snapshot() const {
     s["review"] = manual_review_ ? "manual" : "auto";
     s["max_output_chars"] = max_output_chars_;
     s["canvas"] = canvas_ ? canvas_->snapshot() : Json(nullptr);
+    return s;
+}
+
+void WorkspaceModule::record_read_range(const std::string& path, std::size_t first, std::size_t last) {
+    auto& ranges = read_ranges_[path];
+    ranges.emplace_back(first, last);
+    std::sort(ranges.begin(), ranges.end());
+    std::vector<std::pair<std::size_t, std::size_t>> merged;
+    merged.reserve(ranges.size());
+    for (const auto& r : ranges) {
+        if (merged.empty() || r.first > merged.back().second + 1) {
+            merged.push_back(r);
+        } else {
+            merged.back().second = std::max(merged.back().second, r.second);
+        }
+    }
+    ranges = std::move(merged);
+}
+
+Json WorkspaceModule::export_context_summary() const {
+    Json s = Json::object();
+    s["root_dir"] = root_dir_;
+    s["pinned_files"] = pinned_;
+    s["review"] = manual_review_ ? "manual" : "auto";
+    s["max_output_chars"] = max_output_chars_;
+    Json summary = canvas_ ? canvas_->summary() : Json(nullptr);
+    if (summary.is_object() && summary.contains("open_documents") && summary["open_documents"].is_array()) {
+        for (auto& doc : summary["open_documents"]) {
+            if (!doc.contains("path") || !doc["path"].is_string()) continue;
+            if (const auto it = read_ranges_.find(doc["path"].get<std::string>());
+                it != read_ranges_.end() && !it->second.empty()) {
+                Json ranges = Json::array();
+                for (const auto& [lo, hi] : it->second) {
+                    ranges.push_back(std::to_string(lo) + "-" + std::to_string(hi));
+                }
+                doc["lines_read"] = std::move(ranges);
+            }
+        }
+    }
+    s["canvas"] = std::move(summary);
     return s;
 }
 

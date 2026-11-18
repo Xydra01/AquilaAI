@@ -55,7 +55,7 @@ public slots:
     void onCodeIdeInlineEdit(const QString& prompt, const QString& selectedText, const QString& filePath);
     void onWritingSectionRevise(const QString& sectionContent, const QString& instruction);
     void onWritingCompile();
-    void onResearchSearch(const QString& query, const QString& depth = QStringLiteral("Standard (5 sources)"), const QString& engine = QStringLiteral("duckduckgo"), const QString& scope = QStringLiteral("Both"));
+    void onResearchSearch(const QString& query, const QString& depth = QStringLiteral("Standard (5 sources)"), const QString& engine = QStringLiteral("searxng"), const QString& scope = QStringLiteral("Both"));
     void onSaveResearchReport(const QString& markdown);
     void onSendResearchToArchive(const QString& topic, const QString& markdown);
     void onCharacterChat(const QString& personaId, const QString& message);

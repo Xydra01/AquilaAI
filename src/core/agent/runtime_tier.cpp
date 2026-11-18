@@ -9,23 +9,23 @@ RuntimeTierConfig RuntimeTierConfig::for_profile(ComputeProfile profile) noexcep
 
     switch (profile) {
         case ComputeProfile::gpu_high_vram:
-            // GPU boost tier (Req 4.1): 6144 / 4 / 4500 / 150 / 999.
+            // GPU boost tier (Qwen 3.5 9B @ 32K ctx): 16384 / 6 / 8000 / 192 / 999.
             config.limits = TierLimits{
-                /*condense_threshold*/ 6144,
-                /*rolling_tools*/ 4,
-                /*tool_output_chars*/ 4500,
-                /*max_thought_tokens*/ 150,
+                /*condense_threshold*/ 16384,
+                /*rolling_tools*/ 6,
+                /*tool_output_chars*/ 8000,
+                /*max_thought_tokens*/ 192,
                 /*gpu_layers*/ 999,
             };
             break;
         case ComputeProfile::cpu_moe_fast:
         case ComputeProfile::cpu_low_spec_edge:
-            // CPU tiers share the console-first table (Req 4.1): 2048 / 2 / 1500 / 45 / 0.
+            // CPU tiers share the Qwen 3.5 4B table (@ 16K ctx): 8192 / 3 / 3000 / 128 / 0.
             config.limits = TierLimits{
-                /*condense_threshold*/ 2048,
-                /*rolling_tools*/ 2,
-                /*tool_output_chars*/ 1500,
-                /*max_thought_tokens*/ 45,
+                /*condense_threshold*/ 8192,
+                /*rolling_tools*/ 3,
+                /*tool_output_chars*/ 3000,
+                /*max_thought_tokens*/ 128,
                 /*gpu_layers*/ 0,
             };
             break;

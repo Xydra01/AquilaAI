@@ -4,6 +4,7 @@
 #include "aquila/types/action.hpp"
 
 #include <string>
+#include <vector>
 
 namespace aquila {
 
@@ -15,6 +16,7 @@ struct ToolInteraction {
     std::string action;
     Json args = Json::object();
     ActionResult result;
+    std::vector<std::string> images = {};
 
     bool operator==(const ToolInteraction&) const = default;
 };

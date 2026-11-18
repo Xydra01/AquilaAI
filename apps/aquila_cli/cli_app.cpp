@@ -23,6 +23,84 @@
 
 namespace aquila::cli {
 
+namespace {
+
+std::string default_gguf_for_tier(const std::string& tier_name) {
+    const std::vector<std::string> candidates = (tier_name == "gpu")
+        ? std::vector<std::string>{
+              "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+              "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+          }
+        : std::vector<std::string>{
+              "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+              "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+              "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+              "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+          };
+    std::error_code ec;
+    for (const auto& path : candidates) {
+        if (std::filesystem::is_regular_file(path, ec)) {
+            return path;
+        }
+    }
+    return {};
+}
+
+std::string default_ollama_model_for_tier(const std::string& tier_name) {
+    return (tier_name == "gpu") ? "qwen3.5:9b" : "qwen3.5:4b";
+}
+
+std::unique_ptr<IInferenceBackend> create_cli_backend(const CliOptions& opts,
+                                                      std::ostream& err,
+                                                      int& exit_code) {
+    exit_code = 0;
+    if (opts.backend_type == "llama") {
+#if AQUILA_HAS_LLAMACPP
+        std::string resolved_model = opts.model_name;
+        if (resolved_model.empty()) {
+            resolved_model = default_gguf_for_tier(opts.tier_name);
+        }
+        if (resolved_model.empty()) {
+            err << "Error: --model <path_to_gguf> is required for llama.cpp backend.\n";
+            exit_code = 2;
+            return nullptr;
+        }
+        LlamaConfig lcfg;
+        lcfg.model_path = resolved_model;
+        lcfg.mmproj_path = opts.mmproj_path;
+        lcfg.profile = (opts.tier_name == "gpu") ? ComputeProfile::gpu_high_vram
+                                                 : ComputeProfile::cpu_low_spec_edge;
+        lcfg.n_ctx = (opts.tier_name == "gpu") ? 32768U : 16384U;
+        lcfg.n_gpu_layers = (opts.tier_name == "gpu") ? 999 : 0;
+        try {
+            return std::make_unique<LlamaCppBackend>(std::move(lcfg));
+        } catch (const std::exception& ex) {
+            err << "Error: LlamaCpp initialization failed: " << ex.what() << "\n";
+            exit_code = 1;
+            return nullptr;
+        }
+#else
+        err << "Error: LlamaCpp backend was not enabled in this build.\n";
+        exit_code = 1;
+        return nullptr;
+#endif
+    }
+
+    OllamaConfig ocfg;
+    ocfg.base_url = opts.ollama_host;
+    ocfg.model = opts.model_name.empty() ? default_ollama_model_for_tier(opts.tier_name)
+                                         : opts.model_name;
+    return std::make_unique<OllamaHttpBackend>(std::move(ocfg));
+}
+
+}  // namespace
+
 int print_version(std::ostream& out) {
     const auto v = aquila::version();
     out << "aquila " << std::string_view(v.data(), v.size()) << "\n";
@@ -47,14 +125,17 @@ int print_help(std::ostream& out) {
         << "  --task, -t <prompt>  Task prompt (defaults to recipe goal_template)\n"
         << "  --workspace, -w <p>  Workspace root directory (defaults to '.')\n"
         << "  --tier <cpu|gpu>     Runtime tier profile (default: cpu)\n"
-        << "  --backend <ollama|llama> Inference backend (default: ollama)\n"
+        << "  --backend <ollama|llama> Inference backend (auto-detects local Qwen3.5 GGUF)\n"
         << "  --model, -m <name>   Model name or GGUF path\n"
+        << "  --mmproj <path>      Optional multimodal projector GGUF path\n"
         << "  --host <url>         Ollama host (default: http://127.0.0.1:11434)\n"
         << "  --verbose, -v        Enable verbose turn outputs\n\n"
         << "Options for 'chat':\n"
         << "  --tier <cpu|gpu>     Runtime tier profile (default: cpu)\n"
-        << "  --backend <name>     Inference backend (default: ollama)\n"
+        << "  --backend <name>     Inference backend (ollama|llama)\n"
         << "  --model, -m <name>   Model name or GGUF path\n"
+        << "  --mmproj <path>      Optional multimodal projector GGUF path\n"
+        << "  --image <path>       Attach image to the first user message (repeatable)\n"
         << "  --host <url>         Ollama host URL\n";
     return 0;
 }
@@ -95,15 +176,7 @@ int list_modules(std::ostream& out) {
     ModuleContext ctx;
     ctx.workspace_root = ".";
 
-    const std::vector<std::string> module_names = {
-        "WorkspaceModule",
-        "ExecutionModule",
-        "OrchestratorModule",
-        "KnowledgeModule",
-        "DocumentModule",
-        "PersonaModule",
-        "LearnModule"
-    };
+    const std::vector<std::string> module_names = registry.ids();
 
     out << "Registered Modules (" << module_names.size() << "):\n";
     for (const auto& name : module_names) {
@@ -205,9 +278,15 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
     } else {
         config.tier = RuntimeTierConfig::default_config();
     }
+    const bool has_browser = std::any_of(recipe.load_modules.begin(), recipe.load_modules.end(),
+        [](const ModuleLoad& lm) { return lm.module == "BrowserModule"; });
+    const std::uint32_t min_turns = (has_browser || recipe.recipe_id.find("research") != std::string::npos) ? 28u : 24u;
+    if (config.tier.limits.max_turns < min_turns) {
+        config.tier.limits.max_turns = min_turns;
+    }
     config.task_id = "cli-" + recipe.recipe_id;
     config.mode = "task";
-    config.context_strategy = CondenserStrategy::sac;
+    config.context_strategy = CondenserStrategy::eocc;
 
     config.on_token = [&out](std::string_view tok, std::string_view) -> bool {
         out << tok;
@@ -241,74 +320,25 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
     ModuleContext mod_ctx;
     mod_ctx.workspace_root = opts.workspace_root;
 
-    if (custom_backend != nullptr) {
-        AgentLoop loop(*custom_backend, registry, mod_ctx);
-        const auto res = loop.run(recipe, task, config);
-        out << "\n========================================\n"
-            << "Recipe execution " << (res.success ? "SUCCEEDED" : "FAILED") << "\n"
-            << "Outcome: " << (res.outcome == LoopOutcome::success ? "success" : (res.outcome == LoopOutcome::aborted ? "aborted" : "turn_limit")) << "\n"
-            << "Turns: " << res.transcript.size() << "\n";
-        if (!res.completion_output.empty()) {
-            out << "Completion Output: " << res.completion_output << "\n";
+    std::unique_ptr<IInferenceBackend> owned_backend;
+    IInferenceBackend* active_backend = custom_backend;
+    if (active_backend == nullptr) {
+        int be_err = 0;
+        owned_backend = create_cli_backend(opts, err, be_err);
+        if (owned_backend == nullptr) {
+            return be_err;
         }
-        if (run_logger && run_logger->is_active()) {
-            out << "Session Log:  " << run_logger->log_path().string() << "\n"
-                << "Event Stream: " << run_logger->jsonl_path().string() << "\n";
-        }
-        out << "========================================\n";
-        return res.success ? 0 : 1;
+        active_backend = owned_backend.get();
     }
 
-    if (opts.backend_type == "llama") {
-#if AQUILA_HAS_LLAMACPP
-        if (opts.model_name.empty()) {
-            err << "Error: --model <path_to_gguf> is required for llama.cpp backend.\n";
-            return 2;
-        }
-        LlamaConfig lcfg;
-        lcfg.model_path = opts.model_name;
-        lcfg.n_ctx = (opts.tier_name == "gpu") ? 8192 : 2048;
-        if (opts.tier_name == "gpu") {
-            lcfg.n_gpu_layers = 999;
-        }
-        try {
-            LlamaCppBackend backend(lcfg);
-            AgentLoop loop(backend, registry, mod_ctx);
-            const auto res = loop.run(recipe, task, config);
-            out << "\n========================================\n"
-                << "Recipe execution " << (res.success ? "SUCCEEDED" : "FAILED") << "\n"
-                << "Outcome: " << (res.outcome == LoopOutcome::success ? "success" : "failure") << "\n"
-                << "Turns: " << res.transcript.size() << "\n";
-            if (!res.completion_output.empty()) {
-                out << "Completion Output: " << res.completion_output << "\n";
-            }
-            if (run_logger && run_logger->is_active()) {
-                out << "Session Log:  " << run_logger->log_path().string() << "\n"
-                    << "Event Stream: " << run_logger->jsonl_path().string() << "\n";
-            }
-            out << "========================================\n";
-            return res.success ? 0 : 1;
-        } catch (const std::exception& ex) {
-            err << "Error: LlamaCpp initialization failed: " << ex.what() << "\n";
-            return 1;
-        }
-#else
-        err << "Error: LlamaCpp backend was not enabled in this build.\n";
-        return 1;
-#endif
-    }
-
-    OllamaConfig ocfg;
-    ocfg.base_url = opts.ollama_host;
-    if (!opts.model_name.empty()) {
-        ocfg.model = opts.model_name;
-    }
-    OllamaHttpBackend backend(ocfg);
-    AgentLoop loop(backend, registry, mod_ctx);
+    AgentLoop loop(*active_backend, registry, mod_ctx);
     const auto res = loop.run(recipe, task, config);
     out << "\n========================================\n"
         << "Recipe execution " << (res.success ? "SUCCEEDED" : "FAILED") << "\n"
-        << "Outcome: " << (res.outcome == LoopOutcome::success ? "success" : "failure") << "\n"
+        << "Outcome: " << (res.outcome == LoopOutcome::success
+                                ? "success"
+                                : (res.outcome == LoopOutcome::aborted ? "aborted" : "turn_limit"))
+        << "\n"
         << "Turns: " << res.transcript.size() << "\n";
     if (!res.completion_output.empty()) {
         out << "Completion Output: " << res.completion_output << "\n";
@@ -321,20 +351,19 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
     return res.success ? 0 : 1;
 }
 
-int run_chat(const CliOptions& opts, std::istream& in, std::ostream& out, std::ostream& /*err*/,
+int run_chat(const CliOptions& opts, std::istream& in, std::ostream& out, std::ostream& err,
              IInferenceBackend* custom_backend) {
     out << "Aquila Chat REPL (type /help for commands, /exit to quit)\n";
-    out << "Connecting to backend (" << opts.backend_type << ")...\n\n";
+    out << "Connecting to backend (" << opts.backend_type << ", tier " << opts.tier_name << ")...\n\n";
 
     std::unique_ptr<IInferenceBackend> local_backend;
     IInferenceBackend* backend = custom_backend;
     if (backend == nullptr) {
-        OllamaConfig ocfg;
-        ocfg.base_url = opts.ollama_host;
-        if (!opts.model_name.empty()) {
-            ocfg.model = opts.model_name;
+        int be_err = 0;
+        local_backend = create_cli_backend(opts, err, be_err);
+        if (local_backend == nullptr) {
+            return be_err;
         }
-        local_backend = std::make_unique<OllamaHttpBackend>(ocfg);
         backend = local_backend.get();
     }
 
@@ -343,6 +372,7 @@ int run_chat(const CliOptions& opts, std::istream& in, std::ostream& out, std::o
     system_msg.content = "You are Aquila, a helpful, precise AI assistant.";
     backend->append(system_msg);
 
+    std::vector<std::string> pending_images = opts.image_paths;
     std::string line;
     while (true) {
         out << "\nYou> ";
@@ -366,14 +396,27 @@ int run_chat(const CliOptions& opts, std::istream& in, std::ostream& out, std::o
         }
         if (trimmed == "/help") {
             out << "Commands:\n"
-                << "  /help   - Show this help\n"
-                << "  /reset  - Clear conversation context\n"
-                << "  /exit   - Quit the REPL\n";
+                << "  /help         - Show this help\n"
+                << "  /image <path> - Attach an image to the next prompt\n"
+                << "  /reset        - Clear conversation context\n"
+                << "  /exit         - Quit the REPL\n";
+            continue;
+        }
+        if (trimmed.rfind("/image ", 0) == 0) {
+            std::string path = trimmed.substr(7);
+            while (!path.empty() && (path.front() == ' ' || path.front() == '"')) path.erase(0, 1);
+            while (!path.empty() && (path.back() == ' ' || path.back() == '"')) path.pop_back();
+            if (!path.empty()) {
+                pending_images.push_back(path);
+                out << "Attached image for next turn (" << pending_images.size() << " queued): "
+                    << path << "\n";
+            }
             continue;
         }
         if (trimmed == "/reset") {
             backend->rollback_to(0);
             backend->append(system_msg);
+            pending_images.clear();
             out << "Conversation context reset.\n";
             continue;
         }
@@ -381,20 +424,43 @@ int run_chat(const CliOptions& opts, std::istream& in, std::ostream& out, std::o
         Message user_msg;
         user_msg.role = Role::user;
         user_msg.content = trimmed;
-        backend->append(user_msg);
-
-        out << "Aquila> ";
-        out.flush();
+        user_msg.images = std::move(pending_images);
+        pending_images.clear();
+        try {
+            backend->append(user_msg);
+        } catch (const std::exception& ex) {
+            out << "[Error appending prompt: " << ex.what() << "]\n";
+            continue;
+        }
 
         GenerationParams params;
         params.temperature = 0.7;
-        auto on_tok = [&out](std::string_view tok, std::string_view) -> bool {
-            out << tok;
-            out.flush();
+        bool started_thinking = false;
+        bool started_content = false;
+        auto on_tok = [&](std::string_view tok, std::string_view think) -> bool {
+            if (!think.empty()) {
+                if (!started_thinking) {
+                    out << "[Thinking] ";
+                    started_thinking = true;
+                }
+                out << think;
+                out.flush();
+            }
+            if (!tok.empty()) {
+                if (!started_content) {
+                    out << (started_thinking ? "\nAquila> " : "Aquila> ");
+                    started_content = true;
+                }
+                out << tok;
+                out.flush();
+            }
             return true;
         };
 
         const auto gen = backend->generate(params, on_tok);
+        if (!started_content && !started_thinking) {
+            out << "Aquila> ";
+        }
         out << "\n";
         if (!gen.ok) {
             out << "[Error: " << gen.error_code << ": " << gen.error_detail << "]\n";
@@ -443,38 +509,12 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
         std::shared_ptr<IInferenceBackend> backend_holder;
         IInferenceBackend* active_be = custom_backend;
         if (active_be == nullptr) {
-            if (opts.backend_type == "llama") {
-#if AQUILA_HAS_LLAMACPP
-                if (opts.model_name.empty()) {
-                    err << "Error: --model <path_to_gguf> is required for llama.cpp backend.\n";
-                    return 2;
-                }
-                LlamaConfig lcfg;
-                lcfg.model_path = opts.model_name;
-                lcfg.n_ctx = (opts.tier_name == "gpu") ? 8192 : 2048;
-                if (opts.tier_name == "gpu") {
-                    lcfg.n_gpu_layers = 999;
-                }
-                try {
-                    backend_holder = std::make_shared<LlamaCppBackend>(lcfg);
-                    active_be = backend_holder.get();
-                } catch (const std::exception& e) {
-                    err << "Error: failed to initialize Llama backend: " << e.what() << "\n";
-                    return 1;
-                }
-#else
-                err << "Error: llama.cpp backend not enabled in this build.\n";
-                return 1;
-#endif
-            } else {
-                OllamaConfig ocfg;
-                ocfg.base_url = opts.ollama_host;
-                if (!opts.model_name.empty()) {
-                    ocfg.model = opts.model_name;
-                }
-                backend_holder = std::make_shared<OllamaHttpBackend>(ocfg);
-                active_be = backend_holder.get();
+            int be_err = 0;
+            backend_holder = create_cli_backend(opts, err, be_err);
+            if (!backend_holder) {
+                return be_err;
             }
+            active_be = backend_holder.get();
         }
 
         ModuleRegistry registry = ModuleRegistry::builtin();
@@ -490,7 +530,7 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
         }
         config.task_id = "live-eval-" + recipe.recipe_id;
         config.mode = "task";
-        config.context_strategy = CondenserStrategy::sac;
+        config.context_strategy = CondenserStrategy::eocc;
 
         struct TurnDissection {
             int turn = 0;
@@ -760,6 +800,10 @@ CliOptions parse_args(int argc, const char* const* argv) {
             backend_explicitly_set = true;
         } else if ((arg == "--model" || arg == "-m") && i + 1 < argc) {
             opts.model_name = argv[++i];
+        } else if (arg == "--mmproj" && i + 1 < argc) {
+            opts.mmproj_path = argv[++i];
+        } else if (arg == "--image" && i + 1 < argc) {
+            opts.image_paths.emplace_back(argv[++i]);
         } else if (arg == "--host" && i + 1 < argc) {
             opts.ollama_host = argv[++i];
         } else {
@@ -769,10 +813,17 @@ CliOptions parse_args(int argc, const char* const* argv) {
 
 #if AQUILA_HAS_LLAMACPP
     if (!backend_explicitly_set && opts.backend_type == "ollama") {
-        if (std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
-            opts.backend_type = "llama";
-            opts.tier_name = "gpu";
-            opts.model_name = "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
+        if (!opts.model_name.empty()) {
+            if (opts.model_name.size() >= 5 &&
+                opts.model_name.compare(opts.model_name.size() - 5, 5, ".gguf") == 0) {
+                opts.backend_type = "llama";
+            }
+        } else {
+            const std::string discovered = default_gguf_for_tier(opts.tier_name);
+            if (!discovered.empty()) {
+                opts.backend_type = "llama";
+                opts.model_name = discovered;
+            }
         }
     }
 #endif

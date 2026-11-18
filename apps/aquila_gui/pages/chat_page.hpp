@@ -19,6 +19,7 @@ public:
     void appendUserMessage(const QString& text, const QStringList& attachments = {});
     void appendAssistantMessage(const QString& text);
     void appendToken(const QString& token);
+    void appendThinkingToken(const QString& thinking);
     void appendSystemMessage(const QString& text);
     void finalizeAssistantMessage();
     void clearTranscript();
@@ -56,6 +57,7 @@ private:
     FlowLayout* suggestionsLayout_ = nullptr;
 
     QString currentAssistantReply_;
+    QString currentThinkingReply_;
     bool isStreaming_ = false;
     int streamingStartPos_ = -1;
     QStringList currentAttachments_;

@@ -22,8 +22,11 @@ public:
                                       const aquila::TokenCallback& on_token) override {
         aquila::GenerationResult res;
         res.ok = true;
-        // Output complete_recipe action
-        res.content = R"({"thought":"done","module":"OrchestratorModule","action":"complete_recipe","args":{"output":"all done"}})";
+        if (turn_++ == 0) {
+            res.content = R"({"thought":"complete ledger","module":"OrchestratorModule","action":"update_task_ledger","args":{"completed_steps":["1","2","3","4","5"]}})";
+        } else {
+            res.content = R"({"thought":"done","module":"OrchestratorModule","action":"complete_recipe","args":{"output":"all done"}})";
+        }
         if (on_token) {
             on_token(res.content, "");
         }
@@ -36,6 +39,7 @@ public:
 
 private:
     std::vector<aquila::Message> messages_;
+    int turn_ = 0;
 };
 
 }  // namespace
@@ -102,6 +106,7 @@ TEST_CASE("cli: parse_args and dispatch flags", "[cli]") {
         std::istringstream in;
         int rc = aquila::cli::dispatch(opts, in, out, err);
         CHECK(rc == 0);
+        CHECK(out.str().find("[BrowserModule]") != std::string::npos);
         CHECK(out.str().find("[WorkspaceModule]") != std::string::npos);
         CHECK(out.str().find("[ExecutionModule]") != std::string::npos);
         CHECK(out.str().find("[OrchestratorModule]") != std::string::npos);
@@ -155,7 +160,7 @@ TEST_CASE("cli: parse_args and dispatch flags", "[cli]") {
     SECTION("run command execution with mock backend") {
         aquila::cli::CliOptions opts;
         opts.command = "run";
-        opts.recipe_id = "fn_research_offline";
+        opts.recipe_id = "fn_writing_dynamic";
         opts.task_prompt = "Research quantum mechanics";
 
         CliMockBackend mock;

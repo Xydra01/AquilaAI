@@ -37,7 +37,11 @@ void from_json(const Json& j, ChecklistItem& v, const std::string& path) {
     reject_unknown(j, path, {"id", "text", "status"});
     v.id = read_string(require(j, path, "id"), child_path(path, "id"));
     v.text = read_string(require(j, path, "text"), child_path(path, "text"));
-    v.status = read_status(require(j, path, "status"), child_path(path, "status"));
+    if (j.contains("status")) {
+        v.status = read_status(require(j, path, "status"), child_path(path, "status"));
+    } else {
+        v.status = ChecklistStatus::pending;
+    }
 }
 
 void to_json(Json& j, const AgentScratchpad& v) {

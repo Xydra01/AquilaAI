@@ -22,6 +22,7 @@ add_executable(aquila_unit_tests
     orchestrator_module_test.cpp
     agent_loop_test.cpp
     recipe_cartridge_test.cpp
+    task_ledger_test.cpp
     # M5 (tasks 2.3/2.4): LlamaSession checkpoint/rollback properties + RAII/overflow
     # unit tests. The whole llama-dependent body is guarded by `#if AQUILA_HAS_LLAMACPP`,
     # so on the stub lanes (mingw-san / msvc-asan) it compiles to one trivially-passing
@@ -49,6 +50,7 @@ add_executable(aquila_unit_tests
     page_scorer_test.cpp
     web_search_test.cpp
     knowledge_module_test.cpp
+    browser_module_test.cpp
     knowledge_recipe_test.cpp
     document_module_test.cpp
     persona_module_test.cpp
@@ -78,7 +80,15 @@ target_compile_definitions(aquila_unit_tests PRIVATE
     # model (URL + SHA256 FetchContent) so CI can fetch it -- orchestrator decision.
     AQUILA_TINY_GGUF="${AQUILA_TINY_GGUF_PATH}")
 add_dependencies(aquila_unit_tests aquila_proc_helper)
+if(TARGET aquila_browser)
+    target_compile_definitions(aquila_unit_tests PRIVATE AQUILA_HAS_BROWSER=1)
+    add_dependencies(aquila_unit_tests aquila_browser)
+endif()
 aquila_set_warnings(aquila_unit_tests)
 
 add_test(NAME unit COMMAND aquila_unit_tests --reporter console)
-aquila_test_env(unit)
+if(DEFINED AQUILA_QT_BIN_DIR)
+    aquila_test_env(unit "${AQUILA_QT_BIN_DIR}")
+else()
+    aquila_test_env(unit)
+endif()

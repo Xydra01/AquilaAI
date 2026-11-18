@@ -62,7 +62,8 @@ ChatPage::ChatPage(QWidget *parent)
   btnCol->setSpacing(4);
 
   attachButton_ = new QPushButton(QStringLiteral("📎"), this);
-  attachButton_->setToolTip(QStringLiteral("Attach file..."));
+  attachButton_->setToolTip(
+      QStringLiteral("Attach image (.png, .jpg, .webp) or text/code file..."));
   attachButton_->setFixedSize(38, 36);
   connect(attachButton_, &QPushButton::clicked, this,
           &ChatPage::onAttachClicked);
@@ -222,6 +223,7 @@ ChatPage::ChatPage(QWidget *parent)
     if (!isStreaming_) {
       isStreaming_ = true;
       currentAssistantReply_.clear();
+      currentThinkingReply_.clear();
       streamingStartPos_ = transcript_->document()->characterCount() - 1;
       transcript_->append(
           QStringLiteral("<div id='streamingBubble' style='margin-bottom: "
@@ -235,6 +237,11 @@ ChatPage::ChatPage(QWidget *parent)
                          "    <span id='streamingText'></span>"
                          "  </div>"
                          "</div>"));
+    } else if (!currentThinkingReply_.isEmpty() && currentAssistantReply_.isEmpty()) {
+      auto cursor = transcript_->textCursor();
+      cursor.movePosition(QTextCursor::End);
+      cursor.insertText(QStringLiteral("\n\n"));
+      transcript_->setTextCursor(cursor);
     }
 
     currentAssistantReply_ += token;
@@ -247,17 +254,68 @@ ChatPage::ChatPage(QWidget *parent)
     bar->setValue(bar->maximum());
   }
 
+  void ChatPage::appendThinkingToken(const QString &thinking) {
+    if (thinking.isEmpty()) {
+      return;
+    }
+    if (!isStreaming_) {
+      isStreaming_ = true;
+      currentAssistantReply_.clear();
+      currentThinkingReply_.clear();
+      streamingStartPos_ = transcript_->document()->characterCount() - 1;
+      transcript_->append(
+          QStringLiteral("<div id='streamingBubble' style='margin-bottom: "
+                         "12px; text-align: left;'>"
+                         "  <div style='background-color: #252526; color: "
+                         "#9da7b3; border: 1px solid #3c3c3c; "
+                         "              border-radius: 12px; padding: 10px "
+                         "14px; display: inline-block; max-width: 85%%;'>"
+                         "    <div style='font-size: 11px; font-weight: bold; "
+                         "color: #79c0ff; margin-bottom: 4px;'>🦅 Aquila</div>"
+                         "    <span id='streamingText'></span>"
+                         "  </div>"
+                         "</div>"));
+      auto cursor = transcript_->textCursor();
+      cursor.movePosition(QTextCursor::End);
+      cursor.insertText(QStringLiteral("[Thinking] "));
+      transcript_->setTextCursor(cursor);
+    }
+
+    currentThinkingReply_ += thinking;
+    auto cursor = transcript_->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(thinking);
+    transcript_->setTextCursor(cursor);
+
+    auto *bar = transcript_->verticalScrollBar();
+    bar->setValue(bar->maximum());
+  }
+
   void ChatPage::finalizeAssistantMessage() {
     if (isStreaming_) {
       isStreaming_ = false;
       const QString fullReply = currentAssistantReply_;
+      const QString fullThinking = currentThinkingReply_;
       currentAssistantReply_.clear();
+      currentThinkingReply_.clear();
 
-      if (streamingStartPos_ >= 0 && !fullReply.isEmpty()) {
+      if (streamingStartPos_ >= 0 && (!fullReply.isEmpty() || !fullThinking.isEmpty())) {
         QTextCursor cur(transcript_->document());
         cur.setPosition(streamingStartPos_);
         cur.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
         cur.removeSelectedText();
+
+        QString thinkingBlockHtml;
+        if (!fullThinking.trimmed().isEmpty()) {
+          thinkingBlockHtml =
+              QStringLiteral("<div style='background-color: #1c2128; color: #8b949e; "
+                             "border-left: 3px solid #388bfd; padding: 6px 10px; "
+                             "margin-bottom: 8px; font-size: 12px; font-style: italic;'>"
+                             "<div style='font-weight: bold; color: #79c0ff; margin-bottom: 2px;'>"
+                             "Thinking</div>%1</div>")
+                  .arg(fullThinking.trimmed().toHtmlEscaped().replace(
+                      QStringLiteral("\n"), QStringLiteral("<br/>")));
+        }
 
         const QString formattedHtml = MarkdownRenderer::toHtml(fullReply);
         const QString html =
@@ -268,10 +326,10 @@ ChatPage::ChatPage(QWidget *parent)
                            "display: inline-block; max-width: 85%%;'>"
                            "    <div style='font-size: 11px; font-weight: bold; "
                            "color: #79c0ff; margin-bottom: 4px;'>🦅 Aquila</div>"
-                           "    <div>%1</div>"
+                           "    %1<div>%2</div>"
                            "  </div>"
                            "</div>")
-                .arg(formattedHtml);
+                .arg(thinkingBlockHtml, formattedHtml);
         cur.insertHtml(html);
         streamingStartPos_ = -1;
       }
@@ -292,6 +350,7 @@ ChatPage::ChatPage(QWidget *parent)
   void ChatPage::clearTranscript() {
     transcript_->clear();
     currentAssistantReply_.clear();
+    currentThinkingReply_.clear();
     isStreaming_ = false;
   }
 
@@ -343,7 +402,10 @@ ChatPage::ChatPage(QWidget *parent)
 
   void ChatPage::onAttachClicked() {
       const QStringList files = QFileDialog::getOpenFileNames(
-          this, QStringLiteral("Select Files to Attach"));
+          this,
+          QStringLiteral("Select Image or Text Files to Attach"),
+          QString(),
+          QStringLiteral("Supported Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.txt *.md *.py *.cpp *.hpp *.h *.json *.csv *.js *.ts);;Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*)"));
       for (const auto &file : files) {
         addAttachment(file);
       }

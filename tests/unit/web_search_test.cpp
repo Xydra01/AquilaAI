@@ -1,5 +1,6 @@
 #include "aquila/knowledge/web_search.hpp"
 #include "aquila/knowledge/knowledge_module.hpp"
+#include "aquila/knowledge/searxng_manager.hpp"
 #include "aquila/modules/registry.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -16,6 +17,31 @@ TEST_CASE("WebSearchEngine: provider resolution and options", "[web_search]") {
     CHECK(to_string(SearchProvider::duckduckgo) == "duckduckgo");
     CHECK(to_string(SearchProvider::searxng) == "searxng");
     CHECK(to_string(SearchProvider::wikipedia) == "wikipedia");
+
+    // SearXNG is the default search provider
+    SearchOptions default_opts;
+    CHECK(default_opts.provider == SearchProvider::searxng);
+    CHECK(default_opts.searxng_endpoint == "http://127.0.0.1:8888");
+}
+
+TEST_CASE("SearxngManager: endpoint parsing, loopback detection, and script resolution", "[web_search][searxng]") {
+    std::string host;
+    int port = 0;
+    REQUIRE(SearxngManager::parse_endpoint("http://127.0.0.1:8888", host, port));
+    CHECK(host == "127.0.0.1");
+    CHECK(port == 8888);
+
+    REQUIRE(SearxngManager::parse_endpoint("http://localhost:9090/search", host, port));
+    CHECK(host == "localhost");
+    CHECK(port == 9090);
+
+    CHECK(SearxngManager::is_loopback_endpoint("http://127.0.0.1:8888"));
+    CHECK(SearxngManager::is_loopback_endpoint("http://localhost:8888"));
+    CHECK_FALSE(SearxngManager::is_loopback_endpoint("https://search.example.com"));
+
+    const std::string script = SearxngManager::resolve_script_path();
+    CHECK_FALSE(script.empty());
+    CHECK(script.find("run_searxng.py") != std::string::npos);
 }
 
 TEST_CASE("WebSearchEngine: mock search handler and ranking", "[web_search]") {

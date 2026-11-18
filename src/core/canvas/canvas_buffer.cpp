@@ -295,6 +295,24 @@ Json CanvasBuffer::snapshot() const {
     return Json{{"documents", docs}, {"pending", pend}, {"next_patch", next_patch_}};
 }
 
+Json CanvasBuffer::summary() const {
+    Json docs = Json::array();
+    for (const auto& [path, d] : docs_) {
+        const std::string& text = d.text();
+        const std::size_t line_count =
+            text.empty() ? 0 : static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n')) + 1;
+        docs.push_back(Json{{"path", d.path},
+                            {"line_count", line_count},
+                            {"dirty", d.current != 0 || !d.exists_on_disk},
+                            {"versions_count", d.versions.size()}});
+    }
+    Json pend = Json::array();
+    for (const auto& p : pending_) {
+        pend.push_back(Json{{"id", p.id}, {"path", p.path}});
+    }
+    return Json{{"open_documents", docs}, {"pending_patches", pend}};
+}
+
 void CanvasBuffer::restore(const Json& s) {
     using namespace json_io;
     expect_object(s, "");

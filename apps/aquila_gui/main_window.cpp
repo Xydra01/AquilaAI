@@ -4,7 +4,9 @@
 #include "theme/theme.hpp"
 
 #include "aquila/core.hpp"
+#include "aquila/knowledge/browser_module.hpp"
 #include "aquila/knowledge/knowledge_module.hpp"
+#include "aquila/knowledge/searxng_manager.hpp"
 #include "aquila/knowledge/web_search.hpp"
 #include "aquila/knowledge/page_scorer.hpp"
 #include "aquila/learn/learn_module.hpp"
@@ -14,14 +16,17 @@
 #endif
 
 #include <filesystem>
+#include <optional>
 #include <QAction>
 #include <QApplication>
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -46,6 +51,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         learnMasteryLevel_ = learnPage_->masteryLevel();
     }
     refreshLearnArchiveSources();
+    if (researchPage_) {
+        researchPage_->loadScreenshotsFromDir(workspaceRoot_);
+    }
+
+    // Auto-start local SearXNG in background during normal interactive GUI sessions
+    // (skip in headless/smoke/visual automated test runs to keep them fast and self-contained).
+    const QStringList args = QCoreApplication::arguments();
+    const bool isAutomatedTest =
+        args.contains(QStringLiteral("--smoke")) ||
+        args.contains(QStringLiteral("--test-headless")) ||
+        args.contains(QStringLiteral("--run-headless-tests")) ||
+        args.contains(QStringLiteral("--test-visual")) ||
+        args.contains(QStringLiteral("--visual-audit"));
+    if (!isAutomatedTest && settingsPage_) {
+        const std::string ep = settingsPage_->searxngEndpoint().toStdString();
+        aquila::knowledge::SearxngManager::instance().ensure_running_async(
+            ep.empty() ? std::string("http://127.0.0.1:8888") : ep);
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -60,6 +83,7 @@ MainWindow::~MainWindow() {
         activeWorker_->cancel();
         activeWorker_->wait(1000);
     }
+    aquila::knowledge::SearxngManager::instance().shutdown();
     delete homePage_;
     homePage_ = nullptr;
     delete chatPage_;
@@ -215,6 +239,10 @@ void MainWindow::setupConnections() {
     connect(writingPage_, &WritingPage::compileDocumentRequested, this, &MainWindow::onWritingCompile);
 
     connect(researchPage_, &ResearchPage::searchRequested, this, &MainWindow::onResearchSearch);
+    connect(researchPage_, &ResearchPage::deepAgentRequested, this, [this](const QString& query) {
+        switchMode(2); // Task Center
+        onTaskRun(QStringLiteral("fn_research_full"), query);
+    });
     connect(researchPage_, &ResearchPage::saveReportRequested, this, &MainWindow::onSaveResearchReport);
     connect(researchPage_, &ResearchPage::sendToArchiveRequested, this, &MainWindow::onSendResearchToArchive);
 
@@ -252,6 +280,9 @@ void MainWindow::setWorkspaceRoot(const QString& path) {
     homePage_->setWorkspacePath(path);
     codeIdePage_->setWorkspaceRoot(path);
     refreshLearnArchiveSources();
+    if (researchPage_) {
+        researchPage_->loadScreenshotsFromDir(workspaceRoot_);
+    }
 }
 
 void MainWindow::onThemeToggle() {
@@ -288,14 +319,14 @@ void MainWindow::onSettingsApplied() {
             displayName = displayName.mid(slashIdx + 1);
         }
         if (displayName.isEmpty()) {
-            displayName = isGpu ? QStringLiteral("Llama-3.1-8B") : QStringLiteral("Llama-3.2-3B");
+            displayName = isGpu ? QStringLiteral("Qwen3.5-9B") : QStringLiteral("Qwen3.5-4B");
         }
         topModelBadge_->setText(QStringLiteral("🧠 Model: %1 (%2)").arg(displayName, isGpu ? QStringLiteral("llama.cpp CUDA") : QStringLiteral("llama.cpp CPU")));
         topModelBadge_->setStyleSheet(QStringLiteral(
             "background-color: rgba(163, 113, 247, 0.2); color: #d2a8ff; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight:bold;"
         ));
     } else {
-        topModelBadge_->setText(QStringLiteral("🧠 Model: %1 (Ollama)").arg(mName.isEmpty() ? QStringLiteral("aquila") : mName));
+        topModelBadge_->setText(QStringLiteral("🧠 Model: %1 (Ollama)").arg(mName.isEmpty() ? QStringLiteral("qwen3.5:4b") : mName));
         topModelBadge_->setStyleSheet(QStringLiteral(
             "background-color: rgba(63, 185, 80, 0.15); color: #7ee787; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight:bold;"
         ));
@@ -313,12 +344,38 @@ std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
         LlamaConfig lcfg;
         const bool isGpu = (settingsPage_->computeTier() == QStringLiteral("gpu"));
         QString m = settingsPage_->modelName().trimmed();
-        if (m.isEmpty() || m == QStringLiteral("aquila")) {
-            if (isGpu && std::filesystem::exists("D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")) {
-                lcfg.model_path = "D:/aquila-models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
-            } else if (std::filesystem::exists("D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf")) {
-                lcfg.model_path = "D:/aquila-models/Llama-3.2-3B-Instruct-Q4_K_M.gguf";
-            } else {
+        const bool needsDiscovery = m.isEmpty() ||
+                                    m == QStringLiteral("aquila") ||
+                                    m.startsWith(QStringLiteral("qwen3.5:")) ||
+                                    m.startsWith(QStringLiteral("D:/"), Qt::CaseInsensitive) ||
+                                    m.contains(QStringLiteral("llama"), Qt::CaseInsensitive) ||
+                                    !QFile::exists(m);
+        if (needsDiscovery) {
+            const std::initializer_list<const char*> candidates = isGpu
+                ? std::initializer_list<const char*>{
+                      "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+                      "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+                      "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+                      "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+                      "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+                      "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+                  }
+                : std::initializer_list<const char*>{
+                      "F:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+                      "F:/Users/myfri/agent-projects/Qwen3.5-4B-Q4_K_M.gguf",
+                      "F:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+                      "F:/Users/myfri/agent-projects/Qwen3.5-9B-Q4_K_M.gguf",
+                      "D:/aquila-models/Qwen3.5-4B-Q4_K_M.gguf",
+                      "D:/aquila-models/Qwen3.5-9B-Q4_K_M.gguf",
+                  };
+            std::error_code ec;
+            for (const char* p : candidates) {
+                if (std::filesystem::is_regular_file(p, ec)) {
+                    lcfg.model_path = p;
+                    break;
+                }
+            }
+            if (lcfg.model_path.empty()) {
                 lcfg.model_path = m.toStdString();
             }
         } else {
@@ -337,9 +394,10 @@ std::shared_ptr<aquila::IInferenceBackend> MainWindow::createBackend() {
 #endif
     OllamaConfig cfg;
     cfg.base_url = settingsPage_->ollamaHost().toStdString();
+    const bool isGpu = (settingsPage_->computeTier() == QStringLiteral("gpu"));
     QString m = settingsPage_->modelName().trimmed();
     if (m.isEmpty() || m == QStringLiteral("aquila")) {
-        cfg.model = "llama3.2:latest";
+        cfg.model = isGpu ? "qwen3.5:9b" : "qwen3.5:4b";
     } else {
         cfg.model = m.toStdString();
     }
@@ -377,23 +435,46 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
     }
 
     QString fullPrompt = prompt;
+    std::vector<std::string> userImages;
     if (!attachments.isEmpty()) {
         QString contextBlocks;
         qint64 totalBytesRead = 0;
-        const qint64 maxBudget = 100 * 1024; // 100 KB total context budget protection
+        const qint64 maxBudget = 100 * 1024; // 100 KB total text attachment budget protection
 
         for (const auto& filePath : attachments) {
+            QFileInfo fi(filePath);
+            const QString ext = fi.suffix().toLower();
+            if (ext == QStringLiteral("png") || ext == QStringLiteral("jpg") ||
+                ext == QStringLiteral("jpeg") || ext == QStringLiteral("bmp") ||
+                ext == QStringLiteral("gif") || ext == QStringLiteral("webp")) {
+                if (ext == QStringLiteral("webp")) {
+                    // libmtmd builds with MTMD_VIDEO=OFF decode PNG/JPEG/BMP/GIF via stb_image;
+                    // normalize WebP to in-memory PNG base64 so vision decode works seamlessly.
+                    QImage img(filePath);
+                    if (!img.isNull()) {
+                        QByteArray pngBytes;
+                        QBuffer buf(&pngBytes);
+                        buf.open(QIODevice::WriteOnly);
+                        if (img.save(&buf, "PNG")) {
+                            userImages.push_back(
+                                "data:image/png;base64," + pngBytes.toBase64().toStdString());
+                        }
+                    }
+                } else {
+                    userImages.push_back(filePath.toStdString());
+                }
+                continue;
+            }
+
             QFile file(filePath);
             if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QFileInfo fi(filePath);
-                const QString ext = fi.suffix();
                 const qint64 remaining = maxBudget - totalBytesRead;
                 if (remaining <= 0) break;
                 QByteArray content = file.read(remaining);
                 totalBytesRead += content.size();
                 contextBlocks += QStringLiteral("\n\n---\n[Attached File: %1]\n```%2\n%3\n```\n").arg(
                     fi.fileName(),
-                    ext,
+                    fi.suffix(),
                     QString::fromUtf8(content)
                 );
                 if (totalBytesRead >= maxBudget) {
@@ -407,6 +488,8 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
                 contextBlocks,
                 prompt.isEmpty() ? QStringLiteral("Please analyze the attached file(s).") : prompt
             );
+        } else if (fullPrompt.isEmpty() && !userImages.empty()) {
+            fullPrompt = QStringLiteral("Please describe and analyze the attached image(s).");
         }
     }
 
@@ -415,14 +498,16 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
     LoopConfig config;
     config.task_id = "gui-chat";
     config.mode = "chat";
-    config.context_strategy = CondenserStrategy::sac;
+    config.context_strategy = CondenserStrategy::eocc;
 
     chatPage_->setRunning(true);
     statusBarLabel_->setText(QStringLiteral("Thinking..."));
 
     activeWorker_ = new AgentWorker(activeBackend_, recipe, fullPrompt.toStdString(), config, workspaceRoot_.toStdString(), this);
     activeWorker_->setChatHistory(chatHistory_);
+    activeWorker_->setUserImages(userImages);
 
+    connect(activeWorker_, &AgentWorker::thinkingStreamed, chatPage_, &ChatPage::appendThinkingToken);
     connect(activeWorker_, &AgentWorker::tokenStreamed, chatPage_, &ChatPage::appendToken);
     connect(activeWorker_, &AgentWorker::statusChanged, this, [this](const QString& status) {
         statusBarLabel_->setText(status);
@@ -430,14 +515,26 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
     });
 
     const std::string promptStd = fullPrompt.toStdString();
-    connect(activeWorker_, &AgentWorker::finished, this, [this, promptStd](bool success, const QString& output) {
+    connect(activeWorker_, &AgentWorker::finished, this, [this, promptStd, userImages](bool success, const QString& output) {
         chatPage_->setRunning(false);
         chatPage_->finalizeAssistantMessage();
         statusBarLabel_->setText(success ? QStringLiteral("Ready") : QStringLiteral("Task terminated"));
         if (success) {
+            if (!userImages.empty()) {
+                // Keep at most 1 prior image turn in replay history to bound vision tokens.
+                int imageTurnsKept = 0;
+                for (auto it = chatHistory_.rbegin(); it != chatHistory_.rend(); ++it) {
+                    if (!it->images.empty()) {
+                        if (++imageTurnsKept > 1) {
+                            it->images.clear();
+                        }
+                    }
+                }
+            }
             Message user_m;
             user_m.role = Role::user;
             user_m.content = promptStd;
+            user_m.images = userImages;
             chatHistory_.push_back(std::move(user_m));
 
             Message ass_m;
@@ -472,10 +569,15 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
     LoopConfig config;
     config.task_id = "gui-task-" + recipe.recipe_id;
     config.mode = "task";
-    config.context_strategy = CondenserStrategy::sac;
+    config.context_strategy = CondenserStrategy::eocc;
     if (activeBackend_) {
         config.tier = RuntimeTierConfig::for_profile(activeBackend_->active_profile());
     }
+    // Give interactive GUI tasks (especially multi-page browser research) generous turn headroom
+    // so the agent can browse, scroll, click links/tabs, store facts, update its ledger, and write reports.
+    const bool usesBrowser = std::any_of(recipe.load_modules.begin(), recipe.load_modules.end(),
+        [](const ModuleLoad& lm) { return lm.module == "BrowserModule"; });
+    config.tier.limits.max_turns = (usesBrowser || recipeId.contains(QStringLiteral("research"))) ? 28u : 24u;
 
     taskPage_->setRunning(true);
     statusBarLabel_->setText(QStringLiteral("Running %1...").arg(recipeId));
@@ -489,11 +591,30 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
             goal.replace(pos, marker.length(), "technical overview and key architectural findings");
         }
     }
+    if (settingsPage_) {
+        const std::string ep = settingsPage_->searxngEndpoint().toStdString();
+        if (!ep.empty()) {
+            for (auto& lm : recipe.load_modules) {
+                if (lm.module == "BrowserModule") {
+                    if (!lm.initial_state.is_object()) {
+                        lm.initial_state = aquila::Json::object();
+                    }
+                    lm.initial_state["searxng_endpoint"] = ep;
+                }
+            }
+        }
+    }
     activeWorker_ = new AgentWorker(activeBackend_, recipe, goal, config, workspaceRoot_.toStdString(), this);
 
     connect(activeWorker_, &AgentWorker::turnCompleted, taskPage_,
             [this](int turn, const QString&, const QString& mod, const QString& act, bool success, const QString& out) {
         taskPage_->addLedgerEntry(turn, mod, act, success ? QStringLiteral("OK") : QStringLiteral("FAILED"), out);
+    });
+    connect(activeWorker_, &AgentWorker::screenshotCaptured, this,
+            [this](const QString& filePath, const QString& title, const QString& url) {
+        if (researchPage_) {
+            researchPage_->addScreenshot(filePath, title, url);
+        }
     });
     connect(activeWorker_, &AgentWorker::scratchpadUpdated, taskPage_, &TaskPage::updateScratchpad);
     connect(activeWorker_, &AgentWorker::logFileReady, this, [this](const QString& logPath, const QString&) {
@@ -571,6 +692,7 @@ void MainWindow::onCodeIdeInlineEdit(const QString& prompt, const QString& selec
 
             GenerationParams params;
             params.constraint = OutputConstraint::none();
+            params.max_tokens = 512;
             auto res = activeBackend_->generate(params, nullptr);
             activeBackend_->rollback_to(cp);
 
@@ -611,6 +733,7 @@ void MainWindow::onWritingSectionRevise(const QString& sectionContent, const QSt
 
             GenerationParams params;
             params.constraint = OutputConstraint::none();
+            params.max_tokens = 512;
             auto res = activeBackend_->generate(params, nullptr);
             activeBackend_->rollback_to(cp);
 
@@ -684,6 +807,13 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
         }
     }
 
+    const bool isDeep =
+        depth.contains(QStringLiteral("Full"), Qt::CaseInsensitive) ||
+        depth.contains(QStringLiteral("Deep"), Qt::CaseInsensitive) ||
+        depth.contains(QStringLiteral("comprehensive"), Qt::CaseInsensitive) ||
+        depth.contains(QStringLiteral("10")) ||
+        depth.contains(QStringLiteral("15"));
+
     // 2. Web Search (if scope includes Web)
     if (doWeb) {
         try {
@@ -692,12 +822,35 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
                 opts.searxng_endpoint = settingsPage_->searxngEndpoint().toStdString();
             }
             aquila::knowledge::WebSearchEngine webEngine(opts);
-            int limit = 5;
-            if (depth.contains(QStringLiteral("10"))) limit = 10;
-            else if (depth.contains(QStringLiteral("15"))) limit = 15;
+            const int limit = depth.contains(QStringLiteral("15")) ? 15 : (isDeep ? 10 : 5);
+            const int maxScrape = isDeep ? 5 : 2;
+
+            aquila::ModuleContext modCtx;
+            modCtx.workspace_root = workspaceRoot_.toStdString();
+            // Reuse a single aquila_browser worker across search + navigation (avoids double Chromium cold-start).
+            std::optional<aquila::knowledge::BrowserModule> browserMod;
+            auto getBrowser = [&]() -> aquila::knowledge::BrowserModule& {
+                if (!browserMod.has_value()) {
+                    browserMod.emplace(modCtx);
+                    if (!opts.searxng_endpoint.empty()) {
+                        browserMod->configure(aquila::Json::object({
+                            {"searxng_endpoint", opts.searxng_endpoint}
+                        }));
+                    }
+                }
+                return *browserMod;
+            };
 
             std::vector<aquila::knowledge::SearchResult> results;
-            if (engine == QStringLiteral("duckduckgo")) {
+            if (engine == QStringLiteral("browser")) {
+                results = getBrowser().search_structured(trimmedQuery.toStdString(), limit);
+                if (results.empty()) {
+                    results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
+                }
+                if (results.empty()) {
+                    results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
+                }
+            } else if (engine == QStringLiteral("duckduckgo")) {
                 results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
                 if (results.empty()) {
                     results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
@@ -727,32 +880,69 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
                     .arg(title, url, QString::number(r.score, 'f', 1), snippet));
                 ++foundCount;
             }
+            qApp->processEvents();
 
-            // Auto-scrape top 2 results if auto-scrape enabled
+            // Auto-scrape top results (2 in Light, up to 5 in Full Deep Research) if auto-scrape enabled
             const bool doScrape = settingsPage_ ? settingsPage_->autoScrapeEnabled() : true;
             if (doScrape) {
-                aquila::ModuleContext kmCtx;
-                kmCtx.workspace_root = workspaceRoot_.toStdString();
-                aquila::knowledge::KnowledgeModule km(kmCtx);
+                aquila::knowledge::KnowledgeModule km(modCtx);
                 int scraped = 0;
                 for (const auto& r : results) {
-                    if (scraped >= 2) break;
+                    if (scraped >= maxScrape) break;
                     if (r.url.empty() || r.url.rfind("http", 0) != 0) continue;
+                    statusBarLabel_->setText(QStringLiteral("Rendering source %1/%2 with aquila_browser...")
+                        .arg(scraped + 1).arg(maxScrape));
+                    qApp->processEvents();
                     try {
-                        auto page = km.cache().fetch_and_clean(r.url, false);
-                        auto analysis = aquila::knowledge::PageScorer::analyze_page(r.url, page.clean_text);
-                        if (analysis.is_usable_for_context()) {
-                            QString pageTitle = QString::fromStdString(page.title.empty() ? r.title : page.title);
-                            researchPage_->addCachedPage(QString::fromStdString(r.url), pageTitle, QStringLiteral("just now"));
-                            researchPage_->addFact(QStringLiteral("Scraped from %1: %2")
-                                .arg(pageTitle, QString::fromStdString(analysis.usable_excerpt).left(150).trimmed()),
-                                0.92, QString::fromStdString(r.url));
+                        auto& bm = getBrowser();
+                        const ActionResult nav_res = bm.execute_action("browser_navigate", {
+                            {"url", r.url},
+                            {"screenshot", true}
+                        });
+                        if (nav_res.success) {
+                            QString pageTitle = QString::fromStdString(bm.current_title().empty() ? r.title : bm.current_title());
+                            QString shotPath = nav_res.images.empty()
+                                ? QString()
+                                : QString::fromStdString(nav_res.images[0]);
+                            QString statusNote = shotPath.isEmpty()
+                                ? QStringLiteral("rendered")
+                                : QStringLiteral("rendered + screenshot");
+                            researchPage_->addCachedPage(QString::fromStdString(r.url), pageTitle, statusNote, shotPath);
+                            if (!shotPath.isEmpty()) {
+                                researchPage_->addScreenshot(shotPath, pageTitle, QString::fromStdString(r.url));
+                            }
+                            researchPage_->addFact(QStringLiteral("Rendered via aquila_browser from %1: %2")
+                                .arg(pageTitle, QString::fromStdString(nav_res.llm_facing_output).left(150).trimmed()),
+                                0.95, QString::fromStdString(r.url));
                             scrapedContext += QStringLiteral("\n\n--- SOURCE [%1]: %2 (%3) ---\n%4\n--- END SOURCE ---\n")
                                 .arg(scraped + 1)
                                 .arg(pageTitle)
                                 .arg(QString::fromStdString(r.url))
-                                .arg(QString::fromStdString(analysis.usable_excerpt).left(3500));
+                                .arg(QString::fromStdString(nav_res.llm_facing_output).left(3500));
                             ++scraped;
+                            qApp->processEvents();
+                        } else {
+                            // Fallback to HTTP cache fetch if browser navigation was blocked or unsupported
+                            const QString reason = QString::fromStdString(
+                                nav_res.error_code.empty() ? std::string("browser_error") : nav_res.error_code);
+                            auto page = km.cache().fetch_and_clean(r.url, false);
+                            auto analysis = aquila::knowledge::PageScorer::analyze_page(r.url, page.clean_text);
+                            if (analysis.is_usable_for_context()) {
+                                QString pageTitle = QString::fromStdString(page.title.empty() ? r.title : page.title);
+                                researchPage_->addCachedPage(
+                                    QString::fromStdString(r.url), pageTitle,
+                                    QStringLiteral("http fallback (%1)").arg(reason));
+                                researchPage_->addFact(QStringLiteral("Scraped from %1: %2")
+                                    .arg(pageTitle, QString::fromStdString(analysis.usable_excerpt).left(150).trimmed()),
+                                    0.92, QString::fromStdString(r.url));
+                                scrapedContext += QStringLiteral("\n\n--- SOURCE [%1]: %2 (%3) ---\n%4\n--- END SOURCE ---\n")
+                                    .arg(scraped + 1)
+                                    .arg(pageTitle)
+                                    .arg(QString::fromStdString(r.url))
+                                    .arg(QString::fromStdString(analysis.usable_excerpt).left(3500));
+                                ++scraped;
+                                qApp->processEvents();
+                            }
                         }
                     } catch (...) {}
                 }
@@ -799,7 +989,7 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
             GenerationParams params;
             params.constraint = OutputConstraint::none();
             params.temperature = 0.3;
-            params.max_tokens = 2048;
+            params.max_tokens = isDeep ? 3072 : 1536;
             auto res = activeBackend_->generate(params, nullptr);
             activeBackend_->rollback_to(cp);
 
@@ -894,6 +1084,7 @@ void MainWindow::onCharacterChat(const QString& personaId, const QString& messag
 
             GenerationParams params;
             params.constraint = OutputConstraint::none();
+            params.max_tokens = 512;
             auto res = activeBackend_->generate(params, nullptr);
             activeBackend_->rollback_to(cp);
 
@@ -1019,6 +1210,7 @@ void MainWindow::onLearnAskArchive(const QString& question) {
 
                 GenerationParams params;
                 params.constraint = OutputConstraint::none();
+                params.max_tokens = 512;
                 auto genRes = activeBackend_->generate(params, nullptr);
                 activeBackend_->rollback_to(cp);
 

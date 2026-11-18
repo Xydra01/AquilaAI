@@ -105,7 +105,8 @@ TEST_CASE("AgentLoop executes knowledge_smoke recipe end-to-end",
     scripted.push_back(ok_reply(action_reply(
         "Checkpoint notes for requirements", "OrchestratorModule", "checkpoint_notes",
         Json::object({{"active_objective", "Index architecture"},
-                      {"next_immediate_action", "Complete recipe"}}))));
+                      {"next_immediate_action", "Complete recipe"},
+                      {"completed_steps", Json::array({"1", "2", "3", "4"})}}))));
 
     scripted.push_back(ok_reply(action_reply(
         "Complete recipe and trigger validation gate", "OrchestratorModule", "complete_recipe",
@@ -150,5 +151,64 @@ TEST_CASE("AgentLoop executes knowledge_smoke recipe end-to-end",
 
     // Exit gate succeeded and returned completion output from complete_recipe
     CHECK(result.completion_output == "All facts stored successfully.");
+}
+
+TEST_CASE("fn_research_offline enforces non-empty FactStore and cited synthesis deliverable",
+          "[agent_loop][recipe][knowledge]") {
+    TempDir tmp;
+    RecipeCartridge recipe = fn_research_offline_recipe();
+    recipe.scratchpad_checklist.clear();
+    const LoopConfig config = make_config(6);
+
+    const std::string long_synthesis =
+        "# System Capabilities Synthesis\n\n"
+        "## Overview\n\n"
+        "Aquila-cpp executes recipes deterministically with bounded C++ agent loops, SQLite FactStore persistence, "
+        "Hybrid GatedDeltaNet snapshot rollback, and sandboxed module execution across workspace, Python venv, "
+        "document authoring, learning syllabi, and knowledge synthesis domains [aquila-cpp-design.md]. "
+        "Verification gates ensure deliverables meet structural and factual grounding requirements [1].\n\n"
+        "## Citations\n\n- [1] Local docs architecture summary\n- [aquila-cpp-design.md] System design spec\n";
+
+    std::vector<GenerationResult> scripted;
+    // Turn 0: create cited synthesis file WITHOUT calling store_fact
+    scripted.push_back(ok_reply(action_reply(
+        "Write synthesis markdown", "WorkspaceModule", "create_file",
+        Json::object({{"file", "system_capabilities_synthesis.md"}, {"content", long_synthesis}}))));
+    // Turn 1: try completing prematurely with 0 facts -> post_llm_validation_hook MUST reject
+    scripted.push_back(ok_reply(action_reply(
+        "Complete early", "OrchestratorModule", "complete_recipe",
+        Json::object({{"output", "Premature completion"}}))));
+    // Turn 2: record verified fact after rejection
+    scripted.push_back(ok_reply(action_reply(
+        "Store verified fact", "KnowledgeModule", "store_fact",
+        Json::object({{"topic", "architecture"}, {"fact", "Aquila-cpp enforces post_llm_validation_hook on offline research [1]"}}))));
+    // Turn 3: complete recipe again -> now passes
+    scripted.push_back(ok_reply(action_reply(
+        "Complete after storing fact", "OrchestratorModule", "complete_recipe",
+        Json::object({{"output", "Verified offline synthesis complete."}}))));
+
+    ReplayBackend backend(std::move(scripted));
+    const ModuleRegistry registry = ModuleRegistry::builtin();
+    ModuleContext ctx;
+    ctx.workspace_root = tmp.path();
+
+    AgentLoop loop(backend, registry, ctx);
+    const TerminalResult result = loop.run(recipe, "Synthesize local docs", config);
+
+    CHECK(result.outcome == LoopOutcome::success);
+    CHECK(result.success == true);
+    REQUIRE(result.transcript.size() == 4);
+    REQUIRE(result.transcript[0].interaction.has_value());
+    CHECK(result.transcript[0].interaction->result.success == true);
+    REQUIRE(result.transcript[1].interaction.has_value());
+    CHECK(result.transcript[1].interaction->action == "complete_recipe");
+    // Turn 1 called complete_recipe with 0 FactStore entries; post_llm_validation_hook rejected it
+    // and pushed guidance so the loop continued to Turn 2 (store_fact) and Turn 3 (complete_recipe).
+    REQUIRE(result.transcript[2].interaction.has_value());
+    CHECK(result.transcript[2].interaction->action == "store_fact");
+    CHECK(result.transcript[2].interaction->result.success == true);
+    REQUIRE(result.transcript[3].interaction.has_value());
+    CHECK(result.transcript[3].interaction->action == "complete_recipe");
+    CHECK(result.completion_output == "Verified offline synthesis complete.");
 }
 
