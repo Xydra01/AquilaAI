@@ -1,7 +1,9 @@
 #include "aquila/knowledge/browser_module.hpp"
 
 #include "aquila/exec/process.hpp"
+#include "aquila/knowledge/html_cleaner.hpp"
 #include "aquila/knowledge/searxng_manager.hpp"
+#include "aquila/knowledge/web_fetcher.hpp"
 
 #include <fmt/format.h>
 
@@ -594,23 +596,30 @@ std::vector<ActionSchema> BrowserModule::get_actions() const {
     };
 }
 
-std::vector<SearchResult> BrowserModule::search_structured(const std::string& query, int max_results) {
+std::vector<SearchResult> BrowserModule::search_browser_direct(const std::string& query, int max_results) {
+    return search_structured(query, max_results, /*force_browser=*/true);
+}
+
+std::vector<SearchResult> BrowserModule::search_structured(const std::string& query, int max_results, bool force_browser) {
     if (query.empty() || max_results <= 0) {
         return {};
     }
 
     // Default to local SearXNG multi-source search unless an explicit search_base_url_
-    // override is configured (e.g. localhost Chromium search test fixtures).
-    if (search_base_url_.empty()) {
+    // override is configured (e.g. localhost Chromium search test fixtures) or force_browser is requested.
+    if (!force_browser && search_base_url_.empty()) {
         SearchOptions opts;
         opts.provider = SearchProvider::searxng;
         opts.searxng_endpoint = searxng_endpoint_;
         opts.max_results = max_results;
         WebSearchEngine engine(opts);
         auto sx = engine.search_searxng(query, max_results);
-        if (!sx.empty()) {
+        const bool only_wiki = !sx.empty() && std::all_of(sx.begin(), sx.end(), [](const auto& item) {
+            return item.engine == "wikipedia" || item.url.find("wikipedia.org") != std::string::npos;
+        });
+        if (!sx.empty() && !only_wiki) {
             for (const auto& item : sx) {
-                record_discovered_url(item.url);
+                record_discovered_url(item.url, item.snippet);
             }
             return sx;
         }
@@ -641,7 +650,7 @@ std::vector<SearchResult> BrowserModule::search_structured(const std::string& qu
         sr.snippet = item.value("snippet", std::string{});
         sr.engine = "aquila_browser";
         sr.score = std::max(0.1, 1.0 - (0.05 * idx));
-        record_discovered_url(sr.url);
+        record_discovered_url(sr.url, sr.snippet);
         out.push_back(std::move(sr));
         ++idx;
     }
@@ -674,17 +683,22 @@ void BrowserModule::configure(const Json& initial_state) {
     }
 }
 
-void BrowserModule::record_discovered_url(const std::string& url) {
+void BrowserModule::record_discovered_url(const std::string& url, const std::string& snippet) {
     if (url.empty() || (!url.starts_with("http://") && !url.starts_with("https://"))) {
         return;
     }
     const std::string key = canonicalize_url_key(url);
+    if (!snippet.empty()) {
+        discovered_snippets_[key] = snippet;
+    }
     for (const auto& existing : discovered_urls_) {
         if (canonicalize_url_key(existing) == key) {
             return;
         }
     }
     if (discovered_urls_.size() >= 60) {
+        const std::string oldest_key = canonicalize_url_key(discovered_urls_.front());
+        discovered_snippets_.erase(oldest_key);
         discovered_urls_.erase(discovered_urls_.begin());
     }
     discovered_urls_.push_back(url);
@@ -1177,23 +1191,27 @@ ActionResult BrowserModule::run(const std::string& action_name, const Json& args
             }
         }
 
+        const bool force_browser = args.value("force_browser", false) || args.value("engine", "") == "browser";
         // Default to local multi-source SearXNG unless an explicit search_base_url_
-        // override is configured (e.g. localhost Chromium search test fixtures).
-        if (search_base_url_.empty()) {
+        // override is configured (e.g. localhost Chromium search test fixtures) or force_browser is requested.
+        if (!force_browser && search_base_url_.empty()) {
             SearchOptions opts;
             opts.provider = SearchProvider::searxng;
             opts.searxng_endpoint = searxng_endpoint_;
             opts.max_results = 10;
             WebSearchEngine search_engine(opts);
             std::vector<SearchResult> sx = search_engine.search_searxng(query, 10);
-            if (!sx.empty()) {
+            const bool only_wiki = !sx.empty() && std::all_of(sx.begin(), sx.end(), [](const auto& item) {
+                return item.engine == "wikipedia" || item.url.find("wikipedia.org") != std::string::npos;
+            });
+            if (!sx.empty() && !only_wiki) {
                 std::ostringstream out;
                 out << "[Browser Search Results for \"" << query << "\" via Local SearXNG]\n"
                     << "(Use browser_navigate on promising URLs below to read full pages, scroll deeper sections, and inspect primary sources.)\n";
                 int idx = 0;
                 for (const auto& item : sx) {
                     ++idx;
-                    record_discovered_url(item.url);
+                    record_discovered_url(item.url, item.snippet);
                     out << fmt::format("[{}] [{}] {}\n    URL: {}\n",
                                        idx,
                                        item.engine.empty() ? std::string("web") : item.engine,
@@ -1238,7 +1256,7 @@ ActionResult BrowserModule::run(const std::string& action_name, const Json& args
                 int idx = 0;
                 for (const auto& item : fb) {
                     ++idx;
-                    record_discovered_url(item.url);
+                    record_discovered_url(item.url, item.snippet);
                     out << fmt::format("[{}] {}\n    URL: {}\n", idx, item.title, item.url);
                     if (!item.snippet.empty()) {
                         out << "    Snippet: " << item.snippet << "\n";
@@ -1268,12 +1286,12 @@ ActionResult BrowserModule::run(const std::string& action_name, const Json& args
             for (const auto& item : results) {
                 ++idx;
                 const std::string rurl = item.value("url", std::string{});
-                record_discovered_url(rurl);
+                const std::string sn = item.value("snippet", std::string{});
+                record_discovered_url(rurl, sn);
                 out << fmt::format("[{}] {}\n    URL: {}\n",
                                    idx,
                                    item.value("title", std::string{}),
                                    rurl);
-                const std::string sn = item.value("snippet", std::string{});
                 if (!sn.empty()) {
                     out << "    Snippet: " << sn << "\n";
                 }
@@ -1360,6 +1378,40 @@ ActionResult BrowserModule::run(const std::string& action_name, const Json& args
         std::string code, msg;
         const Json res = call_worker("navigate", params, code, msg);
         if (!code.empty()) {
+            // Attempt direct HTTP fallback extraction before declaring failure.
+            // Many academic or paywalled sites (e.g. Royal Society, Oxford Academic, Karger, ResearchGate)
+            // block automated WebEngine browsers with WAF challenges or timeouts, but may yield readable
+            // HTML/abstract text or metadata over standard HTTP requests.
+            try {
+                FetchOptions fetch_opts;
+                fetch_opts.timeout_seconds = 8;
+                fetch_opts.max_redirects = 5;
+                WebFetcher fetcher(fetch_opts);
+                auto fetch_res = fetcher.fetch(url);
+                if (fetch_res.status_code >= 200 && fetch_res.status_code < 400 && !fetch_res.body.empty()) {
+                    HtmlCleaner cleaner;
+                    auto clean = cleaner.clean(fetch_res.body);
+                    if (clean.text.size() >= 150) {
+                        const std::string page_title = clean.title.empty() ? url : clean.title;
+                        record_visited_url(url, page_title, 100, true);
+                        current_url_ = url;
+                        current_title_ = page_title;
+                        timeout_counts_.erase(key);
+                        std::ostringstream out;
+                        out << "[Browser Navigation Fallback (HTTP Extract)]\n"
+                            << "URL: " << url << "\n"
+                            << "Title: " << page_title << "\n"
+                            << "Note: Live browser view encountered '" << code
+                            << "'; successfully extracted page text via direct HTTP fallback.\n"
+                            << "\n--- Visible Page Text ---\n"
+                            << truncate_str(clean.text, max_output_chars_) << "\n";
+                        return make_ok(out.str());
+                    }
+                }
+            } catch (...) {
+                // Fallback attempt failed; proceed with standard error handling
+            }
+
             if (code == "challenge_detected" || code == "navigation_failed" || code == "page_not_found") {
                 record_failed_url(url, code, msg);
             } else if (code == "navigation_timeout") {
@@ -1367,6 +1419,10 @@ ActionResult BrowserModule::run(const std::string& action_name, const Json& args
                 if (count >= 2) {
                     record_failed_url(url, code, msg);
                 }
+            }
+            auto snip_it = discovered_snippets_.find(key);
+            if (snip_it != discovered_snippets_.end() && !snip_it->second.empty()) {
+                msg += fmt::format(" (Snippet from search index: \"{}\")", snip_it->second);
             }
             return make_err(code, msg);
         }

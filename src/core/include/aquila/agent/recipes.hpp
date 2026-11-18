@@ -177,7 +177,7 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
     "Search the web using BrowserModule browser_search or inspect local docs with KnowledgeModule search_local_docs",
     "Open authoritative source pages with BrowserModule browser_navigate, scroll deeper sections with browser_scroll when content continues below the fold, and click relevant links/tabs/controls with browser_click to gather thorough primary evidence",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
-    "Write comprehensive final research report to research_report.md (with markdown headers and [1]/URL citations) using WorkspaceModule create_file",
+    "Write comprehensive final research report to research_report.md (with markdown headers and numbered real http(s):// URL citations, e.g. [1] https://...) using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {
@@ -262,7 +262,7 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
   "scratchpad_checklist": [
     "Investigate the question with BrowserModule browser_search/browser_navigate (scrolling deeper sections with browser_scroll and clicking relevant links/tabs/controls with browser_click) or KnowledgeModule search_local_docs",
     "Store verified findings into knowledge memory using KnowledgeModule store_fact",
-    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and [1]/URL citations using WorkspaceModule create_file",
+    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and numbered real http(s):// URL citations, e.g. [1] https://... using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {

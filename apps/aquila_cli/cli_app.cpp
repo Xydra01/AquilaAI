@@ -280,7 +280,7 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
     }
     const bool has_browser = std::any_of(recipe.load_modules.begin(), recipe.load_modules.end(),
         [](const ModuleLoad& lm) { return lm.module == "BrowserModule"; });
-    const std::uint32_t min_turns = (has_browser || recipe.recipe_id.find("research") != std::string::npos) ? 28u : 24u;
+    const std::uint32_t min_turns = (has_browser || recipe.recipe_id.find("research") != std::string::npos) ? 32u : 24u;
     if (config.tier.limits.max_turns < min_turns) {
         config.tier.limits.max_turns = min_turns;
     }

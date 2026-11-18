@@ -41,9 +41,11 @@ STOPWORDS = {
 
 ACTIVE_ENGINES = [
     "duckduckgo",
+    "openalex",
+    "europepmc",
+    "wikipedia",
     "github",
     "arxiv",
-    "wikipedia",
     "hackernews",
     "reddit",
 ]
@@ -357,67 +359,156 @@ def search_wikipedia(query: str, max_results: int = 4) -> list[dict]:
     return results
 
 
-def search_duckduckgo_lite(query: str, max_results: int = 4) -> list[dict]:
-    """Best-effort DuckDuckGo Lite fetch; skips cleanly on any challenge or non-200 status."""
+def search_openalex(query: str, max_results: int = 4) -> list[dict]:
     results: list[dict] = []
+    kw = simplify_keywords(query, 6)
+    if not kw:
+        return results
     try:
-        url = "https://lite.duckduckgo.com/lite/"
-        data = urllib.parse.urlencode({"q": query}).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "User-Agent": BROWSER_UA,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            if getattr(resp, "status", 200) != 200:
-                return results
-            content = resp.read().decode("utf-8", errors="replace")
-
-        low = content.lower()
-        if "anomaly-modal" in low or "verify you are human" in low or "captcha" in low:
+        encoded = urllib.parse.quote(kw)
+        url = f"https://api.openalex.org/works?search={encoded}&per-page={max_results}"
+        body = http_get_text(url, headers={"User-Agent": API_UA})
+        if not body:
             return results
+        data = json.loads(body)
+        for item in data.get("results", [])[:max_results]:
+            title = clean_snippet(item.get("title") or "", 180)
+            doi = item.get("doi") or item.get("id") or ""
+            if not doi.startswith("http") or not title:
+                continue
+            primary = item.get("primary_location") or {}
+            source = (primary.get("source") or {}).get("display_name") or ""
+            year = item.get("publication_year") or ""
+            meta_parts = []
+            if source: meta_parts.append(source)
+            if year: meta_parts.append(str(year))
+            meta = f"[{', '.join(meta_parts)}] " if meta_parts else ""
+            results.append({
+                "title": f"{title} ({source})" if source else title,
+                "url": doi,
+                "content": f"{meta}Peer-reviewed research publication ({doi}).",
+                "engine": "openalex",
+            })
+    except Exception as exc:
+        print(f"[SearXNG Runner] OpenAlex search error: {exc}", file=sys.stderr)
+    return results
 
-        link_matches = list(re.finditer(
-            r"<a\s+[^>]*class=['\"]result-link['\"][^>]*href=['\"]([^'\"]+)['\"][^>]*>(.*?)</a>|"
-            r"<a\s+[^>]*href=['\"]([^'\"]+)['\"][^>]*class=['\"]result-link['\"][^>]*>(.*?)</a>",
-            content,
-            re.IGNORECASE | re.DOTALL,
-        ))
-        snippet_matches = list(re.finditer(
-            r"<td\s+[^>]*class=['\"]result-snippet['\"][^>]*>(.*?)</td>",
-            content,
-            re.IGNORECASE | re.DOTALL,
-        ))
 
-        for idx, match in enumerate(link_matches[:max_results]):
-            raw_url = (match.group(1) or match.group(3) or "").strip()
-            raw_title = clean_snippet(match.group(2) or match.group(4) or "", 180)
-            if "uddg=" in raw_url:
-                parsed = urllib.parse.urlparse(raw_url)
-                params = urllib.parse.parse_qs(parsed.query)
-                if "uddg" in params:
-                    raw_url = params["uddg"][0]
-            snippet = clean_snippet(snippet_matches[idx].group(1), 240) if idx < len(snippet_matches) else ""
-            if raw_url.startswith("http://") or raw_url.startswith("https://"):
-                results.append({
-                    "title": raw_title or raw_url,
-                    "url": raw_url,
-                    "content": snippet,
-                    "engine": "duckduckgo",
-                })
-    except Exception:
-        # Silently fall back to public API engines when DDG Lite rate-limits/challenges.
-        pass
+def search_europepmc(query: str, max_results: int = 4) -> list[dict]:
+    results: list[dict] = []
+    kw = simplify_keywords(query, 6)
+    if not kw:
+        return results
+    try:
+        encoded = urllib.parse.quote(kw)
+        url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={encoded}&format=json&pageSize={max_results}"
+        body = http_get_text(url, headers={"User-Agent": API_UA})
+        if not body:
+            return results
+        data = json.loads(body)
+        items = data.get("resultList", {}).get("result", [])
+        for item in items[:max_results]:
+            title = clean_snippet(item.get("title") or "", 180)
+            doi = item.get("doi") or ""
+            target_url = f"https://doi.org/{doi}" if doi else ""
+            if not target_url:
+                pmcid = item.get("pmcid") or ""
+                if pmcid:
+                    target_url = f"https://europepmc.org/article/PMC/{pmcid}"
+                else:
+                    pmid = item.get("id") or ""
+                    if pmid:
+                        target_url = f"https://europepmc.org/article/MED/{pmid}"
+            if not target_url.startswith("http") or not title:
+                continue
+            journal = item.get("journalTitle") or ""
+            year = item.get("pubYear") or ""
+            meta_parts = []
+            if journal: meta_parts.append(journal)
+            if year: meta_parts.append(str(year))
+            meta = f"[{', '.join(meta_parts)}] " if meta_parts else ""
+            snippet = clean_snippet(item.get("abstractText") or f"Scientific article indexed in Europe PMC: {title}", 240)
+            results.append({
+                "title": f"{title} ({journal})" if journal else title,
+                "url": target_url,
+                "content": f"{meta}{snippet}",
+                "engine": "europepmc",
+            })
+    except Exception as exc:
+        print(f"[SearXNG Runner] Europe PMC search error: {exc}", file=sys.stderr)
+    return results
+
+
+def search_duckduckgo_lite(query: str, max_results: int = 4) -> list[dict]:
+    """Best-effort DuckDuckGo Lite fetch; falls back to simplified keyword query on challenge."""
+    results: list[dict] = []
+    queries = [query.strip()]
+    simp = simplify_keywords(query, 5)
+    if simp and simp.lower() != query.strip().lower():
+        queries.append(simp)
+
+    for q in queries:
+        try:
+            url = "https://lite.duckduckgo.com/lite/"
+            data = urllib.parse.urlencode({"q": q}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    "User-Agent": BROWSER_UA,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "text/html",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                if getattr(resp, "status", 200) != 200:
+                    continue
+                content = resp.read().decode("utf-8", errors="replace")
+
+            low = content.lower()
+            if "anomaly-modal" in low or "verify you are human" in low or "captcha" in low:
+                continue
+
+            link_matches = list(re.finditer(
+                r"<a\s+[^>]*class=['\"]result-link['\"][^>]*href=['\"]([^'\"]+)['\"][^>]*>(.*?)</a>|"
+                r"<a\s+[^>]*href=['\"]([^'\"]+)['\"][^>]*class=['\"]result-link['\"][^>]*>(.*?)</a>",
+                content,
+                re.IGNORECASE | re.DOTALL,
+            ))
+            snippet_matches = list(re.finditer(
+                r"<td\s+[^>]*class=['\"]result-snippet['\"][^>]*>(.*?)</td>",
+                content,
+                re.IGNORECASE | re.DOTALL,
+            ))
+
+            for idx, match in enumerate(link_matches[:max_results]):
+                raw_url = (match.group(1) or match.group(3) or "").strip()
+                raw_title = clean_snippet(match.group(2) or match.group(4) or "", 180)
+                if "uddg=" in raw_url:
+                    parsed = urllib.parse.urlparse(raw_url)
+                    params = urllib.parse.parse_qs(parsed.query)
+                    if "uddg" in params:
+                        raw_url = params["uddg"][0]
+                snippet = clean_snippet(snippet_matches[idx].group(1), 240) if idx < len(snippet_matches) else ""
+                if raw_url.startswith("http://") or raw_url.startswith("https://"):
+                    results.append({
+                        "title": raw_title or raw_url,
+                        "url": raw_url,
+                        "content": snippet,
+                        "engine": "duckduckgo",
+                    })
+            if results:
+                break
+        except Exception:
+            continue
     return results
 
 
 def aggregate_search(query: str, limit: int = 12) -> list[dict]:
     engine_fns = {
         "duckduckgo": lambda: search_duckduckgo_lite(query, max_results=8),
+        "openalex": lambda: search_openalex(query, max_results=4),
+        "europepmc": lambda: search_europepmc(query, max_results=4),
         "github": lambda: search_github(query, max_results=4),
         "arxiv": lambda: search_arxiv(query, max_results=4),
         "wikipedia": lambda: search_wikipedia(query, max_results=4),
@@ -438,7 +529,11 @@ def aggregate_search(query: str, limit: int = 12) -> list[dict]:
     # Filter off-topic noise (especially from tech/academic engines on non-tech queries)
     # and rank each bucket by query-term overlap.
     query_stems = _extract_query_stems(query)
-    has_general_web = len(raw_buckets.get("duckduckgo", [])) > 0
+    has_general_web = (
+        len(raw_buckets.get("duckduckgo", [])) > 0 or
+        len(raw_buckets.get("openalex", [])) > 0 or
+        len(raw_buckets.get("europepmc", [])) > 0
+    )
     if not query_stems:
         min_secondary_hits = 0
     elif has_general_web and len(query_stems) >= 4:
@@ -457,6 +552,11 @@ def aggregate_search(query: str, limit: int = 12) -> list[dict]:
                     continue
                 if t_hits == 0 and tot_hits < 3:
                     continue
+            elif name in ("openalex", "europepmc"):
+                # Require at least one stem match so unrelated papers get filtered.
+                if query_stems and tot_hits < 1:
+                    continue
+                weight += max(0.0, 1.5 - 0.1 * idx)
             elif name == "wikipedia":
                 if has_general_web and len(query_stems) >= 3 and tot_hits < 2:
                     continue

@@ -577,7 +577,7 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
     // so the agent can browse, scroll, click links/tabs, store facts, update its ledger, and write reports.
     const bool usesBrowser = std::any_of(recipe.load_modules.begin(), recipe.load_modules.end(),
         [](const ModuleLoad& lm) { return lm.module == "BrowserModule"; });
-    config.tier.limits.max_turns = (usesBrowser || recipeId.contains(QStringLiteral("research"))) ? 28u : 24u;
+    config.tier.limits.max_turns = (usesBrowser || recipeId.contains(QStringLiteral("research"))) ? 32u : 24u;
 
     taskPage_->setRunning(true);
     statusBarLabel_->setText(QStringLiteral("Running %1...").arg(recipeId));
@@ -843,7 +843,7 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
 
             std::vector<aquila::knowledge::SearchResult> results;
             if (engine == QStringLiteral("browser")) {
-                results = getBrowser().search_structured(trimmedQuery.toStdString(), limit);
+                results = getBrowser().search_browser_direct(trimmedQuery.toStdString(), limit);
                 if (results.empty()) {
                     results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
                 }
@@ -857,11 +857,19 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
                 }
             } else if (engine == QStringLiteral("searxng")) {
                 results = webEngine.search_searxng(trimmedQuery.toStdString(), limit);
-                if (results.empty()) {
-                    results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
-                }
-                if (results.empty()) {
-                    results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
+                const bool onlyWiki = !results.empty() && std::all_of(results.begin(), results.end(), [](const auto& r) {
+                    return r.engine == "wikipedia" || r.url.find("wikipedia.org") != std::string::npos;
+                });
+                if (results.empty() || onlyWiki) {
+                    auto browserResults = getBrowser().search_browser_direct(trimmedQuery.toStdString(), limit);
+                    if (!browserResults.empty()) {
+                        results = std::move(browserResults);
+                    } else if (results.empty()) {
+                        results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
+                        if (results.empty()) {
+                            results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
+                        }
+                    }
                 }
             } else if (engine == QStringLiteral("wikipedia")) {
                 results = webEngine.search_wikipedia(trimmedQuery.toStdString(), limit);
@@ -989,7 +997,7 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
             GenerationParams params;
             params.constraint = OutputConstraint::none();
             params.temperature = 0.3;
-            params.max_tokens = isDeep ? 3072 : 1536;
+            params.max_tokens = isDeep ? 3072 : 2560;
             auto res = activeBackend_->generate(params, nullptr);
             activeBackend_->rollback_to(cp);
 

@@ -70,7 +70,7 @@
   "scratchpad_checklist": [
     "Investigate the question with BrowserModule browser_search/browser_navigate (scrolling deeper sections with browser_scroll and clicking relevant links/tabs/controls with browser_click) or KnowledgeModule search_local_docs",
     "Store verified findings into knowledge memory using KnowledgeModule store_fact",
-    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and [1]/URL citations using WorkspaceModule create_file",
+    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and numbered real http(s):// URL citations, e.g. [1] https://... using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {

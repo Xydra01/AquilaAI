@@ -26,7 +26,8 @@ public:
     [[nodiscard]] std::vector<ActionSchema> get_actions() const override;
 
     // Direct structured web search returning typed SearchResult objects without LLM formatting.
-    [[nodiscard]] std::vector<SearchResult> search_structured(const std::string& query, int max_results = 5);
+    [[nodiscard]] std::vector<SearchResult> search_structured(const std::string& query, int max_results = 5, bool force_browser = false);
+    [[nodiscard]] std::vector<SearchResult> search_browser_direct(const std::string& query, int max_results = 5);
 
     // initial_state: {browser_bin?: path, search_base_url?: url, searxng_endpoint?: url, timeout_ms?: int, max_output_chars?: int, max_screenshots?: int}
     void configure(const Json& initial_state) override;
@@ -59,7 +60,7 @@ private:
     Json call_worker(const std::string& action, const Json& params, std::string& error_code, std::string& error_msg);
     std::string next_screenshot_path();
     void prune_old_screenshots(const std::string& just_saved_path) const;
-    void record_discovered_url(const std::string& url);
+    void record_discovered_url(const std::string& url, const std::string& snippet = {});
     void record_visited_url(const std::string& url, const std::string& title, int scroll_pct, bool increment_visit);
     void record_failed_url(const std::string& url, const std::string& error_code, const std::string& reason);
     [[nodiscard]] std::vector<std::string> unvisited_suggestions(std::size_t max_count = 3) const;
@@ -87,6 +88,7 @@ private:
     std::unordered_map<std::string, FailedUrlInfo> failed_urls_;
     std::unordered_map<std::string, int> timeout_counts_;
     std::vector<std::string> discovered_urls_;
+    std::unordered_map<std::string, std::string> discovered_snippets_;
     std::vector<std::string> searched_queries_;
     std::unique_ptr<WorkerProcess> worker_;
 };
