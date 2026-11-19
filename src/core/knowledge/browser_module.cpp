@@ -126,10 +126,7 @@ ActionResult make_err(std::string code, std::string output) {
 }
 
 std::string truncate_str(const std::string& s, std::size_t max_chars) {
-    if (s.size() <= max_chars) {
-        return s;
-    }
-    return s.substr(0, max_chars) + "\n... [truncated]";
+    return json_io::truncate_utf8(s, max_chars);
 }
 
 #ifdef _WIN32
@@ -1134,7 +1131,7 @@ ActionResult BrowserModule::format_snapshot_result(const std::string& header,
             << "ms; rendered article text captured.\n";
     }
 
-    const std::string text = res.value("text", std::string{});
+    const std::string text = json_io::sanitize_utf8(res.value("text", std::string{}));
     const std::size_t full_len = res.value("full_text_length", std::size_t{0});
     if (full_len > text.size() + 100) {
         out << "Text Coverage: showing " << text.size() << " of " << full_len

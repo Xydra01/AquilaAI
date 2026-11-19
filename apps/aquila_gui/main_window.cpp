@@ -1000,17 +1000,37 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
             GenerationParams params;
             params.constraint = OutputConstraint::none();
             params.temperature = 0.3;
-            params.max_tokens = isDeep ? 3072 : 2560;
+            params.max_tokens = isDeep ? 8192 : 4096;
             auto res = activeBackend_->generate(params, nullptr);
-            activeBackend_->rollback_to(cp);
 
             if (res.ok && !res.content.empty()) {
                 report = QString::fromStdString(res.content).trimmed();
+                if (res.done_reason == "length") {
+                    statusBarLabel_->setText(QStringLiteral("Completing extended research briefing..."));
+                    qApp->processEvents();
+                    Message assistant_partial;
+                    assistant_partial.role = Role::assistant;
+                    assistant_partial.content = res.content;
+                    activeBackend_->append(assistant_partial);
+
+                    Message cont_user;
+                    cont_user.role = Role::user;
+                    cont_user.content = "Continue directly from where you left off without repeating or introductory remarks:";
+                    activeBackend_->append(cont_user);
+
+                    GenerationParams cont_params = params;
+                    cont_params.max_tokens = 4096;
+                    auto cont_res = activeBackend_->generate(cont_params, nullptr);
+                    if (cont_res.ok && !cont_res.content.empty()) {
+                        report += QStringLiteral("\n\n") + QString::fromStdString(cont_res.content).trimmed();
+                    }
+                }
             } else if (!res.ok) {
                 researchPage_->addFact(QStringLiteral("LLM synthesis error: %1 (%2)")
                     .arg(QString::fromStdString(res.error_code), QString::fromStdString(res.error_detail)),
                     0.0, QStringLiteral("Error"));
             }
+            activeBackend_->rollback_to(cp);
         } catch (const std::exception& e) {
             researchPage_->addFact(QStringLiteral("Synthesis exception: %1").arg(QString::fromUtf8(e.what())), 0.0, QStringLiteral("Error"));
             report.clear();

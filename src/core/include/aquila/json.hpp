@@ -36,6 +36,14 @@ Json parse_text(std::string_view text);
 // Invalid UTF-8 in a string value throws SchemaError.
 std::string canonical_dump(const Json& value);
 
+// Validates that `s` is valid UTF-8. Any malformed bytes or incomplete sequences
+// are replaced with U+FFFD (\xEF\xBF\xBD), ensuring safe JSON serialization without throwing.
+std::string sanitize_utf8(std::string_view s);
+
+// Truncates `s` to at most `max_bytes` without splitting multi-byte UTF-8 code points
+// in half, appending `suffix` if truncated, and sanitizing the result.
+std::string truncate_utf8(std::string_view s, std::size_t max_bytes, std::string_view suffix = "\n... [truncated]");
+
 std::string child_path(const std::string& path, std::string_view key);
 std::string index_path(const std::string& path, std::size_t index);
 

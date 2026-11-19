@@ -370,8 +370,15 @@ void RunLogger::write_jsonl_record(const std::string& event_type, const Json& da
         for (auto it = data.begin(); it != data.end(); ++it) {
             record[it.key()] = it.value();
         }
-        jsonl_stream_ << record.dump() << "\n";
-        jsonl_stream_.flush();
+        try {
+            jsonl_stream_ << record.dump(-1, ' ', false, Json::error_handler_t::replace) << "\n";
+            jsonl_stream_.flush();
+        } catch (const std::exception& e) {
+            if (log_stream_.is_open()) {
+                log_stream_ << "[WARN RunLogger] JSONL record serialization fallback: " << e.what() << "\n";
+                log_stream_.flush();
+            }
+        }
     }
 }
 

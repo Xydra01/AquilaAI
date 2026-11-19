@@ -159,8 +159,9 @@ CanvasBuffer& WorkspaceModule::canvas() {
 ActionResult WorkspaceModule::capped(ActionResult r) const {
     if (r.llm_facing_output.size() > max_output_chars_) {
         const auto cut = r.llm_facing_output.size() - max_output_chars_;
-        r.llm_facing_output.resize(max_output_chars_);
-        r.llm_facing_output += "\n...[truncated " + std::to_string(cut) + " chars]";
+        r.llm_facing_output = json_io::truncate_utf8(
+            r.llm_facing_output, max_output_chars_,
+            "\n...[truncated " + std::to_string(cut) + " chars]");
     }
     r.token_estimate = estimate_tokens(r.llm_facing_output);
     return r;

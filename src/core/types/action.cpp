@@ -50,7 +50,7 @@ void to_json(Json& j, const ActionResult& v) {
     j = Json::object();
     j["success"] = v.success;
     j["error_code"] = v.error_code;
-    j["llm_facing_output"] = v.llm_facing_output;
+    j["llm_facing_output"] = json_io::sanitize_utf8(v.llm_facing_output);
     j["token_estimate"] = v.token_estimate;
     if (!v.images.empty()) {
         j["images"] = v.images;

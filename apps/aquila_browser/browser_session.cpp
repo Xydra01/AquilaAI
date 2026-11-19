@@ -23,22 +23,22 @@ namespace aquila::browser {
 
 namespace {
 
-int clamp_timeout_ms(const QJsonObject& params, int fallback_ms = 20000) {
-    const int raw = params.value("timeout_ms").toInt(fallback_ms);
-    return std::clamp(raw, 1000, 60000);
+int clamp_timeout_ms(const QJsonObject &params, int fallback_ms = 20000) {
+  const int raw = params.value("timeout_ms").toInt(fallback_ms);
+  return std::clamp(raw, 1000, 60000);
 }
 
-int clamp_max_chars(const QJsonObject& params, int fallback_chars = 6000) {
-    const int raw = params.value("max_chars").toInt(fallback_chars);
-    return std::clamp(raw, 256, 32000);
+int clamp_max_chars(const QJsonObject &params, int fallback_chars = 6000) {
+  const int raw = params.value("max_chars").toInt(fallback_chars);
+  return std::clamp(raw, 256, 32000);
 }
 
-QString js_extract_dom_snapshot_script(int max_chars, const QString& selector) {
-    const QString escaped_sel = QString(selector)
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace('\n', " ");
-    return QStringLiteral(R"JS(
+QString js_extract_dom_snapshot_script(int max_chars, const QString &selector) {
+  const QString escaped_sel = QString(selector)
+                                  .replace('\\', "\\\\")
+                                  .replace('\'', "\\'")
+                                  .replace('\n', " ");
+  return QStringLiteral(R"JS(
 (() => {
   const maxChars = %1;
   const sel = '%2';
@@ -162,7 +162,12 @@ QString js_extract_dom_snapshot_script(int max_chars, const QString& selector) {
   text = text.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   let truncated = false;
   if (text.length > maxChars) {
-    text = text.slice(0, maxChars) + '\n... [truncated]';
+    let cut = maxChars;
+    const code = text.charCodeAt(cut - 1);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      cut--;
+    }
+    text = text.slice(0, cut) + '\n... [truncated]';
     truncated = true;
   }
 
@@ -280,11 +285,13 @@ QString js_extract_dom_snapshot_script(int max_chars, const QString& selector) {
     viewport_height: Math.round(vpH)
   };
 })()
-)JS").arg(max_chars).arg(escaped_sel);
+)JS")
+      .arg(max_chars)
+      .arg(escaped_sel);
 }
 
 QString js_extract_ddg_results_script() {
-    return QStringLiteral(R"JS(
+  return QStringLiteral(R"JS(
 (() => {
   const results = [];
   const decodeDdgHref = (raw) => {
@@ -340,18 +347,19 @@ QString js_extract_ddg_results_script() {
 )JS");
 }
 
-QString js_quote_string(const QString& str) {
-    QJsonDocument doc(QJsonArray{str});
-    QString json = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
-    if (json.startsWith('[') && json.endsWith(']')) {
-        return json.mid(1, json.length() - 2);
-    }
-    return QStringLiteral("\"\"");
+QString js_quote_string(const QString &str) {
+  QJsonDocument doc(QJsonArray{str});
+  QString json = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+  if (json.startsWith('[') && json.endsWith(']')) {
+    return json.mid(1, json.length() - 2);
+  }
+  return QStringLiteral("\"\"");
 }
 
-QString js_find_in_page_script(const QString& query, int match_index, int max_chars) {
-    const QString quoted_query = js_quote_string(query);
-    return QStringLiteral(R"JS(
+QString js_find_in_page_script(const QString &query, int match_index,
+                               int max_chars) {
+  const QString quoted_query = js_quote_string(query);
+  return QStringLiteral(R"JS(
 (() => {
   const query = %1;
   const targetIndex = %2;
@@ -466,14 +474,19 @@ QString js_find_in_page_script(const QString& query, int match_index, int max_ch
     context_snippet: snippet
   };
 })()
-)JS").arg(quoted_query).arg(match_index).arg(max_chars);
+)JS")
+      .arg(quoted_query)
+      .arg(match_index)
+      .arg(max_chars);
 }
 
-QString js_login_form_script(const QString& username, const QString& password, bool submit) {
-    const QString quoted_user = js_quote_string(username);
-    const QString quoted_pass = js_quote_string(password);
-    const QString submit_str = submit ? QStringLiteral("true") : QStringLiteral("false");
-    return QStringLiteral(R"JS(
+QString js_login_form_script(const QString &username, const QString &password,
+                             bool submit) {
+  const QString quoted_user = js_quote_string(username);
+  const QString quoted_pass = js_quote_string(password);
+  const QString submit_str =
+      submit ? QStringLiteral("true") : QStringLiteral("false");
+  return QStringLiteral(R"JS(
 (() => {
   const username = %1;
   const password = %2;
@@ -573,250 +586,272 @@ QString js_login_form_script(const QString& username, const QString& password, b
     title: document.title
   };
 })()
-)JS").arg(quoted_user).arg(quoted_pass).arg(submit_str);
+)JS")
+      .arg(quoted_user)
+      .arg(quoted_pass)
+      .arg(submit_str);
 }
 
 } // namespace
 
-BrowserSession::BrowserSession(QObject* parent) : QObject(parent) {
-    const QString profilePath = QDir::homePath() + QStringLiteral("/.aquila/browser_profile");
-    QDir().mkpath(profilePath);
-    profile_ = new QWebEngineProfile(QStringLiteral("aquila_user"), this);
-    profile_->setPersistentStoragePath(profilePath);
-    profile_->setCachePath(profilePath + QStringLiteral("/cache"));
-    profile_->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
-    profile_->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
-    profile_->setHttpUserAgent(QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"));
+BrowserSession::BrowserSession(QObject *parent) : QObject(parent) {
+  const QString profilePath =
+      QDir::homePath() + QStringLiteral("/.aquila/browser_profile");
+  QDir().mkpath(profilePath);
+  profile_ = new QWebEngineProfile(QStringLiteral("aquila_user"), this);
+  profile_->setPersistentStoragePath(profilePath);
+  profile_->setCachePath(profilePath + QStringLiteral("/cache"));
+  profile_->setPersistentCookiesPolicy(
+      QWebEngineProfile::AllowPersistentCookies);
+  profile_->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
+  profile_->setHttpUserAgent(QStringLiteral(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
+      "like Gecko) Chrome/128.0.0.0 Safari/537.36"));
 
-    page_ = new QWebEnginePage(profile_, nullptr);
-    QWebEngineSettings* s = page_->settings();
-    s->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
-    s->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
-    s->setAttribute(QWebEngineSettings::ErrorPageEnabled, true);
-    s->setAttribute(QWebEngineSettings::PluginsEnabled, false);
-    s->setAttribute(QWebEngineSettings::AutoLoadImages, true);
+  page_ = new QWebEnginePage(profile_, nullptr);
+  QWebEngineSettings *s = page_->settings();
+  s->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
+  s->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+  s->setAttribute(QWebEngineSettings::ErrorPageEnabled, true);
+  s->setAttribute(QWebEngineSettings::PluginsEnabled, false);
+  s->setAttribute(QWebEngineSettings::AutoLoadImages, true);
 
-    view_ = new QWebEngineView();
-    view_->setPage(page_);
-    view_->setAttribute(Qt::WA_DontShowOnScreen, true);
-    view_->resize(1280, 800);
-    view_->show();
+  view_ = new QWebEngineView();
+  view_->setPage(page_);
+  view_->setAttribute(Qt::WA_DontShowOnScreen, true);
+  view_->resize(1280, 800);
+  view_->show();
 
-    // Redirect target="_blank" / popup links into the active offscreen page so clicks never vanish.
-    QObject::connect(page_, &QWebEnginePage::newWindowRequested, this, [this](QWebEngineNewWindowRequest& req) {
-        const QUrl target = req.requestedUrl();
-        QString err;
-        if (target.isValid() && is_allowed_http_url(target.toString(), err)) {
-            view_->setUrl(target);
-        }
-    });
+  // Redirect target="_blank" / popup links into the active offscreen page so
+  // clicks never vanish.
+  QObject::connect(page_, &QWebEnginePage::newWindowRequested, this,
+                   [this](QWebEngineNewWindowRequest &req) {
+                     const QUrl target = req.requestedUrl();
+                     QString err;
+                     if (target.isValid() &&
+                         is_allowed_http_url(target.toString(), err)) {
+                       view_->setUrl(target);
+                     }
+                   });
 }
 
 BrowserSession::~BrowserSession() {
-    if (view_) {
-        view_->setPage(nullptr);
-    }
-    delete page_;
-    page_ = nullptr;
-    delete view_;
-    view_ = nullptr;
-    delete profile_;
-    profile_ = nullptr;
+  if (view_) {
+    view_->setPage(nullptr);
+  }
+  delete page_;
+  page_ = nullptr;
+  delete view_;
+  view_ = nullptr;
+  delete profile_;
+  profile_ = nullptr;
 }
 
-bool BrowserSession::is_allowed_http_url(const QString& url_str, QString& error_out) {
-    const QUrl url(url_str.trimmed());
-    if (!url.isValid()) {
-        error_out = "Invalid URL syntax";
-        return false;
-    }
-    const QString scheme = url.scheme().toLower();
-    if (scheme != QStringLiteral("http") && scheme != QStringLiteral("https")) {
-        error_out = QStringLiteral("Rejected non-HTTP(S) URL scheme '%1'").arg(scheme);
-        return false;
-    }
-    if (url.host().isEmpty()) {
-        error_out = "URL must include a non-empty host";
-        return false;
-    }
-    return true;
+bool BrowserSession::is_allowed_http_url(const QString &url_str,
+                                         QString &error_out) {
+  const QUrl url(url_str.trimmed());
+  if (!url.isValid()) {
+    error_out = "Invalid URL syntax";
+    return false;
+  }
+  const QString scheme = url.scheme().toLower();
+  if (scheme != QStringLiteral("http") && scheme != QStringLiteral("https")) {
+    error_out =
+        QStringLiteral("Rejected non-HTTP(S) URL scheme '%1'").arg(scheme);
+    return false;
+  }
+  if (url.host().isEmpty()) {
+    error_out = "URL must include a non-empty host";
+    return false;
+  }
+  return true;
 }
 
-QJsonObject BrowserSession::detect_challenge(const QString& url,
-                                             const QString& title,
-                                             const QString& text,
+QJsonObject BrowserSession::detect_challenge(const QString &url,
+                                             const QString &title,
+                                             const QString &text,
                                              bool has_captcha_dom) {
-    const QString url_low = url.toLower();
-    const QString combined = (title + "\n" + text.left(2000)).toLower();
-    QString reason;
-    if (has_captcha_dom) {
-        reason = "CAPTCHA / challenge widget detected in page DOM";
-    } else if (url_low.contains("js_challenge=1") || url_low.contains("jsc_token=")) {
-        reason = "Anti-bot JS challenge redirect detected in URL";
-    } else if (combined.contains("awswafintegration") ||
-               combined.contains("verify you are human") ||
-               combined.contains("verify that you're not a robot") ||
-               combined.contains("verify that you are not a robot") ||
-               combined.contains("are you a robot") ||
-               combined.contains("attention required! | cloudflare") ||
-               combined.contains("just a moment...") ||
-               combined.contains("enable javascript and cookies to continue") ||
-               combined.contains("enable javascript and then reload the page") ||
-               combined.contains("please complete the captcha") ||
-               (url_low.contains("duckduckgo.com/anomaly") || combined.contains("anomaly-modal"))) {
-        reason = "Anti-bot / human-verification challenge text detected";
-    }
+  const QString url_low = url.toLower();
+  const QString combined = (title + "\n" + text.left(2000)).toLower();
+  QString reason;
+  if (has_captcha_dom) {
+    reason = "CAPTCHA / challenge widget detected in page DOM";
+  } else if (url_low.contains("js_challenge=1") ||
+             url_low.contains("jsc_token=")) {
+    reason = "Anti-bot JS challenge redirect detected in URL";
+  } else if (combined.contains("awswafintegration") ||
+             combined.contains("verify you are human") ||
+             combined.contains("verify that you're not a robot") ||
+             combined.contains("verify that you are not a robot") ||
+             combined.contains("are you a robot") ||
+             combined.contains("attention required! | cloudflare") ||
+             combined.contains("just a moment...") ||
+             combined.contains("enable javascript and cookies to continue") ||
+             combined.contains("enable javascript and then reload the page") ||
+             combined.contains("please complete the captcha") ||
+             (url_low.contains("duckduckgo.com/anomaly") ||
+              combined.contains("anomaly-modal"))) {
+    reason = "Anti-bot / human-verification challenge text detected";
+  }
 
-    QJsonObject out;
-    out.insert("challenge_detected", !reason.isEmpty());
-    out.insert("challenge_reason", reason);
-    return out;
+  QJsonObject out;
+  out.insert("challenge_detected", !reason.isEmpty());
+  out.insert("challenge_reason", reason);
+  return out;
 }
 
-QJsonObject BrowserSession::capture_screenshot(const QString& screenshot_path) {
-    QJsonObject info;
-    if (screenshot_path.isEmpty()) {
-        info.insert("screenshot_ok", false);
-        return info;
-    }
-    const QFileInfo fi(screenshot_path);
-    QDir().mkpath(fi.absolutePath());
-    const QPixmap pixmap = view_->grab();
-    if (pixmap.isNull()) {
-        info.insert("screenshot_ok", false);
-        info.insert("screenshot_error", "QWebEngineView::grab returned null pixmap");
-        return info;
-    }
-    const QImage img = pixmap.toImage();
-    if (!img.save(screenshot_path, "PNG")) {
-        info.insert("screenshot_ok", false);
-        info.insert("screenshot_error", "Failed to save PNG screenshot");
-        return info;
-    }
-    QSet<QRgb> sample_colors;
-    const int step_x = std::max(1, img.width() / 16);
-    const int step_y = std::max(1, img.height() / 12);
-    for (int y = step_y / 2; y < img.height(); y += step_y) {
-        for (int x = step_x / 2; x < img.width(); x += step_x) {
-            sample_colors.insert(img.pixel(x, y));
-        }
-    }
-    info.insert("screenshot_ok", true);
-    info.insert("screenshot_path", QDir::toNativeSeparators(fi.absoluteFilePath()));
-    info.insert("screenshot_width", img.width());
-    info.insert("screenshot_height", img.height());
-    info.insert("screenshot_unique_colors", sample_colors.size());
+QJsonObject BrowserSession::capture_screenshot(const QString &screenshot_path) {
+  QJsonObject info;
+  if (screenshot_path.isEmpty()) {
+    info.insert("screenshot_ok", false);
     return info;
-}
-
-void BrowserSession::finish_with_snapshot(const QString& id,
-                                          const QString& screenshot_path,
-                                          int max_chars,
-                                          const ReplyFn& reply,
-                                          const QJsonObject& extra) {
-    view_->page()->runJavaScript(js_extract_dom_snapshot_script(max_chars, QString{}),
-        [this, id, screenshot_path, reply, extra](const QVariant& res) {
-            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
-            for (auto it = extra.constBegin(); it != extra.constEnd(); ++it) {
-                out.insert(it.key(), it.value());
-            }
-            const QJsonObject challenge = detect_challenge(
-                out.value("url").toString(),
-                out.value("title").toString(),
-                out.value("text").toString(),
-                out.value("has_captcha_dom").toBool(false));
-            out.insert("challenge_detected", challenge.value("challenge_detected"));
-            out.insert("challenge_reason", challenge.value("challenge_reason"));
-
-            if (!screenshot_path.isEmpty()) {
-                const QJsonObject shot = capture_screenshot(screenshot_path);
-                for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                    out.insert(it.key(), it.value());
-                }
-            }
-            out.insert("id", id);
-            out.insert("ok", !out.value("challenge_detected").toBool(false));
-            if (out.value("challenge_detected").toBool(false)) {
-                out.insert("error_code", "challenge_detected");
-                out.insert("error", out.value("challenge_reason").toString());
-            }
-            reply(out);
-        });
-}
-
-void BrowserSession::handle_request(const QJsonObject& req, std::function<void(const QJsonObject&)> reply) {
-    const QString id = req.value("id").toString();
-    const QString action = req.value("action").toString();
-    const QJsonObject params = req.value("params").toObject();
-
-    if (action == QStringLiteral("ping")) {
-        cmd_ping(id, reply);
-    } else if (action == QStringLiteral("navigate")) {
-        cmd_navigate(id, params, reply);
-    } else if (action == QStringLiteral("search")) {
-        cmd_search(id, params, reply);
-    } else if (action == QStringLiteral("click")) {
-        cmd_click(id, params, reply);
-    } else if (action == QStringLiteral("type")) {
-        cmd_type(id, params, reply);
-    } else if (action == QStringLiteral("scroll")) {
-        cmd_scroll(id, params, reply);
-    } else if (action == QStringLiteral("find")) {
-        cmd_find(id, params, reply);
-    } else if (action == QStringLiteral("login")) {
-        cmd_login(id, params, reply);
-    } else if (action == QStringLiteral("extract_text")) {
-        cmd_extract_text(id, params, reply);
-    } else if (action == QStringLiteral("screenshot")) {
-        cmd_screenshot(id, params, reply);
-    } else {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "unknown_action");
-        err.insert("error", QStringLiteral("Unknown browser action: '%1'").arg(action));
-        reply(err);
+  }
+  const QFileInfo fi(screenshot_path);
+  QDir().mkpath(fi.absolutePath());
+  const QPixmap pixmap = view_->grab();
+  if (pixmap.isNull()) {
+    info.insert("screenshot_ok", false);
+    info.insert("screenshot_error",
+                "QWebEngineView::grab returned null pixmap");
+    return info;
+  }
+  const QImage img = pixmap.toImage();
+  if (!img.save(screenshot_path, "PNG")) {
+    info.insert("screenshot_ok", false);
+    info.insert("screenshot_error", "Failed to save PNG screenshot");
+    return info;
+  }
+  QSet<QRgb> sample_colors;
+  const int step_x = std::max(1, img.width() / 16);
+  const int step_y = std::max(1, img.height() / 12);
+  for (int y = step_y / 2; y < img.height(); y += step_y) {
+    for (int x = step_x / 2; x < img.width(); x += step_x) {
+      sample_colors.insert(img.pixel(x, y));
     }
+  }
+  info.insert("screenshot_ok", true);
+  info.insert("screenshot_path",
+              QDir::toNativeSeparators(fi.absoluteFilePath()));
+  info.insert("screenshot_width", img.width());
+  info.insert("screenshot_height", img.height());
+  info.insert("screenshot_unique_colors", sample_colors.size());
+  return info;
 }
 
-void BrowserSession::cmd_ping(const QString& id, const ReplyFn& reply) {
-    QJsonObject res;
-    res.insert("id", id);
-    res.insert("ok", true);
-    res.insert("engine", QStringLiteral("QtWebEngine %1").arg(qVersion()));
-    reply(res);
+void BrowserSession::finish_with_snapshot(const QString &id,
+                                          const QString &screenshot_path,
+                                          int max_chars, const ReplyFn &reply,
+                                          const QJsonObject &extra) {
+  view_->page()->runJavaScript(
+      js_extract_dom_snapshot_script(max_chars, QString{}),
+      [this, id, screenshot_path, reply, extra](const QVariant &res) {
+        QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+        for (auto it = extra.constBegin(); it != extra.constEnd(); ++it) {
+          out.insert(it.key(), it.value());
+        }
+        const QJsonObject challenge = detect_challenge(
+            out.value("url").toString(), out.value("title").toString(),
+            out.value("text").toString(),
+            out.value("has_captcha_dom").toBool(false));
+        out.insert("challenge_detected", challenge.value("challenge_detected"));
+        out.insert("challenge_reason", challenge.value("challenge_reason"));
+
+        if (!screenshot_path.isEmpty()) {
+          const QJsonObject shot = capture_screenshot(screenshot_path);
+          for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+            out.insert(it.key(), it.value());
+          }
+        }
+        out.insert("id", id);
+        out.insert("ok", !out.value("challenge_detected").toBool(false));
+        if (out.value("challenge_detected").toBool(false)) {
+          out.insert("error_code", "challenge_detected");
+          out.insert("error", out.value("challenge_reason").toString());
+        }
+        reply(out);
+      });
 }
 
-void BrowserSession::cmd_navigate(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString url_str = params.value("url").toString();
-    QString url_err;
-    if (!is_allowed_http_url(url_str, url_err)) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_url");
-        err.insert("error", url_err);
-        reply(err);
-        return;
-    }
+void BrowserSession::handle_request(
+    const QJsonObject &req, std::function<void(const QJsonObject &)> reply) {
+  const QString id = req.value("id").toString();
+  const QString action = req.value("action").toString();
+  const QJsonObject params = req.value("params").toObject();
 
-    const int vp_w = std::clamp(params.value("viewport_width").toInt(1280), 320, 1920);
-    const int vp_h = std::clamp(params.value("viewport_height").toInt(800), 240, 1200);
-    view_->resize(vp_w, vp_h);
+  if (action == QStringLiteral("ping")) {
+    cmd_ping(id, reply);
+  } else if (action == QStringLiteral("navigate")) {
+    cmd_navigate(id, params, reply);
+  } else if (action == QStringLiteral("search")) {
+    cmd_search(id, params, reply);
+  } else if (action == QStringLiteral("click")) {
+    cmd_click(id, params, reply);
+  } else if (action == QStringLiteral("type")) {
+    cmd_type(id, params, reply);
+  } else if (action == QStringLiteral("scroll")) {
+    cmd_scroll(id, params, reply);
+  } else if (action == QStringLiteral("find")) {
+    cmd_find(id, params, reply);
+  } else if (action == QStringLiteral("login")) {
+    cmd_login(id, params, reply);
+  } else if (action == QStringLiteral("extract_text")) {
+    cmd_extract_text(id, params, reply);
+  } else if (action == QStringLiteral("screenshot")) {
+    cmd_screenshot(id, params, reply);
+  } else {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "unknown_action");
+    err.insert("error",
+               QStringLiteral("Unknown browser action: '%1'").arg(action));
+    reply(err);
+  }
+}
 
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    const int max_chars = clamp_max_chars(params);
-    const int timeout_ms = clamp_timeout_ms(params);
-    const QUrl target_url(url_str.trimmed());
-    const QUrl prev_url = view_->url();
+void BrowserSession::cmd_ping(const QString &id, const ReplyFn &reply) {
+  QJsonObject res;
+  res.insert("id", id);
+  res.insert("ok", true);
+  res.insert("engine", QStringLiteral("QtWebEngine %1").arg(qVersion()));
+  reply(res);
+}
 
-    // Same-document #fragment navigation never emits loadFinished in Chromium;
-    // scroll straight to the anchor element via JS and snapshot cleanly.
-    if (prev_url.isValid() && target_url.hasFragment() &&
-        prev_url.adjusted(QUrl::RemoveFragment) == target_url.adjusted(QUrl::RemoveFragment)) {
-        const QString frag = target_url.fragment();
-        const QString escaped_frag = QString(frag).replace('\\', "\\\\").replace('\'', "\\'");
-        const QString js = QStringLiteral(R"JS(
+void BrowserSession::cmd_navigate(const QString &id, const QJsonObject &params,
+                                  const ReplyFn &reply) {
+  const QString url_str = params.value("url").toString();
+  QString url_err;
+  if (!is_allowed_http_url(url_str, url_err)) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_url");
+    err.insert("error", url_err);
+    reply(err);
+    return;
+  }
+
+  const int vp_w =
+      std::clamp(params.value("viewport_width").toInt(1280), 320, 1920);
+  const int vp_h =
+      std::clamp(params.value("viewport_height").toInt(800), 240, 1200);
+  view_->resize(vp_w, vp_h);
+
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  const int max_chars = clamp_max_chars(params);
+  const int timeout_ms = clamp_timeout_ms(params);
+  const QUrl target_url(url_str.trimmed());
+  const QUrl prev_url = view_->url();
+
+  // Same-document #fragment navigation never emits loadFinished in Chromium;
+  // scroll straight to the anchor element via JS and snapshot cleanly.
+  if (prev_url.isValid() && target_url.hasFragment() &&
+      prev_url.adjusted(QUrl::RemoveFragment) ==
+          target_url.adjusted(QUrl::RemoveFragment)) {
+    const QString frag = target_url.fragment();
+    const QString escaped_frag =
+        QString(frag).replace('\\', "\\\\").replace('\'', "\\'");
+    const QString js = QStringLiteral(R"JS(
 (() => {
   const raw = '%1';
   let decoded = raw;
@@ -831,57 +866,70 @@ void BrowserSession::cmd_navigate(const QString& id, const QJsonObject& params, 
   }
   return { anchor_found: false, anchor: decoded };
 })()
-)JS").arg(escaped_frag);
-        view_->page()->runJavaScript(js, [this, id, screenshot_path, max_chars, reply](const QVariant& res) {
-            const QJsonObject extra = QJsonObject::fromVariantMap(res.toMap());
-            QTimer::singleShot(150, this, [this, id, screenshot_path, max_chars, reply, extra]() {
-                finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
-            });
-        });
-        return;
-    }
-
-    auto done = std::make_shared<bool>(false);
-    auto conn = std::make_shared<QMetaObject::Connection>();
-    auto timer = new QTimer(this);
-    timer->setSingleShot(true);
-
-    auto complete = [this, done, conn, timer, id, screenshot_path, max_chars, reply, url_str](
-                        bool ok, const QString& err_code, const QString& err_msg) {
-        if (*done) {
-            return;
-        }
-        *done = true;
-        timer->stop();
-        timer->deleteLater();
-        QObject::disconnect(*conn);
-        if (!ok) {
-            QJsonObject err;
-            err.insert("id", id);
-            err.insert("ok", false);
-            err.insert("error_code", err_code);
-            err.insert("error", err_msg);
-            err.insert("url", url_str);
-            reply(err);
-            return;
-        }
-        // Allow initial client-side JS / paint frame to settle briefly before capture.
-        QTimer::singleShot(150, this, [this, id, screenshot_path, max_chars, reply]() {
-            finish_with_snapshot(id, screenshot_path, max_chars, reply);
-        });
-    };
-
-    *conn = QObject::connect(view_->page(), &QWebEnginePage::loadFinished, this, [complete, url_str](bool load_ok) {
-        complete(load_ok,
-                 QStringLiteral("navigation_failed"),
-                 load_ok ? QString{}
-                         : QStringLiteral("Failed to load URL: %1 (If this URL is a PDF or file download, try its HTML landing page instead.)").arg(url_str));
+)JS")
+                           .arg(escaped_frag);
+    view_->page()->runJavaScript(js, [this, id, screenshot_path, max_chars,
+                                      reply](const QVariant &res) {
+      const QJsonObject extra = QJsonObject::fromVariantMap(res.toMap());
+      QTimer::singleShot(
+          150, this, [this, id, screenshot_path, max_chars, reply, extra]() {
+            finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
+          });
     });
+    return;
+  }
 
-    QObject::connect(timer, &QTimer::timeout, this,
-                     [this, done, conn, timer, id, screenshot_path, max_chars, reply, url_str, target_url, prev_url, timeout_ms]() {
+  auto done = std::make_shared<bool>(false);
+  auto conn = std::make_shared<QMetaObject::Connection>();
+  auto timer = new QTimer(this);
+  timer->setSingleShot(true);
+
+  auto complete = [this, done, conn, timer, id, screenshot_path, max_chars,
+                   reply, url_str](bool ok, const QString &err_code,
+                                   const QString &err_msg) {
+    if (*done) {
+      return;
+    }
+    *done = true;
+    timer->stop();
+    timer->deleteLater();
+    QObject::disconnect(*conn);
+    if (!ok) {
+      QJsonObject err;
+      err.insert("id", id);
+      err.insert("ok", false);
+      err.insert("error_code", err_code);
+      err.insert("error", err_msg);
+      err.insert("url", url_str);
+      reply(err);
+      return;
+    }
+    // Allow initial client-side JS / paint frame to settle briefly before
+    // capture.
+    QTimer::singleShot(
+        150, this, [this, id, screenshot_path, max_chars, reply]() {
+          finish_with_snapshot(id, screenshot_path, max_chars, reply);
+        });
+  };
+
+  *conn = QObject::connect(
+      view_->page(), &QWebEnginePage::loadFinished, this,
+      [complete, url_str](bool load_ok) {
+        complete(load_ok, QStringLiteral("navigation_failed"),
+                 load_ok
+                     ? QString{}
+                     : QStringLiteral(
+                           "Failed to load URL: %1 (If this URL is a PDF or "
+                           "file download, try its HTML landing page instead.)")
+                           .arg(url_str));
+      });
+
+  QObject::connect(
+      timer, &QTimer::timeout, this,
+      [this, done, conn, timer, id, screenshot_path, max_chars, reply, url_str,
+       target_url, prev_url, timeout_ms]() {
         if (*done) {
-            return;
+          return;
         }
         *done = true;
         timer->stop();
@@ -889,189 +937,225 @@ void BrowserSession::cmd_navigate(const QString& id, const QJsonObject& params, 
         QObject::disconnect(*conn);
         view_->stop();
 
-        // Partial-DOM recovery: ad-heavy blogs often render full article text in < 2s while
-        // slow third-party trackers prevent loadFinished. Snapshot if target page already rendered.
-        QTimer::singleShot(80, this, [this, id, screenshot_path, max_chars, reply, url_str, target_url, prev_url, timeout_ms]() {
-            view_->page()->runJavaScript(js_extract_dom_snapshot_script(max_chars, QString{}),
-                [this, id, screenshot_path, reply, url_str, target_url, prev_url, timeout_ms](const QVariant& res) {
+        // Partial-DOM recovery: ad-heavy blogs often render full article text
+        // in < 2s while slow third-party trackers prevent loadFinished.
+        // Snapshot if target page already rendered.
+        QTimer::singleShot(
+            80, this,
+            [this, id, screenshot_path, max_chars, reply, url_str, target_url,
+             prev_url, timeout_ms]() {
+              view_->page()->runJavaScript(
+                  js_extract_dom_snapshot_script(max_chars, QString{}),
+                  [this, id, screenshot_path, reply, url_str, target_url,
+                   prev_url, timeout_ms](const QVariant &res) {
                     QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
                     const QString cur_url_str = out.value("url").toString();
                     const QUrl cur_url(cur_url_str);
                     const QString text = out.value("text").toString().trimmed();
                     const QJsonObject challenge = detect_challenge(
-                        cur_url_str,
-                        out.value("title").toString(),
-                        text,
+                        cur_url_str, out.value("title").toString(), text,
                         out.value("has_captcha_dom").toBool(false));
                     if (challenge.value("challenge_detected").toBool(false)) {
-                        QJsonObject err;
-                        err.insert("id", id);
-                        err.insert("ok", false);
-                        err.insert("challenge_detected", true);
-                        err.insert("challenge_reason", challenge.value("challenge_reason"));
-                        err.insert("error_code", "challenge_detected");
-                        err.insert("error", challenge.value("challenge_reason").toString());
-                        err.insert("url", cur_url_str.isEmpty() ? url_str : cur_url_str);
-                        reply(err);
-                        return;
+                      QJsonObject err;
+                      err.insert("id", id);
+                      err.insert("ok", false);
+                      err.insert("challenge_detected", true);
+                      err.insert("challenge_reason",
+                                 challenge.value("challenge_reason"));
+                      err.insert("error_code", "challenge_detected");
+                      err.insert(
+                          "error",
+                          challenge.value("challenge_reason").toString());
+                      err.insert("url",
+                                 cur_url_str.isEmpty() ? url_str : cur_url_str);
+                      reply(err);
+                      return;
                     }
 
-                    const bool host_matches = cur_url.isValid() &&
-                        !cur_url.host().isEmpty() &&
-                        (cur_url.host().compare(target_url.host(), Qt::CaseInsensitive) == 0 ||
-                         cur_url.host().endsWith("." + target_url.host(), Qt::CaseInsensitive) ||
-                         target_url.host().endsWith("." + cur_url.host(), Qt::CaseInsensitive));
-                    const bool moved_off_prev = !prev_url.isValid() ||
-                        prev_url.adjusted(QUrl::RemoveFragment) != cur_url.adjusted(QUrl::RemoveFragment);
+                    const bool host_matches =
+                        cur_url.isValid() && !cur_url.host().isEmpty() &&
+                        (cur_url.host().compare(target_url.host(),
+                                                Qt::CaseInsensitive) == 0 ||
+                         cur_url.host().endsWith("." + target_url.host(),
+                                                 Qt::CaseInsensitive) ||
+                         target_url.host().endsWith("." + cur_url.host(),
+                                                    Qt::CaseInsensitive));
+                    const bool moved_off_prev =
+                        !prev_url.isValid() ||
+                        prev_url.adjusted(QUrl::RemoveFragment) !=
+                            cur_url.adjusted(QUrl::RemoveFragment);
 
-                    if ((host_matches || (moved_off_prev && cur_url.scheme().startsWith("http"))) && text.size() >= 300) {
-                        out.insert("challenge_detected", false);
-                        out.insert("challenge_reason", QString{});
-                        out.insert("partial_load", true);
-                        out.insert("partial_load_timeout_ms", timeout_ms);
-                        if (!screenshot_path.isEmpty()) {
-                            const QJsonObject shot = capture_screenshot(screenshot_path);
-                            for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                                out.insert(it.key(), it.value());
-                            }
+                    if ((host_matches ||
+                         (moved_off_prev &&
+                          cur_url.scheme().startsWith("http"))) &&
+                        text.size() >= 300) {
+                      out.insert("challenge_detected", false);
+                      out.insert("challenge_reason", QString{});
+                      out.insert("partial_load", true);
+                      out.insert("partial_load_timeout_ms", timeout_ms);
+                      if (!screenshot_path.isEmpty()) {
+                        const QJsonObject shot =
+                            capture_screenshot(screenshot_path);
+                        for (auto it = shot.constBegin(); it != shot.constEnd();
+                             ++it) {
+                          out.insert(it.key(), it.value());
                         }
-                        out.insert("id", id);
-                        out.insert("ok", true);
-                        reply(out);
-                        return;
+                      }
+                      out.insert("id", id);
+                      out.insert("ok", true);
+                      reply(out);
+                      return;
                     }
 
                     QJsonObject err;
                     err.insert("id", id);
                     err.insert("ok", false);
                     err.insert("error_code", "navigation_timeout");
-                    err.insert("error", QStringLiteral("Navigation timed out after %1 ms for %2").arg(timeout_ms).arg(url_str));
+                    err.insert("error",
+                               QStringLiteral(
+                                   "Navigation timed out after %1 ms for %2")
+                                   .arg(timeout_ms)
+                                   .arg(url_str));
                     err.insert("url", url_str);
                     reply(err);
-                });
-        });
-    });
+                  });
+            });
+      });
 
-    timer->start(timeout_ms);
-    view_->setUrl(target_url);
+  timer->start(timeout_ms);
+  view_->setUrl(target_url);
 }
 
-void BrowserSession::cmd_search(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString query = params.value("query").toString().trimmed();
-    if (query.isEmpty()) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_args");
-        err.insert("error", "Search query must be non-empty");
-        reply(err);
-        return;
+void BrowserSession::cmd_search(const QString &id, const QJsonObject &params,
+                                const ReplyFn &reply) {
+  const QString query = params.value("query").toString().trimmed();
+  if (query.isEmpty()) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_args");
+    err.insert("error", "Search query must be non-empty");
+    reply(err);
+    return;
+  }
+
+  QString base_url = params.value("search_base_url").toString().trimmed();
+  if (base_url.isEmpty()) {
+    base_url = QStringLiteral("https://html.duckduckgo.com/html/");
+  }
+  QString url_err;
+  if (!is_allowed_http_url(base_url, url_err)) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_url");
+    err.insert("error", url_err);
+    reply(err);
+    return;
+  }
+
+  QUrl search_url(base_url);
+  QUrlQuery uq(search_url);
+  uq.addQueryItem(QStringLiteral("q"), query);
+  search_url.setQuery(uq);
+
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  const int timeout_ms = clamp_timeout_ms(params);
+
+  auto done = std::make_shared<bool>(false);
+  auto conn = std::make_shared<QMetaObject::Connection>();
+  auto timer = new QTimer(this);
+  timer->setSingleShot(true);
+
+  auto complete = [this, done, conn, timer, id, screenshot_path, query, reply,
+                   search_url](bool ok, const QString &err_msg) {
+    if (*done) {
+      return;
     }
-
-    QString base_url = params.value("search_base_url").toString().trimmed();
-    if (base_url.isEmpty()) {
-        base_url = QStringLiteral("https://html.duckduckgo.com/html/");
+    *done = true;
+    timer->stop();
+    timer->deleteLater();
+    QObject::disconnect(*conn);
+    if (!ok) {
+      QJsonObject err;
+      err.insert("id", id);
+      err.insert("ok", false);
+      err.insert("error_code", "search_failed");
+      err.insert("error", err_msg);
+      reply(err);
+      return;
     }
-    QString url_err;
-    if (!is_allowed_http_url(base_url, url_err)) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_url");
-        err.insert("error", url_err);
-        reply(err);
-        return;
-    }
-
-    QUrl search_url(base_url);
-    QUrlQuery uq(search_url);
-    uq.addQueryItem(QStringLiteral("q"), query);
-    search_url.setQuery(uq);
-
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    const int timeout_ms = clamp_timeout_ms(params);
-
-    auto done = std::make_shared<bool>(false);
-    auto conn = std::make_shared<QMetaObject::Connection>();
-    auto timer = new QTimer(this);
-    timer->setSingleShot(true);
-
-    auto complete = [this, done, conn, timer, id, screenshot_path, query, reply, search_url](bool ok, const QString& err_msg) {
-        if (*done) {
-            return;
-        }
-        *done = true;
-        timer->stop();
-        timer->deleteLater();
-        QObject::disconnect(*conn);
-        if (!ok) {
-            QJsonObject err;
-            err.insert("id", id);
-            err.insert("ok", false);
-            err.insert("error_code", "search_failed");
-            err.insert("error", err_msg);
-            reply(err);
-            return;
-        }
-        QTimer::singleShot(150, this, [this, id, screenshot_path, query, reply]() {
-            view_->page()->runJavaScript(js_extract_ddg_results_script(),
-                [this, id, screenshot_path, query, reply](const QVariant& res) {
-                    QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
-                    out.insert("query", query);
-                    const QJsonObject challenge = detect_challenge(
-                        out.value("url").toString(),
-                        out.value("title").toString(),
-                        out.value("text").toString(),
-                        out.value("has_captcha_dom").toBool(false));
-                    out.insert("challenge_detected", challenge.value("challenge_detected"));
-                    out.insert("challenge_reason", challenge.value("challenge_reason"));
-                    if (!screenshot_path.isEmpty()) {
-                        const QJsonObject shot = capture_screenshot(screenshot_path);
-                        for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                            out.insert(it.key(), it.value());
-                        }
-                    }
-                    out.insert("id", id);
-                    out.insert("ok", !out.value("challenge_detected").toBool(false));
-                    if (out.value("challenge_detected").toBool(false)) {
-                        out.insert("error_code", "challenge_detected");
-                        out.insert("error", out.value("challenge_reason").toString());
-                    }
-                    reply(out);
-                });
-        });
-    };
-
-    *conn = QObject::connect(view_->page(), &QWebEnginePage::loadFinished, this, [complete, search_url](bool load_ok) {
-        complete(load_ok, load_ok ? QString{} : QStringLiteral("Search page failed to load: %1").arg(search_url.toString()));
+    QTimer::singleShot(150, this, [this, id, screenshot_path, query, reply]() {
+      view_->page()->runJavaScript(
+          js_extract_ddg_results_script(),
+          [this, id, screenshot_path, query, reply](const QVariant &res) {
+            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+            out.insert("query", query);
+            const QJsonObject challenge = detect_challenge(
+                out.value("url").toString(), out.value("title").toString(),
+                out.value("text").toString(),
+                out.value("has_captcha_dom").toBool(false));
+            out.insert("challenge_detected",
+                       challenge.value("challenge_detected"));
+            out.insert("challenge_reason", challenge.value("challenge_reason"));
+            if (!screenshot_path.isEmpty()) {
+              const QJsonObject shot = capture_screenshot(screenshot_path);
+              for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+                out.insert(it.key(), it.value());
+              }
+            }
+            out.insert("id", id);
+            out.insert("ok", !out.value("challenge_detected").toBool(false));
+            if (out.value("challenge_detected").toBool(false)) {
+              out.insert("error_code", "challenge_detected");
+              out.insert("error", out.value("challenge_reason").toString());
+            }
+            reply(out);
+          });
     });
+  };
 
-    QObject::connect(timer, &QTimer::timeout, this, [this, complete, timeout_ms]() {
+  *conn = QObject::connect(
+      view_->page(), &QWebEnginePage::loadFinished, this,
+      [complete, search_url](bool load_ok) {
+        complete(load_ok, load_ok
+                              ? QString{}
+                              : QStringLiteral("Search page failed to load: %1")
+                                    .arg(search_url.toString()));
+      });
+
+  QObject::connect(
+      timer, &QTimer::timeout, this, [this, complete, timeout_ms]() {
         view_->stop();
-        complete(false, QStringLiteral("Search timed out after %1 ms").arg(timeout_ms));
-    });
+        complete(
+            false,
+            QStringLiteral("Search timed out after %1 ms").arg(timeout_ms));
+      });
 
-    timer->start(timeout_ms);
-    view_->setUrl(search_url);
+  timer->start(timeout_ms);
+  view_->setUrl(search_url);
 }
 
-void BrowserSession::cmd_click(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString selector = params.value("selector").toString();
-    const bool has_xy = params.contains("x") && params.contains("y");
-    if (selector.isEmpty() && !has_xy) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_args");
-        err.insert("error", "click requires either 'selector' or integer 'x' and 'y'");
-        reply(err);
-        return;
-    }
+void BrowserSession::cmd_click(const QString &id, const QJsonObject &params,
+                               const ReplyFn &reply) {
+  const QString selector = params.value("selector").toString();
+  const bool has_xy = params.contains("x") && params.contains("y");
+  if (selector.isEmpty() && !has_xy) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_args");
+    err.insert("error",
+               "click requires either 'selector' or integer 'x' and 'y'");
+    reply(err);
+    return;
+  }
 
-    const int x = params.value("x").toInt(0);
-    const int y = params.value("y").toInt(0);
-    const QString escaped_sel = QString(selector).replace('\\', "\\\\").replace('\'', "\\'");
-    const QString js = QStringLiteral(R"JS(
+  const int x = params.value("x").toInt(0);
+  const int y = params.value("y").toInt(0);
+  const QString escaped_sel =
+      QString(selector).replace('\\', "\\\\").replace('\'', "\\'");
+  const QString js = QStringLiteral(R"JS(
 (() => {
   const sel = '%1';
   const useXy = %2;
@@ -1091,115 +1175,134 @@ void BrowserSession::cmd_click(const QString& id, const QJsonObject& params, con
   return { clicked: true, target_label: label };
 })()
 )JS")
-        .arg(escaped_sel)
-        .arg(has_xy ? "true" : "false")
-        .arg(x)
-        .arg(y);
+                         .arg(escaped_sel)
+                         .arg(has_xy ? "true" : "false")
+                         .arg(x)
+                         .arg(y);
 
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    const int max_chars = clamp_max_chars(params);
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  const int max_chars = clamp_max_chars(params);
 
-    // Watch for navigation triggered by clicking an <a href> link or submit button so we
-    // don't snapshot the old or half-loaded page after a blind 250ms delay.
-    struct ClickNavState {
-        bool nav_started = false;
-        bool nav_finished = false;
-        bool finished = false;
-        bool js_done = false;
-        QJsonObject click_res;
-        QMetaObject::Connection start_conn;
-        QMetaObject::Connection finish_conn;
-        QTimer* nav_timeout = nullptr;
-    };
-    auto state = std::make_shared<ClickNavState>();
+  // Watch for navigation triggered by clicking an <a href> link or submit
+  // button so we don't snapshot the old or half-loaded page after a blind 250ms
+  // delay.
+  struct ClickNavState {
+    bool nav_started = false;
+    bool nav_finished = false;
+    bool finished = false;
+    bool js_done = false;
+    QJsonObject click_res;
+    QMetaObject::Connection start_conn;
+    QMetaObject::Connection finish_conn;
+    QTimer *nav_timeout = nullptr;
+  };
+  auto state = std::make_shared<ClickNavState>();
 
-    auto finalize = [this, state, id, screenshot_path, max_chars, reply](int settle_ms) {
-        if (state->finished) return;
-        state->finished = true;
-        QObject::disconnect(state->start_conn);
-        QObject::disconnect(state->finish_conn);
-        if (state->nav_timeout) {
-            state->nav_timeout->stop();
-            state->nav_timeout->deleteLater();
-            state->nav_timeout = nullptr;
-        }
-        QTimer::singleShot(settle_ms, this, [this, id, screenshot_path, max_chars, reply, extra = state->click_res]() {
-            finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
-        });
-    };
+  auto finalize = [this, state, id, screenshot_path, max_chars,
+                   reply](int settle_ms) {
+    if (state->finished)
+      return;
+    state->finished = true;
+    QObject::disconnect(state->start_conn);
+    QObject::disconnect(state->finish_conn);
+    if (state->nav_timeout) {
+      state->nav_timeout->stop();
+      state->nav_timeout->deleteLater();
+      state->nav_timeout = nullptr;
+    }
+    QTimer::singleShot(settle_ms, this,
+                       [this, id, screenshot_path, max_chars, reply,
+                        extra = state->click_res]() {
+                         finish_with_snapshot(id, screenshot_path, max_chars,
+                                              reply, extra);
+                       });
+  };
 
-    state->start_conn = QObject::connect(view_->page(), &QWebEnginePage::loadStarted, this, [this, state, finalize]() {
-        if (state->finished) return;
+  state->start_conn = QObject::connect(
+      view_->page(), &QWebEnginePage::loadStarted, this,
+      [this, state, finalize]() {
+        if (state->finished)
+          return;
         state->nav_started = true;
         state->nav_finished = false;
         if (!state->nav_timeout) {
-            state->nav_timeout = new QTimer(this);
-            state->nav_timeout->setSingleShot(true);
-            QObject::connect(state->nav_timeout, &QTimer::timeout, this, [finalize]() {
-                finalize(100);
-            });
-            state->nav_timeout->start(12000);
+          state->nav_timeout = new QTimer(this);
+          state->nav_timeout->setSingleShot(true);
+          QObject::connect(state->nav_timeout, &QTimer::timeout, this,
+                           [finalize]() { finalize(100); });
+          state->nav_timeout->start(12000);
         }
-    });
+      });
 
-    state->finish_conn = QObject::connect(view_->page(), &QWebEnginePage::loadFinished, this, [state, finalize](bool) {
-        if (state->nav_started) {
-            state->nav_finished = true;
-            if (state->js_done) {
-                finalize(150);
-            }
-        }
-    });
+  state->finish_conn =
+      QObject::connect(view_->page(), &QWebEnginePage::loadFinished, this,
+                       [state, finalize](bool) {
+                         if (state->nav_started) {
+                           state->nav_finished = true;
+                           if (state->js_done) {
+                             finalize(150);
+                           }
+                         }
+                       });
 
-    view_->page()->runJavaScript(js, [this, state, finalize, id, reply](const QVariant& res) {
+  view_->page()->runJavaScript(
+      js, [this, state, finalize, id, reply](const QVariant &res) {
         state->click_res = QJsonObject::fromVariantMap(res.toMap());
         state->js_done = true;
         if (!state->click_res.value("clicked").toBool(false)) {
-            state->finished = true;
-            QObject::disconnect(state->start_conn);
-            QObject::disconnect(state->finish_conn);
-            if (state->nav_timeout) {
-                state->nav_timeout->stop();
-                state->nav_timeout->deleteLater();
-                state->nav_timeout = nullptr;
-            }
-            QJsonObject err;
-            err.insert("id", id);
-            err.insert("ok", false);
-            err.insert("error_code", "element_not_found");
-            err.insert("error", state->click_res.value("error").toString("Click failed"));
-            reply(err);
-            return;
+          state->finished = true;
+          QObject::disconnect(state->start_conn);
+          QObject::disconnect(state->finish_conn);
+          if (state->nav_timeout) {
+            state->nav_timeout->stop();
+            state->nav_timeout->deleteLater();
+            state->nav_timeout = nullptr;
+          }
+          QJsonObject err;
+          err.insert("id", id);
+          err.insert("ok", false);
+          err.insert("error_code", "element_not_found");
+          err.insert("error",
+                     state->click_res.value("error").toString("Click failed"));
+          reply(err);
+          return;
         }
         if (state->nav_finished) {
-            finalize(150);
-            return;
+          finalize(150);
+          return;
         }
         QTimer::singleShot(300, this, [state, finalize]() {
-            if (!state->nav_started) {
-                finalize(50);
-            }
+          if (!state->nav_started) {
+            finalize(50);
+          }
         });
-    });
+      });
 }
 
-void BrowserSession::cmd_type(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString selector = params.value("selector").toString();
-    const QString text = params.value("text").toString();
-    const bool submit = params.value("submit").toBool(false);
-    if (selector.isEmpty()) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_args");
-        err.insert("error", "type requires non-empty 'selector'");
-        reply(err);
-        return;
-    }
+void BrowserSession::cmd_type(const QString &id, const QJsonObject &params,
+                              const ReplyFn &reply) {
+  const QString selector = params.value("selector").toString();
+  const QString text = params.value("text").toString();
+  const bool submit = params.value("submit").toBool(false);
+  if (selector.isEmpty()) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_args");
+    err.insert("error", "type requires non-empty 'selector'");
+    reply(err);
+    return;
+  }
 
-    const QString escaped_sel = QString(selector).replace('\\', "\\\\").replace('\'', "\\'");
-    const QString escaped_txt = QString(text).replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n").replace('\r', "");
-    const QString js = QStringLiteral(R"JS(
+  const QString escaped_sel =
+      QString(selector).replace('\\', "\\\\").replace('\'', "\\'");
+  const QString escaped_txt = QString(text)
+                                  .replace('\\', "\\\\")
+                                  .replace('\'', "\\'")
+                                  .replace('\n', "\\n")
+                                  .replace('\r', "");
+  const QString js =
+      QStringLiteral(R"JS(
 (() => {
   const el = document.querySelector('%1');
   if (!el) return { typed: false, error: 'Input element not found' };
@@ -1227,295 +1330,337 @@ void BrowserSession::cmd_type(const QString& id, const QJsonObject& params, cons
   return { typed: true, value_length: (el.value || '').length };
 })()
 )JS")
-        .arg(escaped_sel, escaped_txt, submit ? "true" : "false");
+          .arg(escaped_sel, escaped_txt, submit ? "true" : "false");
 
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    const int max_chars = clamp_max_chars(params);
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  const int max_chars = clamp_max_chars(params);
 
-    if (!submit) {
-        view_->page()->runJavaScript(js, [this, id, screenshot_path, max_chars, reply](const QVariant& res) {
-            const QJsonObject type_res = QJsonObject::fromVariantMap(res.toMap());
-            if (!type_res.value("typed").toBool(false)) {
-                QJsonObject err;
-                err.insert("id", id);
-                err.insert("ok", false);
-                err.insert("error_code", "element_not_found");
-                err.insert("error", type_res.value("error").toString("Type failed"));
-                reply(err);
-                return;
-            }
-            QTimer::singleShot(150, this, [this, id, screenshot_path, max_chars, reply, type_res]() {
-                finish_with_snapshot(id, screenshot_path, max_chars, reply, type_res);
-            });
-        });
+  if (!submit) {
+    view_->page()->runJavaScript(js, [this, id, screenshot_path, max_chars,
+                                      reply](const QVariant &res) {
+      const QJsonObject type_res = QJsonObject::fromVariantMap(res.toMap());
+      if (!type_res.value("typed").toBool(false)) {
+        QJsonObject err;
+        err.insert("id", id);
+        err.insert("ok", false);
+        err.insert("error_code", "element_not_found");
+        err.insert("error", type_res.value("error").toString("Type failed"));
+        reply(err);
         return;
+      }
+      QTimer::singleShot(
+          150, this, [this, id, screenshot_path, max_chars, reply, type_res]() {
+            finish_with_snapshot(id, screenshot_path, max_chars, reply,
+                                 type_res);
+          });
+    });
+    return;
+  }
+
+  // Wait for form-submission navigation cleanly when submit == true (matching
+  // cmd_click).
+  struct TypeNavState {
+    bool nav_started = false;
+    bool nav_finished = false;
+    bool finished = false;
+    bool js_done = false;
+    QJsonObject type_res;
+    QMetaObject::Connection start_conn;
+    QMetaObject::Connection finish_conn;
+    QTimer *nav_timeout = nullptr;
+  };
+  auto state = std::make_shared<TypeNavState>();
+
+  auto finalize = [this, state, id, screenshot_path, max_chars,
+                   reply](int settle_ms) {
+    if (state->finished)
+      return;
+    state->finished = true;
+    QObject::disconnect(state->start_conn);
+    QObject::disconnect(state->finish_conn);
+    if (state->nav_timeout) {
+      state->nav_timeout->stop();
+      state->nav_timeout->deleteLater();
+      state->nav_timeout = nullptr;
     }
+    QTimer::singleShot(settle_ms, this,
+                       [this, id, screenshot_path, max_chars, reply,
+                        extra = state->type_res]() {
+                         finish_with_snapshot(id, screenshot_path, max_chars,
+                                              reply, extra);
+                       });
+  };
 
-    // Wait for form-submission navigation cleanly when submit == true (matching cmd_click).
-    struct TypeNavState {
-        bool nav_started = false;
-        bool nav_finished = false;
-        bool finished = false;
-        bool js_done = false;
-        QJsonObject type_res;
-        QMetaObject::Connection start_conn;
-        QMetaObject::Connection finish_conn;
-        QTimer* nav_timeout = nullptr;
-    };
-    auto state = std::make_shared<TypeNavState>();
-
-    auto finalize = [this, state, id, screenshot_path, max_chars, reply](int settle_ms) {
-        if (state->finished) return;
-        state->finished = true;
-        QObject::disconnect(state->start_conn);
-        QObject::disconnect(state->finish_conn);
-        if (state->nav_timeout) {
-            state->nav_timeout->stop();
-            state->nav_timeout->deleteLater();
-            state->nav_timeout = nullptr;
-        }
-        QTimer::singleShot(settle_ms, this, [this, id, screenshot_path, max_chars, reply, extra = state->type_res]() {
-            finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
-        });
-    };
-
-    state->start_conn = QObject::connect(view_->page(), &QWebEnginePage::loadStarted, this, [this, state, finalize]() {
-        if (state->finished) return;
+  state->start_conn = QObject::connect(
+      view_->page(), &QWebEnginePage::loadStarted, this,
+      [this, state, finalize]() {
+        if (state->finished)
+          return;
         state->nav_started = true;
         state->nav_finished = false;
         if (!state->nav_timeout) {
-            state->nav_timeout = new QTimer(this);
-            state->nav_timeout->setSingleShot(true);
-            QObject::connect(state->nav_timeout, &QTimer::timeout, this, [finalize]() {
-                finalize(100);
-            });
-            state->nav_timeout->start(12000);
+          state->nav_timeout = new QTimer(this);
+          state->nav_timeout->setSingleShot(true);
+          QObject::connect(state->nav_timeout, &QTimer::timeout, this,
+                           [finalize]() { finalize(100); });
+          state->nav_timeout->start(12000);
         }
-    });
+      });
 
-    state->finish_conn = QObject::connect(view_->page(), &QWebEnginePage::loadFinished, this, [state, finalize](bool) {
-        if (state->nav_started) {
-            state->nav_finished = true;
-            if (state->js_done) {
-                finalize(150);
-            }
-        }
-    });
+  state->finish_conn =
+      QObject::connect(view_->page(), &QWebEnginePage::loadFinished, this,
+                       [state, finalize](bool) {
+                         if (state->nav_started) {
+                           state->nav_finished = true;
+                           if (state->js_done) {
+                             finalize(150);
+                           }
+                         }
+                       });
 
-    view_->page()->runJavaScript(js, [this, state, finalize, id, reply](const QVariant& res) {
+  view_->page()->runJavaScript(
+      js, [this, state, finalize, id, reply](const QVariant &res) {
         state->type_res = QJsonObject::fromVariantMap(res.toMap());
         state->js_done = true;
         if (!state->type_res.value("typed").toBool(false)) {
-            state->finished = true;
-            QObject::disconnect(state->start_conn);
-            QObject::disconnect(state->finish_conn);
-            if (state->nav_timeout) {
-                state->nav_timeout->stop();
-                state->nav_timeout->deleteLater();
-                state->nav_timeout = nullptr;
-            }
-            QJsonObject err;
-            err.insert("id", id);
-            err.insert("ok", false);
-            err.insert("error_code", "element_not_found");
-            err.insert("error", state->type_res.value("error").toString("Type failed"));
-            reply(err);
-            return;
+          state->finished = true;
+          QObject::disconnect(state->start_conn);
+          QObject::disconnect(state->finish_conn);
+          if (state->nav_timeout) {
+            state->nav_timeout->stop();
+            state->nav_timeout->deleteLater();
+            state->nav_timeout = nullptr;
+          }
+          QJsonObject err;
+          err.insert("id", id);
+          err.insert("ok", false);
+          err.insert("error_code", "element_not_found");
+          err.insert("error",
+                     state->type_res.value("error").toString("Type failed"));
+          reply(err);
+          return;
         }
         if (state->nav_finished) {
-            finalize(150);
-            return;
+          finalize(150);
+          return;
         }
         QTimer::singleShot(400, this, [state, finalize]() {
-            if (!state->nav_started) {
-                finalize(50);
-            }
+          if (!state->nav_started) {
+            finalize(50);
+          }
         });
-    });
+      });
 }
 
-void BrowserSession::cmd_scroll(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString direction = params.value("direction").toString("down").toLower();
-    const int requested_pixels = params.value("pixels").toInt(700);
-    const int pixels = std::clamp(requested_pixels, -1600, 1600);
-    const bool was_clamped = (direction == QStringLiteral("down") || direction == QStringLiteral("up")) &&
-                             (std::abs(requested_pixels) > 1600);
-    QString js;
-    if (direction == QStringLiteral("top")) {
-        js = QStringLiteral("window.scrollTo(0, 0); ({ scrolled: 'top' });");
-    } else if (direction == QStringLiteral("bottom")) {
-        js = QStringLiteral("window.scrollTo(0, document.documentElement.scrollHeight || document.body.scrollHeight); ({ scrolled: 'bottom' });");
-    } else if (direction == QStringLiteral("up")) {
-        js = QStringLiteral("window.scrollBy(0, -%1); ({ scrolled: 'up' });").arg(std::abs(pixels));
-    } else {
-        js = QStringLiteral("window.scrollBy(0, %1); ({ scrolled: 'down' });").arg(pixels);
+void BrowserSession::cmd_scroll(const QString &id, const QJsonObject &params,
+                                const ReplyFn &reply) {
+  const QString direction =
+      params.value("direction").toString("down").toLower();
+  const int requested_pixels = params.value("pixels").toInt(700);
+  const int pixels = std::clamp(requested_pixels, -1600, 1600);
+  const bool was_clamped = (direction == QStringLiteral("down") ||
+                            direction == QStringLiteral("up")) &&
+                           (std::abs(requested_pixels) > 1600);
+  QString js;
+  if (direction == QStringLiteral("top")) {
+    js = QStringLiteral("window.scrollTo(0, 0); ({ scrolled: 'top' });");
+  } else if (direction == QStringLiteral("bottom")) {
+    js = QStringLiteral(
+        "window.scrollTo(0, document.documentElement.scrollHeight || "
+        "document.body.scrollHeight); ({ scrolled: 'bottom' });");
+  } else if (direction == QStringLiteral("up")) {
+    js = QStringLiteral("window.scrollBy(0, -%1); ({ scrolled: 'up' });")
+             .arg(std::abs(pixels));
+  } else {
+    js = QStringLiteral("window.scrollBy(0, %1); ({ scrolled: 'down' });")
+             .arg(pixels);
+  }
+
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  const int max_chars = clamp_max_chars(params);
+
+  view_->page()->runJavaScript(js, [this, id, screenshot_path, max_chars, reply,
+                                    was_clamped, requested_pixels,
+                                    pixels](const QVariant &res) {
+    QJsonObject extra = QJsonObject::fromVariantMap(res.toMap());
+    if (was_clamped) {
+      extra.insert("clamped_from", std::abs(requested_pixels));
+      extra.insert("clamped_to", std::abs(pixels));
     }
+    QTimer::singleShot(
+        120, this, [this, id, screenshot_path, max_chars, reply, extra]() {
+          finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
+        });
+  });
+}
 
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    const int max_chars = clamp_max_chars(params);
+void BrowserSession::cmd_find(const QString &id, const QJsonObject &params,
+                              const ReplyFn &reply) {
+  const QString query = params.value("query").toString().trimmed();
+  if (query.isEmpty()) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_args");
+    err.insert("error", "Search query must be non-empty");
+    reply(err);
+    return;
+  }
 
-    view_->page()->runJavaScript(js, [this, id, screenshot_path, max_chars, reply, was_clamped, requested_pixels, pixels](const QVariant& res) {
-        QJsonObject extra = QJsonObject::fromVariantMap(res.toMap());
-        if (was_clamped) {
-            extra.insert("clamped_from", std::abs(requested_pixels));
-            extra.insert("clamped_to", std::abs(pixels));
+  const int match_index = std::max(1, params.value("match_index").toInt(1));
+  const int max_chars = clamp_max_chars(params, 800);
+  const QString screenshot_path = params.value("screenshot_path").toString();
+
+  view_->page()->runJavaScript(
+      js_find_in_page_script(query, match_index, max_chars),
+      [this, id, query, screenshot_path, reply](const QVariant &res) {
+        QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+        out.insert("id", id);
+        out.insert("action", "find");
+        out.insert("url", page_->url().toString());
+        out.insert("title", page_->title());
+
+        if (!screenshot_path.isEmpty()) {
+          const QJsonObject shot = capture_screenshot(screenshot_path);
+          for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+            out.insert(it.key(), it.value());
+          }
         }
-        QTimer::singleShot(120, this, [this, id, screenshot_path, max_chars, reply, extra]() {
-            finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
-        });
-    });
+        reply(out);
+      });
 }
 
-void BrowserSession::cmd_find(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString query = params.value("query").toString().trimmed();
-    if (query.isEmpty()) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_args");
-        err.insert("error", "Search query must be non-empty");
-        reply(err);
-        return;
-    }
+void BrowserSession::cmd_login(const QString &id, const QJsonObject &params,
+                               const ReplyFn &reply) {
+  const QString username = params.value("username").toString();
+  const QString password = params.value("password").toString();
+  const bool submit = params.value("submit").toBool(true);
+  const QString screenshot_path = params.value("screenshot_path").toString();
 
-    const int match_index = std::max(1, params.value("match_index").toInt(1));
-    const int max_chars = clamp_max_chars(params, 800);
-    const QString screenshot_path = params.value("screenshot_path").toString();
+  if (username.isEmpty() && password.isEmpty()) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_args");
+    err.insert("error", "Username or password must be provided");
+    reply(err);
+    return;
+  }
 
-    view_->page()->runJavaScript(js_find_in_page_script(query, match_index, max_chars),
-        [this, id, query, screenshot_path, reply](const QVariant& res) {
-            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
-            out.insert("id", id);
-            out.insert("action", "find");
-            out.insert("url", page_->url().toString());
-            out.insert("title", page_->title());
+  view_->page()->runJavaScript(
+      js_login_form_script(username, password, submit),
+      [this, id, screenshot_path, reply](const QVariant &res) {
+        QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+        out.insert("id", id);
+        out.insert("action", "login");
 
-            if (!screenshot_path.isEmpty()) {
-                const QJsonObject shot = capture_screenshot(screenshot_path);
-                for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                    out.insert(it.key(), it.value());
-                }
+        const bool submitted = out.value("submitted").toBool(false);
+        if (submitted) {
+          // Allow network navigation / response settling
+          QTimer::singleShot(
+              2500, this, [this, id, screenshot_path, reply, out]() mutable {
+                view_->page()->runJavaScript(
+                    QStringLiteral(
+                        "document.body ? document.body.innerText : ''"),
+                    [this, id, screenshot_path, reply,
+                     out](const QVariant &text_res) mutable {
+                      const QString bodyText = text_res.toString().toLower();
+                      const bool is2fa =
+                          bodyText.contains("verification code") ||
+                          bodyText.contains("two-factor") ||
+                          bodyText.contains("2-step verification") ||
+                          bodyText.contains("approve the notification") ||
+                          bodyText.contains("security code") ||
+                          bodyText.contains("one-time password") ||
+                          bodyText.contains("duo push") ||
+                          bodyText.contains("authenticator app");
+                      out.insert("two_factor_detected", is2fa);
+                      out.insert("status",
+                                 is2fa ? QStringLiteral("2fa_prompt_detected")
+                                       : QStringLiteral("login_submitted"));
+                      out.insert("url", page_->url().toString());
+                      out.insert("title", page_->title());
+
+                      if (!screenshot_path.isEmpty()) {
+                        const QJsonObject shot =
+                            capture_screenshot(screenshot_path);
+                        for (auto it = shot.constBegin(); it != shot.constEnd();
+                             ++it) {
+                          out.insert(it.key(), it.value());
+                        }
+                      }
+                      reply(out);
+                    });
+              });
+        } else {
+          out.insert("status", QStringLiteral("form_filled"));
+          out.insert("url", page_->url().toString());
+          out.insert("title", page_->title());
+          if (!screenshot_path.isEmpty()) {
+            const QJsonObject shot = capture_screenshot(screenshot_path);
+            for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+              out.insert(it.key(), it.value());
             }
-            reply(out);
-        });
+          }
+          reply(out);
+        }
+      });
 }
 
-void BrowserSession::cmd_login(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString username = params.value("username").toString();
-    const QString password = params.value("password").toString();
-    const bool submit = params.value("submit").toBool(true);
-    const QString screenshot_path = params.value("screenshot_path").toString();
+void BrowserSession::cmd_extract_text(const QString &id,
+                                      const QJsonObject &params,
+                                      const ReplyFn &reply) {
+  const QString selector = params.value("selector").toString();
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  const int max_chars = clamp_max_chars(params);
 
-    if (username.isEmpty() && password.isEmpty()) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_args");
-        err.insert("error", "Username or password must be provided");
-        reply(err);
-        return;
-    }
-
-    view_->page()->runJavaScript(js_login_form_script(username, password, submit),
-        [this, id, screenshot_path, reply](const QVariant& res) {
-            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
-            out.insert("id", id);
-            out.insert("action", "login");
-
-            const bool submitted = out.value("submitted").toBool(false);
-            if (submitted) {
-                // Allow network navigation / response settling
-                QTimer::singleShot(2500, this, [this, id, screenshot_path, reply, out]() mutable {
-                    view_->page()->runJavaScript(QStringLiteral("document.body ? document.body.innerText : ''"),
-                        [this, id, screenshot_path, reply, out](const QVariant& text_res) mutable {
-                            const QString bodyText = text_res.toString().toLower();
-                            const bool is2fa = bodyText.contains("verification code") ||
-                                               bodyText.contains("two-factor") ||
-                                               bodyText.contains("2-step verification") ||
-                                               bodyText.contains("approve the notification") ||
-                                               bodyText.contains("security code") ||
-                                               bodyText.contains("one-time password") ||
-                                               bodyText.contains("duo push") ||
-                                               bodyText.contains("authenticator app");
-                            out.insert("two_factor_detected", is2fa);
-                            out.insert("status", is2fa ? QStringLiteral("2fa_prompt_detected")
-                                                       : QStringLiteral("login_submitted"));
-                            out.insert("url", page_->url().toString());
-                            out.insert("title", page_->title());
-
-                            if (!screenshot_path.isEmpty()) {
-                                const QJsonObject shot = capture_screenshot(screenshot_path);
-                                for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                                    out.insert(it.key(), it.value());
-                                }
-                            }
-                            reply(out);
-                        });
-                });
-            } else {
-                out.insert("status", QStringLiteral("form_filled"));
-                out.insert("url", page_->url().toString());
-                out.insert("title", page_->title());
-                if (!screenshot_path.isEmpty()) {
-                    const QJsonObject shot = capture_screenshot(screenshot_path);
-                    for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                        out.insert(it.key(), it.value());
-                    }
-                }
-                reply(out);
-            }
-        });
+  view_->page()->runJavaScript(
+      js_extract_dom_snapshot_script(max_chars, selector),
+      [this, id, screenshot_path, reply](const QVariant &res) {
+        QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+        const QJsonObject challenge = detect_challenge(
+            out.value("url").toString(), out.value("title").toString(),
+            out.value("text").toString(),
+            out.value("has_captcha_dom").toBool(false));
+        out.insert("challenge_detected", challenge.value("challenge_detected"));
+        out.insert("challenge_reason", challenge.value("challenge_reason"));
+        if (!screenshot_path.isEmpty()) {
+          const QJsonObject shot = capture_screenshot(screenshot_path);
+          for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+            out.insert(it.key(), it.value());
+          }
+        }
+        out.insert("id", id);
+        out.insert("ok", true);
+        reply(out);
+      });
 }
 
-void BrowserSession::cmd_extract_text(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString selector = params.value("selector").toString();
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    const int max_chars = clamp_max_chars(params);
-
-    view_->page()->runJavaScript(js_extract_dom_snapshot_script(max_chars, selector),
-        [this, id, screenshot_path, reply](const QVariant& res) {
-            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
-            const QJsonObject challenge = detect_challenge(
-                out.value("url").toString(),
-                out.value("title").toString(),
-                out.value("text").toString(),
-                out.value("has_captcha_dom").toBool(false));
-            out.insert("challenge_detected", challenge.value("challenge_detected"));
-            out.insert("challenge_reason", challenge.value("challenge_reason"));
-            if (!screenshot_path.isEmpty()) {
-                const QJsonObject shot = capture_screenshot(screenshot_path);
-                for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
-                    out.insert(it.key(), it.value());
-                }
-            }
-            out.insert("id", id);
-            out.insert("ok", true);
-            reply(out);
-        });
-}
-
-void BrowserSession::cmd_screenshot(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
-    const QString screenshot_path = params.value("screenshot_path").toString();
-    if (screenshot_path.isEmpty()) {
-        QJsonObject err;
-        err.insert("id", id);
-        err.insert("ok", false);
-        err.insert("error_code", "invalid_args");
-        err.insert("error", "screenshot requires 'screenshot_path'");
-        reply(err);
-        return;
-    }
-    const QJsonObject shot = capture_screenshot(screenshot_path);
-    QJsonObject res = shot;
-    res.insert("id", id);
-    res.insert("url", view_->url().toString());
-    res.insert("title", view_->title());
-    res.insert("ok", shot.value("screenshot_ok").toBool(false));
-    if (!res.value("ok").toBool()) {
-        res.insert("error_code", "screenshot_failed");
-        res.insert("error", shot.value("screenshot_error").toString("Screenshot failed"));
-    }
-    reply(res);
+void BrowserSession::cmd_screenshot(const QString &id,
+                                    const QJsonObject &params,
+                                    const ReplyFn &reply) {
+  const QString screenshot_path = params.value("screenshot_path").toString();
+  if (screenshot_path.isEmpty()) {
+    QJsonObject err;
+    err.insert("id", id);
+    err.insert("ok", false);
+    err.insert("error_code", "invalid_args");
+    err.insert("error", "screenshot requires 'screenshot_path'");
+    reply(err);
+    return;
+  }
+  const QJsonObject shot = capture_screenshot(screenshot_path);
+  QJsonObject res = shot;
+  res.insert("id", id);
+  res.insert("url", view_->url().toString());
+  res.insert("title", view_->title());
+  res.insert("ok", shot.value("screenshot_ok").toBool(false));
+  if (!res.value("ok").toBool()) {
+    res.insert("error_code", "screenshot_failed");
+    res.insert("error",
+               shot.value("screenshot_error").toString("Screenshot failed"));
+  }
+  reply(res);
 }
 
 } // namespace aquila::browser

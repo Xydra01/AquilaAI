@@ -60,6 +60,97 @@ std::string canonical_dump(const Json& value) {
     }
 }
 
+std::string sanitize_utf8(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    const auto* p = reinterpret_cast<const unsigned char*>(s.data());
+    const std::size_t len = s.size();
+    std::size_t i = 0;
+
+    constexpr std::string_view kReplacement = "\xEF\xBF\xBD"; // U+FFFD
+
+    while (i < len) {
+        const unsigned char b0 = p[i];
+        if (b0 < 0x80) {
+            out.push_back(static_cast<char>(b0));
+            ++i;
+        } else if (b0 >= 0xC2 && b0 <= 0xDF) {
+            if (i + 1 < len && (p[i + 1] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 2);
+                i += 2;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else if (b0 == 0xE0) {
+            if (i + 2 < len && (p[i + 1] >= 0xA0 && p[i + 1] <= 0xBF) && (p[i + 2] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 3);
+                i += 3;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else if ((b0 >= 0xE1 && b0 <= 0xEC) || b0 == 0xEE || b0 == 0xEF) {
+            if (i + 2 < len && (p[i + 1] & 0xC0) == 0x80 && (p[i + 2] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 3);
+                i += 3;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else if (b0 == 0xED) {
+            if (i + 2 < len && (p[i + 1] >= 0x80 && p[i + 1] <= 0x9F) && (p[i + 2] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 3);
+                i += 3;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else if (b0 == 0xF0) {
+            if (i + 3 < len && (p[i + 1] >= 0x90 && p[i + 1] <= 0xBF) && (p[i + 2] & 0xC0) == 0x80 && (p[i + 3] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 4);
+                i += 4;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else if (b0 >= 0xF1 && b0 <= 0xF3) {
+            if (i + 3 < len && (p[i + 1] & 0xC0) == 0x80 && (p[i + 2] & 0xC0) == 0x80 && (p[i + 3] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 4);
+                i += 4;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else if (b0 == 0xF4) {
+            if (i + 3 < len && (p[i + 1] >= 0x80 && p[i + 1] <= 0x8F) && (p[i + 2] & 0xC0) == 0x80 && (p[i + 3] & 0xC0) == 0x80) {
+                out.append(reinterpret_cast<const char*>(&p[i]), 4);
+                i += 4;
+            } else {
+                out.append(kReplacement);
+                ++i;
+            }
+        } else {
+            out.append(kReplacement);
+            ++i;
+        }
+    }
+    return out;
+}
+
+std::string truncate_utf8(std::string_view s, std::size_t max_bytes, std::string_view suffix) {
+    if (s.size() <= max_bytes) {
+        return sanitize_utf8(s);
+    }
+    std::size_t cut = max_bytes;
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) {
+        --cut;
+    }
+    std::string result = sanitize_utf8(s.substr(0, cut));
+    result.append(suffix);
+    return result;
+}
+
 std::string child_path(const std::string& path, std::string_view key) {
     std::string out = path;
     out += '/';

@@ -550,3 +550,36 @@ TEST_CASE("BrowserModule enforces URL memory, scroll clamping, chrome filtering,
 }
 #endif
 
+TEST_CASE("truncate_utf8 and sanitize_utf8 handle multi-byte scientific symbols without json type_error.316", "[browser][utf8]") {
+    using namespace aquila;
+    // 1. Scientific characters: ± (2B: \xC2\xB1), − (3B: \xE2\x88\x92), M☉ (3B: \xE2\x98\x89), °C (2B: \xC2\xB0 + C)
+    const std::string text = "Mass: 2.4±0.6 M☉, Period: 33200 −9900 days, Temp: 600 °C";
+
+    // Truncating right across a multi-byte character boundary
+    for (std::size_t cut = 1; cut <= text.size() + 5; ++cut) {
+        const std::string truncated = json_io::truncate_utf8(text, cut);
+        // Serialization to JSON must NEVER throw type_error.316
+        Json j;
+        j["output"] = truncated;
+        CHECK_NOTHROW(j.dump());
+        CHECK_NOTHROW(json_io::canonical_dump(j));
+    }
+
+    // 2. Specific test for slicing through the 3-byte minus sign: "\xE2\x88\x92"
+    const std::string minus_text = "offset: \xE2\x88\x92 100";
+    // Slicing at byte 8 (right after \xE2) must back off and not include \xE2
+    const std::string sliced = json_io::truncate_utf8(minus_text, 9);
+    Json j2;
+    j2["test"] = sliced;
+    CHECK_NOTHROW(j2.dump());
+
+    // 3. Completely malformed/truncated byte sequence must be sanitized without throwing
+    const std::string malformed = "Prefix \xE2\x0A Suffix \xFF \xC0\xAF";
+    const std::string sanitized = json_io::sanitize_utf8(malformed);
+    Json j3;
+    j3["clean"] = sanitized;
+    CHECK_NOTHROW(j3.dump());
+    CHECK(sanitized.find("Prefix") != std::string::npos);
+    CHECK(sanitized.find("Suffix") != std::string::npos);
+}
+

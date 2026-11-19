@@ -115,3 +115,46 @@ TEST_CASE("RunLogger creates dual-format .log and .jsonl files with full thinkin
     std::filesystem::remove_all(temp_dir, ec);
 }
 
+TEST_CASE("RunLogger handles truncated and invalid UTF-8 bytes in ActionResult without throwing type_error.316", "[run_logger]") {
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "aquila_logger_utf8_test";
+    std::error_code ec;
+    std::filesystem::remove_all(temp_dir, ec);
+    std::filesystem::create_directories(temp_dir, ec);
+
+    {
+        RunLogger logger;
+        REQUIRE(logger.start_session("fn_research_full", "task", "unit_test_utf8",
+                                     "Research with multi-byte unicode", temp_dir));
+
+        logger.log_turn_start(1);
+
+        // Simulate exactly the truncated UTF-8 byte sequence that caused type_error.316:
+        // A 3-byte unicode character '\xE2\x88\x92' ('−') cut after the first byte \xE2,
+        // followed immediately by \n (0x0A).
+        std::string malformed_output = "List of Exoplanets:\nHD 176986 d 0.0213±0029 61.376+0.051\n\xE2\n... [truncated]";
+
+        // Logging this ActionResult must NOT throw Json::type_error.316
+        CHECK_NOTHROW(logger.log_action_result(1, "BrowserModule", "browser_navigate", true, malformed_output));
+
+        // Session end
+        logger.log_session_end(true, "success", "Completed without crash", 1);
+    }
+
+    const auto logs_dir = temp_dir / "Agent-Logs";
+    REQUIRE(std::filesystem::exists(logs_dir));
+
+    for (const auto& entry : std::filesystem::directory_iterator(logs_dir)) {
+        if (entry.path().extension() == ".jsonl") {
+            std::ifstream in(entry.path());
+            std::string line;
+            while (std::getline(in, line)) {
+                if (line.empty()) continue;
+                // Verify the line parses as valid JSON without throwing
+                CHECK_NOTHROW(Json::parse(line));
+            }
+        }
+    }
+
+    std::filesystem::remove_all(temp_dir, ec);
+}
+
