@@ -371,6 +371,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // this bound with the orchestrator-intent handling, the should_condense() wipe,
     // and the turn-limit terminal semantics.
     bool gate_grace_granted = false;
+    bool gate_remediation_active = false;
     for (std::uint64_t turn = 0; turn < limits.max_turns; ++turn) {
         if (config.check_cancelled && config.check_cancelled()) {
             result.outcome = LoopOutcome::aborted;
@@ -554,7 +555,16 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             last_failed_module.clear();
             last_failed_action.clear();
             consecutive_failures = 0;
-            condenser.clear_guidance();
+            const bool is_modifying_action = (call.module == "WorkspaceModule" &&
+                (call.action == "write_file" || call.action == "create_file" ||
+                 call.action == "surgical_edit" || call.action == "apply_patch" ||
+                 call.action == "search_replace"));
+            if (!gate_remediation_active || is_modifying_action) {
+                condenser.clear_guidance();
+                if (is_modifying_action) {
+                    gate_remediation_active = false;
+                }
+            }
         }
 
         std::vector<std::string> pending_turn_guidance;
@@ -640,6 +650,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 // Non-success gate: completion_output carries the hook's
                 // on_failure_instruction (see run_exit_gate's contract). Inject it
                 // as guidance so the next turn can satisfy the gate.
+                gate_remediation_active = true;
                 if (!gate.completion_output.empty()) {
                     emit_guidance(condenser, logger, turn, std::move(gate.completion_output),
                                   &pending_turn_guidance);

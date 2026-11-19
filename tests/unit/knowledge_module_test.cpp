@@ -110,6 +110,16 @@ TEST_CASE("KnowledgeModule registration and action dispatch", "[knowledge_module
         res = km_temp.execute_action("verify_research_deliverable", Json::object());
         CHECK_FALSE(res.success);
         CHECK(res.error_code == "placeholder_content");
+
+        // 11. Standard academic DOI and arXiv citations without explicit https:// prefix pass online mode
+        std::string academic_cited_report = cited_report +
+            "\n\n## References\n- [1] arXiv:2403.05286 [cs.AI]\n- [2] doi:10.1146/annurev.astro.45.051806.110529\n";
+        tmp.write("research_report.md", academic_cited_report);
+        res = km_temp.execute_action("verify_research_deliverable", Json{
+            {"require_urls", true},
+            {"grounded_urls", Json::array({"https://doi.org/10.1146/annurev.astro.45.051806.110529", "https://arxiv.org/abs/2403.05286"})}
+        });
+        CHECK(res.success);
     }
 
     SECTION("store_fact and get_all_facts lifecycle") {

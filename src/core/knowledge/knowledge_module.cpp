@@ -528,6 +528,26 @@ ActionResult KnowledgeModule::verify_research_deliverable_action(const Json& arg
                 cited_urls.insert(norm);
             }
         }
+
+        // Also recognize standard academic DOI citations: doi:10.xxxx or https://doi.org/10.xxxx
+        static const std::regex doi_re(R"((?:doi:\s*|https?://(?:dx\.)?doi\.org/)(10\.\d{4,9}/[^\s<>\]\)\"']+))", std::regex::icase);
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), doi_re);
+             it != std::sregex_iterator(); ++it) {
+            const std::string norm = normalize_cite_url("https://doi.org/" + (*it)[1].str());
+            if (norm.size() > 15) {
+                cited_urls.insert(norm);
+            }
+        }
+
+        // Also recognize standard academic arXiv citations: arXiv:xxxx.xxxx
+        static const std::regex arxiv_re(R"((?:arxiv:\s*|https?://arxiv\.org/abs/)(\d{4}\.\d{4,5}(?:v\d+)?))", std::regex::icase);
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), arxiv_re);
+             it != std::sregex_iterator(); ++it) {
+            const std::string norm = normalize_cite_url("https://arxiv.org/abs/" + (*it)[1].str());
+            if (norm.size() > 15) {
+                cited_urls.insert(norm);
+            }
+        }
     }
 
     const bool has_citations =
