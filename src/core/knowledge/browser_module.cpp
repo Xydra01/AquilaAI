@@ -1,6 +1,7 @@
 #include "aquila/knowledge/browser_module.hpp"
 
 #include "aquila/exec/process.hpp"
+#include "aquila/knowledge/credential_store.hpp"
 #include "aquila/knowledge/html_cleaner.hpp"
 #include "aquila/knowledge/searxng_manager.hpp"
 #include "aquila/knowledge/web_fetcher.hpp"
@@ -570,6 +571,31 @@ std::vector<ActionSchema> BrowserModule::get_actions() const {
                 {"properties", Json::object({
                     {"direction", Json::object({{"type", "string"}, {"description", "Scroll direction: down, up, top, or bottom"}})},
                     {"pixels", Json::object({{"type", "integer"}, {"description", "Pixel delta for up/down scrolling (default 700, max 1600px per step so sections are not skipped)"}})},
+                })},
+            }),
+        },
+        {
+            "browser_find",
+            "Search for keywords or phrases inside the currently loaded webpage (in-page Ctrl+F), automatically center the viewport on the match, and extract surrounding context",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"query", Json::object({{"type", "string"}, {"description", "Keyword or phrase to locate on page"}})},
+                    {"match_index", Json::object({{"type", "integer"}, {"description", "Occurrence index to jump to (1-based, default 1)"}})},
+                    {"screenshot", Json::object({{"type", "boolean"}, {"description", "Capture viewport screenshot with match highlighted (default true)"}})},
+                })},
+                {"required", Json::array({"query"})},
+            }),
+        },
+        {
+            "browser_login",
+            "Automatically detect and populate login credentials for the current page or specified domain using the secure local CredentialStore, submit the form, and check for 2FA / authentication status",
+            Json::object({
+                {"type", "object"},
+                {"properties", Json::object({
+                    {"domain", Json::object({{"type", "string"}, {"description", "Optional domain name to retrieve credentials for (defaults to current page domain)"}})},
+                    {"submit", Json::object({{"type", "boolean"}, {"description", "Automatically click submit button after filling (default true)"}})},
+                    {"screenshot", Json::object({{"type", "boolean"}, {"description", "Capture viewport screenshot after login attempt (default true)"}})},
                 })},
             }),
         },
@@ -1505,6 +1531,117 @@ ActionResult BrowserModule::run(const std::string& action_name, const Json& args
                 std::abs(raw_pixels));
         }
         return format_snapshot_result("Browser Scrolled", res, want_shot, false, clamp_note);
+    }
+
+    if (action_name == "browser_find") {
+        const std::string query = args.at("query").get<std::string>();
+        const int match_index = args.value("match_index", 1);
+        const bool want_shot = args.value("screenshot", true);
+        Json params = Json::object({
+            {"query", query},
+            {"match_index", match_index},
+            {"max_chars", static_cast<int>(max_output_chars_)},
+        });
+        if (want_shot) {
+            params["screenshot_path"] = next_screenshot_path();
+        }
+        std::string code, msg;
+        const Json res = call_worker("find", params, code, msg);
+        if (!code.empty()) {
+            return make_err(code, msg);
+        }
+
+        const int matches_found = res.value("matches_found", 0);
+        const int active_match = res.value("match_index", 0);
+        const std::string snippet = res.value("context_snippet", "");
+        const int scroll_y = res.value("scroll_y", 0);
+        const int total_height = res.value("total_height", 0);
+
+        ActionResult ar;
+        ar.success = true;
+        if (want_shot && res.value("screenshot_ok", false)) {
+            const std::string shot = res.value("screenshot_path", std::string{});
+            std::error_code ec;
+            if (!shot.empty() && fs::exists(shot, ec)) {
+                prune_old_screenshots(shot);
+                ar.images.push_back(shot);
+            }
+        }
+
+        std::string out;
+        if (matches_found > 0) {
+            out = fmt::format(
+                "Browser Find: Found {} match(es) for '{}'. Jumped to match {}/{} (scroll: {}px / {}px).\n\n"
+                "Context Snippet:\n\"{}\"\n",
+                matches_found, query, active_match, matches_found, scroll_y, total_height, snippet);
+        } else {
+            out = fmt::format(
+                "Browser Find: No matches found for '{}' on the current page ({}).\n",
+                query, current_url_.empty() ? "empty page" : current_url_);
+        }
+        ar.llm_facing_output = out;
+        return ar;
+    }
+
+    if (action_name == "browser_login") {
+        std::string domain = args.value("domain", "");
+        if (domain.empty()) {
+            domain = CredentialStore::normalize_domain(current_url_);
+        }
+        if (domain.empty()) {
+            return make_err("missing_domain", "No domain specified and no active webpage loaded to infer domain");
+        }
+
+        auto cred_opt = CredentialStore::default_store().get(domain);
+        if (!cred_opt) {
+            return make_err("no_credentials_found",
+                            fmt::format("No credentials stored for domain '{}'. Use CLI 'aquila credentials set {} ...' to save credentials.",
+                                        domain, domain));
+        }
+
+        const bool submit = args.value("submit", true);
+        const bool want_shot = args.value("screenshot", true);
+        Json params = Json::object({
+            {"username", cred_opt->username},
+            {"password", cred_opt->password},
+            {"submit", submit},
+        });
+        if (want_shot) {
+            params["screenshot_path"] = next_screenshot_path();
+        }
+
+        std::string code, msg;
+        const Json res = call_worker("login", params, code, msg);
+        if (!code.empty()) {
+            return make_err(code, msg);
+        }
+
+        const std::string status = res.value("status", "unknown");
+        const bool is_2fa = res.value("two_factor_detected", false);
+
+        ActionResult ar;
+        ar.success = true;
+        if (want_shot && res.value("screenshot_ok", false)) {
+            const std::string shot = res.value("screenshot_path", std::string{});
+            std::error_code ec;
+            if (!shot.empty() && fs::exists(shot, ec)) {
+                prune_old_screenshots(shot);
+                ar.images.push_back(shot);
+            }
+        }
+
+        // Never echo the raw password in the output!
+        ar.llm_facing_output = fmt::format(
+            "Browser Login Attempt on '{}' (user: {}):\n"
+            "- Status: {}\n"
+            "- 2FA Prompt Detected: {}\n"
+            "- Current URL: {}\n"
+            "- Page Title: {}\n"
+            "{}",
+            domain, cred_opt->username, status, is_2fa ? "YES (Phone/Authenticator approval required)" : "No",
+            res.value("url", ""), res.value("title", ""),
+            is_2fa ? "[NOTE: A 2-Factor Authentication prompt was detected. If phone approval / Duo push is required, approve it on your phone or use 'aquila browser --login <url>' for interactive login.]" : "");
+        return ar;
     }
 
     if (action_name == "browser_extract_text") {

@@ -11,6 +11,9 @@
 #include <QTcpSocket>
 #include <QThread>
 #include <QTimer>
+#include <QWebEnginePage>
+#include <QWebEngineProfile>
+#include <QWebEngineView>
 
 #include <iostream>
 #include <string>
@@ -108,6 +111,35 @@ int run_smoke(aquila::browser::BrowserSession& session, const QString& out_dir) 
     return exit_code;
 }
 
+int run_interactive_login(const QString& target_url) {
+    const QString profilePath = QDir::homePath() + QStringLiteral("/.aquila/browser_profile");
+    QDir().mkpath(profilePath);
+
+    auto* profile = new QWebEngineProfile(QStringLiteral("aquila_user"), qApp);
+    profile->setPersistentStoragePath(profilePath);
+    profile->setCachePath(profilePath + QStringLiteral("/cache"));
+    profile->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
+    profile->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
+    profile->setHttpUserAgent(QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"));
+
+    auto* page = new QWebEnginePage(profile, nullptr);
+    auto* view = new QWebEngineView();
+    view->setPage(page);
+    view->setWindowTitle(QStringLiteral("Aquila Browser - Interactive Login & 2FA Session"));
+    view->resize(1280, 850);
+    view->setUrl(QUrl(target_url));
+    view->setAttribute(Qt::WA_DeleteOnClose);
+    view->show();
+
+    std::cout << "[Aquila Browser] Interactive login session opened for: " << target_url.toStdString() << "\n"
+              << "Log in and complete any 2-factor / phone prompts in the browser window.\n"
+              << "When done, simply close the browser window to save cookies and return to Aquila.\n" << std::flush;
+
+    QObject::connect(view, &QObject::destroyed, qApp, &QCoreApplication::quit);
+
+    return QApplication::exec();
+}
+
 class StdinReader final : public QObject {
     Q_OBJECT
 public:
@@ -163,15 +195,24 @@ private:
 #include "main.moc"
 
 int main(int argc, char* argv[]) {
+    bool is_interactive_login = false;
+    QString login_url = QStringLiteral("https://www.google.com");
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg == "--help" || arg == "-h") {
             std::cout << "Aquila Headless Browser Helper (JSON-RPC stdio worker)\n"
                       << "Usage:\n"
                       << "  aquila_browser [--smoke [output_dir]]\n"
+                      << "  aquila_browser --login <url>\n"
                       << "  aquila_browser --help\n"
                       << "When invoked without flags, reads single-line JSON-RPC requests on stdin.\n";
             return 0;
+        }
+        if (arg == "--login") {
+            is_interactive_login = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                login_url = QString::fromUtf8(argv[++i]);
+            }
         }
     }
 
@@ -182,7 +223,7 @@ int main(int argc, char* argv[]) {
 
     // Software compositing keeps VRAM free for llama.cpp CUDA while ensuring QWebEngineView::grab
     // reads a painted offscreen framebuffer without popping up a visible desktop window.
-    if (qEnvironmentVariableIsEmpty("QTWEBENGINE_CHROMIUM_FLAGS")) {
+    if (!is_interactive_login && qEnvironmentVariableIsEmpty("QTWEBENGINE_CHROMIUM_FLAGS")) {
         qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-gpu-compositing --mute-audio --no-sandbox");
     }
 
@@ -200,6 +241,10 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("aquila_browser"));
+
+    if (is_interactive_login) {
+        return run_interactive_login(login_url);
+    }
 
     aquila::browser::BrowserSession session;
 

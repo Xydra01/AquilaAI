@@ -340,12 +340,253 @@ QString js_extract_ddg_results_script() {
 )JS");
 }
 
+QString js_quote_string(const QString& str) {
+    QJsonDocument doc(QJsonArray{str});
+    QString json = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+    if (json.startsWith('[') && json.endsWith(']')) {
+        return json.mid(1, json.length() - 2);
+    }
+    return QStringLiteral("\"\"");
+}
+
+QString js_find_in_page_script(const QString& query, int match_index, int max_chars) {
+    const QString quoted_query = js_quote_string(query);
+    return QStringLiteral(R"JS(
+(() => {
+  const query = %1;
+  const targetIndex = %2;
+  const maxChars = %3;
+
+  if (!query || query.trim().length === 0) {
+    return { ok: false, error: "Empty search query" };
+  }
+
+  // Remove any previous temporary highlights
+  document.querySelectorAll('mark.__aquila_highlight').forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      parent.replaceChild(document.createTextNode(el.textContent), el);
+      parent.normalize();
+    }
+  });
+
+  const queryLower = query.toLowerCase();
+  const treeWalker = document.createTreeWalker(
+    document.body || document.documentElement,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: (node) => {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName.toLowerCase();
+        if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'svg') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const style = window.getComputedStyle(parent);
+        if (!style || style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  const matches = [];
+  let currentNode;
+  while ((currentNode = treeWalker.nextNode())) {
+    const text = currentNode.nodeValue;
+    let idx = 0;
+    while ((idx = text.toLowerCase().indexOf(queryLower, idx)) !== -1) {
+      matches.push({ node: currentNode, offset: idx, length: query.length });
+      idx += queryLower.length;
+    }
+  }
+
+  const totalMatches = matches.length;
+  if (totalMatches === 0) {
+    return {
+      ok: true,
+      query: query,
+      matches_found: 0,
+      match_index: 0,
+      context_snippet: "",
+      scroll_y: Math.round(window.scrollY || 0),
+      total_height: Math.round((document.documentElement && document.documentElement.scrollHeight) || 0)
+    };
+  }
+
+  const activeIdx = Math.max(1, Math.min(targetIndex, totalMatches));
+  const activeMatch = matches[activeIdx - 1];
+
+  let mark = null;
+  try {
+    const range = document.createRange();
+    range.setStart(activeMatch.node, activeMatch.offset);
+    range.setEnd(activeMatch.node, activeMatch.offset + activeMatch.length);
+
+    mark = document.createElement('mark');
+    mark.className = '__aquila_highlight';
+    mark.style.cssText = 'background: #facc15 !important; color: #000000 !important; font-weight: bold !important; outline: 2px solid #ea580c !important; border-radius: 2px; padding: 1px 2px;';
+    range.surroundContents(mark);
+    mark.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+  } catch (e) {
+    if (activeMatch.node.parentElement) {
+      activeMatch.node.parentElement.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+    }
+  }
+
+  const parent = mark ? mark.parentElement : activeMatch.node.parentElement;
+  let contextBlock = parent ? (parent.innerText || parent.textContent || "") : "";
+  if (contextBlock.length < 200 && parent && parent.parentElement) {
+    contextBlock = parent.parentElement.innerText || parent.parentElement.textContent || contextBlock;
+  }
+  contextBlock = contextBlock.replace(/\s+/g, ' ').trim();
+
+  let snippet = contextBlock;
+  const matchPos = contextBlock.toLowerCase().indexOf(queryLower);
+  if (matchPos !== -1 && contextBlock.length > maxChars) {
+    const start = Math.max(0, matchPos - 250);
+    const end = Math.min(contextBlock.length, matchPos + queryLower.length + 450);
+    snippet = (start > 0 ? "... " : "") + contextBlock.substring(start, end) + (end < contextBlock.length ? " ..." : "");
+  } else if (contextBlock.length > maxChars) {
+    snippet = contextBlock.substring(0, maxChars) + " ...";
+  }
+
+  const r = (mark || parent || document.body).getBoundingClientRect();
+  return {
+    ok: true,
+    query: query,
+    matches_found: totalMatches,
+    match_index: activeIdx,
+    scroll_y: Math.round(window.scrollY || 0),
+    total_height: Math.round((document.documentElement && document.documentElement.scrollHeight) || 0),
+    match_x: Math.round(r.left + r.width / 2),
+    match_y: Math.round(r.top + r.height / 2),
+    context_snippet: snippet
+  };
+})()
+)JS").arg(quoted_query).arg(match_index).arg(max_chars);
+}
+
+QString js_login_form_script(const QString& username, const QString& password, bool submit) {
+    const QString quoted_user = js_quote_string(username);
+    const QString quoted_pass = js_quote_string(password);
+    const QString submit_str = submit ? QStringLiteral("true") : QStringLiteral("false");
+    return QStringLiteral(R"JS(
+(() => {
+  const username = %1;
+  const password = %2;
+  const doSubmit = %3;
+
+  const userSelectors = [
+    'input[autocomplete="username"]',
+    'input[autocomplete="email"]',
+    'input[type="email"]',
+    'input[name*="user" i]',
+    'input[name*="login" i]',
+    'input[name*="email" i]',
+    'input[id*="user" i]',
+    'input[id*="login" i]',
+    'input[id*="email" i]',
+    'input[placeholder*="user" i]',
+    'input[placeholder*="email" i]',
+    'input[type="text"]'
+  ];
+  let userInput = null;
+  for (const sel of userSelectors) {
+    const el = document.querySelector(sel);
+    if (el && el.offsetParent !== null && !el.disabled && !el.readOnly) {
+      userInput = el;
+      break;
+    }
+  }
+
+  const passSelectors = [
+    'input[type="password"]',
+    'input[name*="pass" i]',
+    'input[id*="pass" i]',
+    'input[autocomplete="current-password"]'
+  ];
+  let passInput = null;
+  for (const sel of passSelectors) {
+    const el = document.querySelector(sel);
+    if (el && el.offsetParent !== null && !el.disabled && !el.readOnly) {
+      passInput = el;
+      break;
+    }
+  }
+
+  const setInputValue = (input, val) => {
+    input.focus();
+    input.value = val;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  let filledUser = false;
+  let filledPass = false;
+
+  if (userInput && username) {
+    setInputValue(userInput, username);
+    filledUser = true;
+  }
+  if (passInput && password) {
+    setInputValue(passInput, password);
+    filledPass = true;
+  }
+
+  const pageText = (document.body ? document.body.innerText : '').toLowerCase();
+  const is2FAPrompt = pageText.includes('verification code') ||
+                      pageText.includes('two-factor') ||
+                      pageText.includes('2-step verification') ||
+                      pageText.includes('approve the notification') ||
+                      pageText.includes('security code') ||
+                      pageText.includes('one-time password') ||
+                      pageText.includes('duo push') ||
+                      pageText.includes('authenticator app');
+
+  let submitted = false;
+  if (doSubmit && (filledUser || filledPass)) {
+    const submitBtn = document.querySelector(
+      'button[type="submit"], input[type="submit"], button[id*="login" i], button[id*="signin" i], button[name*="login" i], form button:not([type="button"])'
+    );
+    if (submitBtn) {
+      submitBtn.click();
+      submitted = true;
+    } else if (passInput && passInput.form) {
+      passInput.form.submit();
+      submitted = true;
+    } else if (userInput && userInput.form) {
+      userInput.form.submit();
+      submitted = true;
+    }
+  }
+
+  return {
+    ok: (filledUser || filledPass),
+    username_filled: filledUser,
+    password_filled: filledPass,
+    submitted: submitted,
+    two_factor_detected: is2FAPrompt,
+    url: window.location.href,
+    title: document.title
+  };
+})()
+)JS").arg(quoted_user).arg(quoted_pass).arg(submit_str);
+}
+
 } // namespace
 
 BrowserSession::BrowserSession(QObject* parent) : QObject(parent) {
-    profile_ = new QWebEngineProfile(this);
-    profile_->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);
-    profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
+    const QString profilePath = QDir::homePath() + QStringLiteral("/.aquila/browser_profile");
+    QDir().mkpath(profilePath);
+    profile_ = new QWebEngineProfile(QStringLiteral("aquila_user"), this);
+    profile_->setPersistentStoragePath(profilePath);
+    profile_->setCachePath(profilePath + QStringLiteral("/cache"));
+    profile_->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
+    profile_->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
+    profile_->setHttpUserAgent(QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"));
 
     page_ = new QWebEnginePage(profile_, nullptr);
     QWebEngineSettings* s = page_->settings();
@@ -520,6 +761,10 @@ void BrowserSession::handle_request(const QJsonObject& req, std::function<void(c
         cmd_type(id, params, reply);
     } else if (action == QStringLiteral("scroll")) {
         cmd_scroll(id, params, reply);
+    } else if (action == QStringLiteral("find")) {
+        cmd_find(id, params, reply);
+    } else if (action == QStringLiteral("login")) {
+        cmd_login(id, params, reply);
     } else if (action == QStringLiteral("extract_text")) {
         cmd_extract_text(id, params, reply);
     } else if (action == QStringLiteral("screenshot")) {
@@ -1119,6 +1364,107 @@ void BrowserSession::cmd_scroll(const QString& id, const QJsonObject& params, co
             finish_with_snapshot(id, screenshot_path, max_chars, reply, extra);
         });
     });
+}
+
+void BrowserSession::cmd_find(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
+    const QString query = params.value("query").toString().trimmed();
+    if (query.isEmpty()) {
+        QJsonObject err;
+        err.insert("id", id);
+        err.insert("ok", false);
+        err.insert("error_code", "invalid_args");
+        err.insert("error", "Search query must be non-empty");
+        reply(err);
+        return;
+    }
+
+    const int match_index = std::max(1, params.value("match_index").toInt(1));
+    const int max_chars = clamp_max_chars(params, 800);
+    const QString screenshot_path = params.value("screenshot_path").toString();
+
+    view_->page()->runJavaScript(js_find_in_page_script(query, match_index, max_chars),
+        [this, id, query, screenshot_path, reply](const QVariant& res) {
+            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+            out.insert("id", id);
+            out.insert("action", "find");
+            out.insert("url", page_->url().toString());
+            out.insert("title", page_->title());
+
+            if (!screenshot_path.isEmpty()) {
+                const QJsonObject shot = capture_screenshot(screenshot_path);
+                for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+                    out.insert(it.key(), it.value());
+                }
+            }
+            reply(out);
+        });
+}
+
+void BrowserSession::cmd_login(const QString& id, const QJsonObject& params, const ReplyFn& reply) {
+    const QString username = params.value("username").toString();
+    const QString password = params.value("password").toString();
+    const bool submit = params.value("submit").toBool(true);
+    const QString screenshot_path = params.value("screenshot_path").toString();
+
+    if (username.isEmpty() && password.isEmpty()) {
+        QJsonObject err;
+        err.insert("id", id);
+        err.insert("ok", false);
+        err.insert("error_code", "invalid_args");
+        err.insert("error", "Username or password must be provided");
+        reply(err);
+        return;
+    }
+
+    view_->page()->runJavaScript(js_login_form_script(username, password, submit),
+        [this, id, screenshot_path, reply](const QVariant& res) {
+            QJsonObject out = QJsonObject::fromVariantMap(res.toMap());
+            out.insert("id", id);
+            out.insert("action", "login");
+
+            const bool submitted = out.value("submitted").toBool(false);
+            if (submitted) {
+                // Allow network navigation / response settling
+                QTimer::singleShot(2500, this, [this, id, screenshot_path, reply, out]() mutable {
+                    view_->page()->runJavaScript(QStringLiteral("document.body ? document.body.innerText : ''"),
+                        [this, id, screenshot_path, reply, out](const QVariant& text_res) mutable {
+                            const QString bodyText = text_res.toString().toLower();
+                            const bool is2fa = bodyText.contains("verification code") ||
+                                               bodyText.contains("two-factor") ||
+                                               bodyText.contains("2-step verification") ||
+                                               bodyText.contains("approve the notification") ||
+                                               bodyText.contains("security code") ||
+                                               bodyText.contains("one-time password") ||
+                                               bodyText.contains("duo push") ||
+                                               bodyText.contains("authenticator app");
+                            out.insert("two_factor_detected", is2fa);
+                            out.insert("status", is2fa ? QStringLiteral("2fa_prompt_detected")
+                                                       : QStringLiteral("login_submitted"));
+                            out.insert("url", page_->url().toString());
+                            out.insert("title", page_->title());
+
+                            if (!screenshot_path.isEmpty()) {
+                                const QJsonObject shot = capture_screenshot(screenshot_path);
+                                for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+                                    out.insert(it.key(), it.value());
+                                }
+                            }
+                            reply(out);
+                        });
+                });
+            } else {
+                out.insert("status", QStringLiteral("form_filled"));
+                out.insert("url", page_->url().toString());
+                out.insert("title", page_->title());
+                if (!screenshot_path.isEmpty()) {
+                    const QJsonObject shot = capture_screenshot(screenshot_path);
+                    for (auto it = shot.constBegin(); it != shot.constEnd(); ++it) {
+                        out.insert(it.key(), it.value());
+                    }
+                }
+                reply(out);
+            }
+        });
 }
 
 void BrowserSession::cmd_extract_text(const QString& id, const QJsonObject& params, const ReplyFn& reply) {

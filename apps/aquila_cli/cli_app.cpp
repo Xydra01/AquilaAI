@@ -4,6 +4,8 @@
 #include "aquila/core.hpp"
 #include "aquila/agent/agent_loop.hpp"
 #include "aquila/agent/recipes.hpp"
+#include "aquila/exec/process.hpp"
+#include "aquila/knowledge/credential_store.hpp"
 #include "aquila/logging/run_logger.hpp"
 #include "aquila/inference/ollama_backend.hpp"
 #include "aquila/modules/registry.hpp"
@@ -118,6 +120,8 @@ int print_help(std::ostream& out) {
         << "  list-recipes  List all builtin and workspace recipe cartridges\n"
         << "  list-modules  List all registered modules and action schemas\n"
         << "  eval          Evaluate recipe cartridges against verification rubrics\n"
+        << "  credentials   Manage local login credentials (list, set, delete)\n"
+        << "  browser       Browser session management (--login <url>)\n"
         << "  version       Print version information (--version, -v)\n"
         << "  help          Show this help message (--help, -h)\n\n"
         << "Options for 'run':\n"
@@ -831,6 +835,160 @@ CliOptions parse_args(int argc, const char* const* argv) {
     return opts;
 }
 
+int handle_credentials(const CliOptions& opts, std::ostream& out, std::ostream& err) {
+    auto& store = knowledge::CredentialStore::default_store();
+    store.load();
+
+    const auto& args = opts.extra_args;
+    if (args.empty() || args[0] == "list") {
+        const auto list = store.list_safe();
+        out << "Stored Credentials (" << list.size() << "):\n";
+        if (list.empty()) {
+            out << "  (no credentials configured. Use 'aquila credentials set <domain> --user <username> --pass <password>')\n";
+            return 0;
+        }
+        for (const auto& cred : list) {
+            out << "  - Domain:    " << cred.domain << "\n"
+                << "    Username:  " << cred.username << "\n"
+                << "    Password:  " << cred.password << "\n";
+            if (!cred.login_url.empty()) {
+                out << "    Login URL: " << cred.login_url << "\n";
+            }
+            if (!cred.notes.empty()) {
+                out << "    Notes:     " << cred.notes << "\n";
+            }
+        }
+        return 0;
+    }
+
+    if (args[0] == "set") {
+        if (args.size() < 2) {
+            err << "Error: 'credentials set' requires a domain name.\n"
+                << "Usage: aquila credentials set <domain> --user <username> --pass <password> [--url <login_url>] [--notes <notes>]\n";
+            return 2;
+        }
+        const std::string domain = args[1];
+        std::string username;
+        std::string password;
+        std::string login_url;
+        std::string auth_type = "form";
+        std::string notes;
+
+        for (std::size_t i = 2; i < args.size(); ++i) {
+            const std::string_view arg = args[i];
+            if ((arg == "--user" || arg == "-u") && i + 1 < args.size()) {
+                username = args[++i];
+            } else if ((arg == "--pass" || arg == "-p") && i + 1 < args.size()) {
+                password = args[++i];
+            } else if (arg == "--url" && i + 1 < args.size()) {
+                login_url = args[++i];
+            } else if (arg == "--type" && i + 1 < args.size()) {
+                auth_type = args[++i];
+            } else if (arg == "--notes" && i + 1 < args.size()) {
+                notes = args[++i];
+            }
+        }
+
+        if (username.empty() || password.empty()) {
+            err << "Error: Both --user and --pass are required to set credentials.\n";
+            return 2;
+        }
+
+        knowledge::Credential cred;
+        cred.domain = domain;
+        cred.username = username;
+        cred.password = password;
+        cred.login_url = login_url;
+        cred.auth_type = auth_type;
+        cred.notes = notes;
+
+        store.set(std::move(cred));
+        if (!store.save()) {
+            err << "Error: Failed to save credentials to disk.\n";
+            return 1;
+        }
+
+        out << "Credential successfully saved for domain: " << knowledge::CredentialStore::normalize_domain(domain) << "\n";
+        return 0;
+    }
+
+    if (args[0] == "delete" || args[0] == "remove" || args[0] == "rm") {
+        if (args.size() < 2) {
+            err << "Error: 'credentials delete' requires a domain name.\n"
+                << "Usage: aquila credentials delete <domain>\n";
+            return 2;
+        }
+        const std::string domain = args[1];
+        if (!store.remove(domain)) {
+            err << "No credentials found for domain: " << domain << "\n";
+            return 1;
+        }
+        if (!store.save()) {
+            err << "Error: Failed to save credentials changes to disk.\n";
+            return 1;
+        }
+        out << "Credential successfully removed for domain: " << domain << "\n";
+        return 0;
+    }
+
+    err << "Unknown credentials action: '" << args[0] << "'. Valid actions are: list, set, delete.\n";
+    return 2;
+}
+
+int handle_browser(const CliOptions& opts, std::ostream& out, std::ostream& err) {
+    std::string login_url = "https://www.google.com";
+    bool is_login = false;
+    for (std::size_t i = 0; i < opts.extra_args.size(); ++i) {
+        if (opts.extra_args[i] == "--login") {
+            is_login = true;
+            if (i + 1 < opts.extra_args.size() && opts.extra_args[i + 1][0] != '-') {
+                login_url = opts.extra_args[++i];
+            }
+        }
+    }
+
+    if (!is_login) {
+        err << "Usage: aquila browser --login <url>\n";
+        return 2;
+    }
+
+    std::string browser_bin;
+#ifdef AQUILA_DEFAULT_BROWSER_BIN
+    browser_bin = AQUILA_DEFAULT_BROWSER_BIN;
+#endif
+    if (browser_bin.empty() || !std::filesystem::exists(browser_bin)) {
+        const auto self_dir = exec::find_program("aquila_cli").parent_path();
+#ifdef _WIN32
+        const auto cand = self_dir / "aquila_browser.exe";
+#else
+        const auto cand = self_dir / "aquila_browser";
+#endif
+        if (std::filesystem::exists(cand)) {
+            browser_bin = cand.string();
+        } else {
+            const auto found = exec::find_program("aquila_browser");
+            if (!found.empty() && std::filesystem::exists(found)) {
+                browser_bin = found.string();
+            }
+        }
+    }
+
+    if (browser_bin.empty() || !std::filesystem::exists(browser_bin)) {
+        err << "Error: Could not locate aquila_browser binary.\n";
+        return 1;
+    }
+
+    out << "Launching interactive browser login for: " << login_url << "\n"
+        << "Log in and approve any phone 2-factor prompts in the window.\n";
+
+    exec::RunOptions run_opts;
+    run_opts.argv = {browser_bin, "--login", login_url};
+    run_opts.timeout_s = 600.0;
+    const auto res = exec::run(run_opts);
+    out << "Browser login closed (exit code: " << res.exit_code << "). Session cookies saved to ~/.aquila/browser_profile.\n";
+    return res.exit_code;
+}
+
 int dispatch(const CliOptions& opts, std::istream& in, std::ostream& out, std::ostream& err,
              IInferenceBackend* custom_backend) {
     if (opts.version) {
@@ -856,6 +1014,12 @@ int dispatch(const CliOptions& opts, std::istream& in, std::ostream& out, std::o
     }
     if (opts.command == "eval") {
         return run_eval(opts, out, err, custom_backend);
+    }
+    if (opts.command == "credentials") {
+        return handle_credentials(opts, out, err);
+    }
+    if (opts.command == "browser") {
+        return handle_browser(opts, out, err);
     }
 
     err << "Unknown command: '" << opts.command << "'. Run 'aquila_cli --help' for usage.\n";

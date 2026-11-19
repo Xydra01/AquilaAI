@@ -130,6 +130,8 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
         "browser_click",
         "browser_type",
         "browser_scroll",
+        "browser_find",
+        "browser_login",
         "browser_extract_text",
         "browser_screenshot"
       ]
@@ -175,16 +177,16 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
     "Search the web using BrowserModule browser_search or inspect local docs with KnowledgeModule search_local_docs",
-    "Open authoritative source pages with BrowserModule browser_navigate, scroll deeper sections with browser_scroll when content continues below the fold, and click relevant links/tabs/controls with browser_click to gather thorough primary evidence",
+    "Open authoritative source pages with BrowserModule browser_navigate, quickly locate terms or jump through long pages with browser_find, scroll deeper sections with browser_scroll when content continues below the fold, and click relevant links/tabs/controls with browser_click to gather thorough primary evidence",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
-    "Write comprehensive final research report to research_report.md (with markdown headers and numbered real http(s):// URL citations, e.g. [1] https://...) using WorkspaceModule create_file",
+    "Write comprehensive final research report to research_report.md (with markdown headers and at least 3 distinct numbered real http(s):// URL citations, e.g. [1] https://..., [2] https://..., [3] https://...; minimum 2 required) using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {
     "module": "KnowledgeModule",
     "action": "verify_research_deliverable",
     "must_succeed": true,
-    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and real http(s):// source URLs from your visited/retrieved pages) to research_report.md before completing."
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and at least 2 distinct real http(s):// source URLs from your visited/retrieved pages, e.g. [1] https://..., [2] https://...) to research_report.md before completing."
   }
 }
 )AQ";
@@ -203,6 +205,8 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
         "browser_click",
         "browser_type",
         "browser_scroll",
+        "browser_find",
+        "browser_login",
         "browser_extract_text",
         "browser_screenshot"
       ]
@@ -260,16 +264,16 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
   ],
   "pre_llm_hooks": [],
   "scratchpad_checklist": [
-    "Investigate the question with BrowserModule browser_search/browser_navigate (scrolling deeper sections with browser_scroll and clicking relevant links/tabs/controls with browser_click) or KnowledgeModule search_local_docs",
+    "Investigate the question with BrowserModule browser_search/browser_navigate (locating terms with browser_find, scrolling deeper sections with browser_scroll, and clicking relevant links/tabs/controls with browser_click) or KnowledgeModule search_local_docs",
     "Store verified findings into knowledge memory using KnowledgeModule store_fact",
-    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and numbered real http(s):// URL citations, e.g. [1] https://... using WorkspaceModule create_file",
+    "Write a structured findings report (research_report.md or findings_report.md) with markdown headers and at least 3 distinct numbered real http(s):// URL citations, e.g. [1] https://..., [2] https://..., [3] https://...; minimum 2 required) using WorkspaceModule create_file",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {
     "module": "KnowledgeModule",
     "action": "verify_research_deliverable",
     "must_succeed": true,
-    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and real http(s):// source URLs from your visited/retrieved pages) to research_report.md or findings_report.md before completing."
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and at least 2 distinct real http(s):// source URLs from your visited/retrieved pages) to research_report.md or findings_report.md before completing."
   }
 }
 )AQ";

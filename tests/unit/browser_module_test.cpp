@@ -221,7 +221,19 @@ TEST_CASE("BrowserModule registers cleanly and exposes valid schemas", "[browser
     REQUIRE(mod != nullptr);
     CHECK(mod->module_id() == "BrowserModule");
     const auto actions = mod->get_actions();
-    CHECK(actions.size() == 7);
+    CHECK(actions.size() == 9);
+    auto has_action = [&](const std::string& name) {
+        return std::any_of(actions.begin(), actions.end(), [&](const auto& a) { return a.action_name == name; });
+    };
+    CHECK(has_action("browser_search"));
+    CHECK(has_action("browser_navigate"));
+    CHECK(has_action("browser_click"));
+    CHECK(has_action("browser_type"));
+    CHECK(has_action("browser_scroll"));
+    CHECK(has_action("browser_find"));
+    CHECK(has_action("browser_login"));
+    CHECK(has_action("browser_extract_text"));
+    CHECK(has_action("browser_screenshot"));
 }
 
 TEST_CASE("BrowserModule state snapshot round-trips cleanly", "[browser]") {
@@ -515,6 +527,26 @@ TEST_CASE("BrowserModule enforces URL memory, scroll clamping, chrome filtering,
     INFO(xy.llm_facing_output);
     REQUIRE(xy.success);
     CHECK(xy.llm_facing_output.find("XY_FALLBACK_CLICKED_OK") != std::string::npos);
+
+    // 9. browser_find in-page Ctrl+F jumps to keyword and extracts snippet
+    REQUIRE(mod.execute_action("browser_navigate", Json::object({{"url", server.base_url() + "/anchor-page"}})).success);
+    const ActionResult find_res = mod.execute_action(
+        "browser_find", Json::object({
+            {"query", "ANCHOR_SECTION_REACHED_42"},
+            {"match_index", 1},
+        }));
+    INFO(find_res.llm_facing_output);
+    REQUIRE(find_res.success);
+    CHECK(find_res.llm_facing_output.find("Found 1 match") != std::string::npos);
+    CHECK(find_res.llm_facing_output.find("ANCHOR_SECTION_REACHED_42") != std::string::npos);
+
+    // 10. browser_login handles missing credential gracefully
+    const ActionResult login_res = mod.execute_action(
+        "browser_login", Json::object({
+            {"domain", "unknown-service-without-credentials.org"},
+        }));
+    CHECK_FALSE(login_res.success);
+    CHECK(login_res.error_code == "no_credentials_found");
 }
 #endif
 

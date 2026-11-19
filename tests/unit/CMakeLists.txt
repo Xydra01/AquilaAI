@@ -51,6 +51,7 @@ add_executable(aquila_unit_tests
     web_search_test.cpp
     knowledge_module_test.cpp
     browser_module_test.cpp
+    credential_store_test.cpp
     knowledge_recipe_test.cpp
     document_module_test.cpp
     persona_module_test.cpp

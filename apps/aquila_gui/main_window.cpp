@@ -845,6 +845,9 @@ void MainWindow::onResearchSearch(const QString& query, const QString& depth, co
             if (engine == QStringLiteral("browser")) {
                 results = getBrowser().search_browser_direct(trimmedQuery.toStdString(), limit);
                 if (results.empty()) {
+                    results = webEngine.search_searxng(trimmedQuery.toStdString(), limit);
+                }
+                if (results.empty()) {
                     results = webEngine.search_duckduckgo_lite(trimmedQuery.toStdString(), limit);
                 }
                 if (results.empty()) {

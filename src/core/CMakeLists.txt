@@ -70,6 +70,7 @@ add_library(aquila_core STATIC
     knowledge/web_search.cpp
     knowledge/knowledge_module.cpp
     knowledge/browser_module.cpp
+    knowledge/credential_store.cpp
     logging/run_logger.cpp)
 add_library(aquila::core ALIAS aquila_core)
 

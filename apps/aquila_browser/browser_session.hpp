@@ -32,6 +32,8 @@ private:
     void cmd_click(const QString& id, const QJsonObject& params, const ReplyFn& reply);
     void cmd_type(const QString& id, const QJsonObject& params, const ReplyFn& reply);
     void cmd_scroll(const QString& id, const QJsonObject& params, const ReplyFn& reply);
+    void cmd_find(const QString& id, const QJsonObject& params, const ReplyFn& reply);
+    void cmd_login(const QString& id, const QJsonObject& params, const ReplyFn& reply);
     void cmd_extract_text(const QString& id, const QJsonObject& params, const ReplyFn& reply);
     void cmd_screenshot(const QString& id, const QJsonObject& params, const ReplyFn& reply);
 

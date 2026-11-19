@@ -250,7 +250,7 @@ GenerationParams AgentLoop::generation_params(const TierLimits& limits, const Re
 
 TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& user_request,
                               const LoopConfig& config) {
-    const TierLimits& limits = config.tier.limits;
+    TierLimits limits = config.tier.limits;
 
     // Load-time validation (Req 5.4): a structurally invalid recipe — an unknown
     // module, an unexposed/undeclared action, a bad hook, or an initial_state that
@@ -370,6 +370,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // 1.6). The loop is bounded here by the tier's turn cap; TODO(8.3) replaces
     // this bound with the orchestrator-intent handling, the should_condense() wipe,
     // and the turn-limit terminal semantics.
+    bool gate_grace_granted = false;
     for (std::uint64_t turn = 0; turn < limits.max_turns; ++turn) {
         if (config.check_cancelled && config.check_cancelled()) {
             result.outcome = LoopOutcome::aborted;
@@ -641,6 +642,13 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 // as guidance so the next turn can satisfy the gate.
                 if (!gate.completion_output.empty()) {
                     emit_guidance(condenser, logger, turn, std::move(gate.completion_output),
+                                  &pending_turn_guidance);
+                }
+                if (!gate.success && !gate_grace_granted && limits.max_turns >= 16 && (turn + 2 >= limits.max_turns)) {
+                    limits.max_turns += 2;
+                    gate_grace_granted = true;
+                    emit_guidance(condenser, logger, turn,
+                                  "[EXIT GATE REMEDIATION GRACE EXTENSION: Granted +2 turns to address deliverable validation feedback.]",
                                   &pending_turn_guidance);
                 }
                 break;
