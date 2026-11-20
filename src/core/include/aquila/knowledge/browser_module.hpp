@@ -25,6 +25,8 @@ public:
     [[nodiscard]] std::string module_id() const override { return "BrowserModule"; }
     [[nodiscard]] std::vector<ActionSchema> get_actions() const override;
 
+    [[nodiscard]] static std::string resolve_browser_binary(const std::string& configured = {});
+
     // Direct structured web search returning typed SearchResult objects without LLM formatting.
     [[nodiscard]] std::vector<SearchResult> search_structured(const std::string& query, int max_results = 5, bool force_browser = false);
     [[nodiscard]] std::vector<SearchResult> search_browser_direct(const std::string& query, int max_results = 5);

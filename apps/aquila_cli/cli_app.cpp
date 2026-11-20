@@ -5,6 +5,7 @@
 #include "aquila/agent/agent_loop.hpp"
 #include "aquila/agent/recipes.hpp"
 #include "aquila/exec/process.hpp"
+#include "aquila/knowledge/browser_module.hpp"
 #include "aquila/knowledge/credential_store.hpp"
 #include "aquila/logging/run_logger.hpp"
 #include "aquila/inference/ollama_backend.hpp"
@@ -975,6 +976,7 @@ int handle_credentials(const CliOptions& opts, std::ostream& out, std::ostream& 
 
 int handle_browser(const CliOptions& opts, std::ostream& out, std::ostream& err) {
     std::string login_url = "https://www.google.com";
+    std::string configured_bin;
     bool is_login = false;
     for (std::size_t i = 0; i < opts.extra_args.size(); ++i) {
         if (opts.extra_args[i] == "--login") {
@@ -982,48 +984,32 @@ int handle_browser(const CliOptions& opts, std::ostream& out, std::ostream& err)
             if (i + 1 < opts.extra_args.size() && opts.extra_args[i + 1][0] != '-') {
                 login_url = opts.extra_args[++i];
             }
-        }
-    }
-
-    if (!is_login) {
-        err << "Usage: aquila browser --login <url>\n";
-        return 2;
-    }
-
-    std::string browser_bin;
-#ifdef AQUILA_DEFAULT_BROWSER_BIN
-    browser_bin = AQUILA_DEFAULT_BROWSER_BIN;
-#endif
-    if (browser_bin.empty() || !std::filesystem::exists(browser_bin)) {
-        const auto self_dir = exec::find_program("aquila_cli").parent_path();
-#ifdef _WIN32
-        const auto cand = self_dir / "aquila_browser.exe";
-#else
-        const auto cand = self_dir / "aquila_browser";
-#endif
-        if (std::filesystem::exists(cand)) {
-            browser_bin = cand.string();
-        } else {
-            const auto found = exec::find_program("aquila_browser");
-            if (!found.empty() && std::filesystem::exists(found)) {
-                browser_bin = found.string();
+        } else if (opts.extra_args[i] == "--bin") {
+            if (i + 1 < opts.extra_args.size() && opts.extra_args[i + 1][0] != '-') {
+                configured_bin = opts.extra_args[++i];
             }
         }
     }
 
+    if (!is_login) {
+        err << "Usage: aquila browser --login <url> [--bin <path>]\n";
+        return 2;
+    }
+
+    const std::string browser_bin = knowledge::BrowserModule::resolve_browser_binary(configured_bin);
     if (browser_bin.empty() || !std::filesystem::exists(browser_bin)) {
-        err << "Error: Could not locate aquila_browser binary.\n";
+        err << "Error: Could not locate aquila_browser binary (checked apps/aquila_browser/, PATH, and AQUILA_BROWSER_BIN).\n";
         return 1;
     }
 
     out << "Launching interactive browser login for: " << login_url << "\n"
-        << "Log in and approve any phone 2-factor prompts in the window.\n";
+        << "Log in and approve any phone 2-factor prompts in the window.\n" << std::flush;
 
     exec::RunOptions run_opts;
     run_opts.argv = {browser_bin, "--login", login_url};
     run_opts.timeout_s = 600.0;
     const auto res = exec::run(run_opts);
-    out << "Browser login closed (exit code: " << res.exit_code << "). Session cookies saved to ~/.aquila/browser_profile.\n";
+    out << "Browser login closed (exit code: " << res.exit_code << "). Session cookies saved to ~/.aquila/browser_profile.\n" << std::flush;
     return res.exit_code;
 }
 

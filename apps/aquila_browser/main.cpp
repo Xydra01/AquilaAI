@@ -130,6 +130,8 @@ int run_interactive_login(const QString& target_url) {
     view->setUrl(QUrl(target_url));
     view->setAttribute(Qt::WA_DeleteOnClose);
     view->show();
+    view->raise();
+    view->activateWindow();
 
     std::cout << "[Aquila Browser] Interactive login session opened for: " << target_url.toStdString() << "\n"
               << "Log in and complete any 2-factor / phone prompts in the browser window.\n"

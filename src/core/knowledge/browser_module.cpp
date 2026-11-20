@@ -57,7 +57,9 @@ std::filesystem::path current_executable_dir() {
 #endif
 }
 
-std::string resolve_browser_binary(const std::string& configured) {
+} // namespace
+
+std::string BrowserModule::resolve_browser_binary(const std::string& configured) {
     auto is_file = [](const fs::path& p) {
         std::error_code ec;
         return !p.empty() && fs::exists(p, ec) && fs::is_regular_file(p, ec);
@@ -108,6 +110,8 @@ std::string resolve_browser_binary(const std::string& configured) {
     }
     return {};
 }
+
+namespace {
 
 ActionResult make_ok(std::string output, std::vector<std::string> images = {}) {
     ActionResult r;
