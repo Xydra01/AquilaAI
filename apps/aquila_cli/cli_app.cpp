@@ -560,13 +560,35 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
         LoopConfig config;
         if (opts.tier_name == "gpu") {
             config.tier = RuntimeTierConfig::for_profile(ComputeProfile::gpu_high_vram);
-            config.tier.limits.max_turns = 24;
+            config.tier.limits.max_turns = 28;
         } else {
             config.tier = RuntimeTierConfig::default_config();
         }
         config.task_id = "live-eval-" + recipe.recipe_id;
         config.mode = "task";
         config.context_strategy = CondenserStrategy::eocc;
+
+        if (opts.enable_spec && active_be != nullptr) {
+            out << "[SpecCreator] Synthesizing execution specification & milestones for live eval...\n";
+            SpecCreatorOptions spec_opts;
+            spec_opts.user_prompt = goal;
+            spec_opts.recipe = recipe;
+            spec_opts.workspace_root = opts.workspace_root;
+            spec_opts.include_workspace_grounding = true;
+            try {
+                TaskSpec spec = SpecCreator::generate_spec(*active_be, spec_opts);
+                out << "[SpecCreator] Spec Synthesized: " << spec.title << " (" << spec.milestones.size() << " milestones)\n";
+                out << "[SpecCreator] Archived to: " << spec.saved_path.string() << "\n";
+                if (opts.review_spec) {
+                    out << "\n================ TASK EXECUTION PLAN ================\n"
+                        << spec.markdown_spec << "\n"
+                        << "=====================================================\n";
+                }
+                config.task_spec = std::move(spec);
+            } catch (const std::exception& e) {
+                err << "[SpecCreator] Warning: Spec generation failed: " << e.what() << ". Continuing with recipe defaults.\n";
+            }
+        }
 
         struct TurnDissection {
             int turn = 0;

@@ -199,9 +199,16 @@ DomainGroundingContext SpecCreator::inspect_grounding_context(
             }
         }
     } else if (ctx.domain == "research") {
-        // Collect credential domains
+        // Collect credential domains & active authenticated browser sessions
         try {
             ctx.available_credential_domains = aquila::knowledge::CredentialStore::default_store().list_domains();
+            const auto browser_domains = aquila::knowledge::CredentialStore::list_browser_session_domains();
+            for (const auto& bd : browser_domains) {
+                if (std::find(ctx.available_credential_domains.begin(), ctx.available_credential_domains.end(), bd) ==
+                    ctx.available_credential_domains.end()) {
+                    ctx.available_credential_domains.push_back(bd + " (active browser session)");
+                }
+            }
         } catch (...) {}
 
         // Enumerate documents in workspace or docs/

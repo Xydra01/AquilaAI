@@ -36,6 +36,7 @@ __pycache__/
 .aquila/
 eval_reports/
 eval_reports_*/
+eval_workspaces/
 eval_battery_summary.json
 eval_battery_*_summary.json
 eval_report.json

@@ -153,6 +153,7 @@ inline constexpr std::string_view kFnResearchFullRecipeJson = R"AQ({
       "expose_actions": [
         "create_file",
         "write_file",
+        "surgical_edit",
         "read_region",
         "outline"
       ]
@@ -242,6 +243,8 @@ inline constexpr std::string_view kFnResearchDynamicRecipeJson = R"AQ({
       },
       "expose_actions": [
         "create_file",
+        "write_file",
+        "surgical_edit",
         "read_region",
         "outline"
       ]

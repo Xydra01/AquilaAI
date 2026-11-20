@@ -48,6 +48,9 @@ public:
     // Lists all stored domains.
     [[nodiscard]] std::vector<std::string> list_domains() const;
 
+    // Queries ~/.aquila/browser_profile/Cookies to discover domains with active authenticated sessions.
+    [[nodiscard]] static std::vector<std::string> list_browser_session_domains();
+
     // Lists all credentials with passwords masked as "********" for safe display.
     [[nodiscard]] std::vector<Credential> list_safe() const;
 

@@ -104,3 +104,14 @@ TEST_CASE("CredentialStore file persistence roundtrip", "[credential_store]") {
     std::filesystem::remove_all(temp_dir, ec);
 }
 
+TEST_CASE("CredentialStore list_browser_session_domains discovery", "[credential_store]") {
+    std::vector<std::string> domains;
+    REQUIRE_NOTHROW(domains = CredentialStore::list_browser_session_domains());
+    for (const auto& d : domains) {
+        CHECK_FALSE(d.empty());
+        CHECK(d.front() != '.');
+        CHECK(d.find("http://") == std::string::npos);
+        CHECK(d.find("https://") == std::string::npos);
+    }
+}
+

@@ -383,6 +383,8 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
     // and the turn-limit terminal semantics.
     bool gate_grace_granted = false;
     bool gate_remediation_active = false;
+    bool deliverable_grace_granted = false;
+    std::uint32_t consecutive_scrolls = 0;
     for (std::uint64_t turn = 0; turn < limits.max_turns; ++turn) {
         if (config.check_cancelled && config.check_cancelled()) {
             result.outcome = LoopOutcome::aborted;
@@ -523,12 +525,19 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         // Anti-repetition detection and loop circuit breaker.
         // Progressive browser actions (scrolling down a long page or clicking pagination/load-more)
         // legitimately reuse identical args across turns while advancing viewport/DOM state.
+        if (call.module == "BrowserModule" && call.action == "browser_scroll") {
+            consecutive_scrolls++;
+        } else {
+            consecutive_scrolls = 0;
+        }
+
         const std::string current_call_sig = canonical_call_signature(call);
         const bool progressive_browser_advance =
             action_result.success &&
             is_progressive_browser_action(call.module, call.action) &&
             !last_action_output.empty() &&
-            action_result.llm_facing_output != last_action_output;
+            action_result.llm_facing_output != last_action_output &&
+            consecutive_scrolls < 4;
         if (!progressive_browser_advance &&
             (current_call_sig == last_call_sig ||
              (!action_result.success && call.module == last_failed_module && call.action == last_failed_action))) {
@@ -558,6 +567,8 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         last_call_sig = current_call_sig;
         last_action_output = action_result.llm_facing_output;
 
+        std::vector<std::string> pending_turn_guidance;
+
         if (!action_result.success) {
             last_failed_module = call.module;
             last_failed_action = call.action;
@@ -576,9 +587,31 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                     gate_remediation_active = false;
                 }
             }
+
+            // Deliverable creation grace extension:
+            // When a major deliverable is written near the turn budget limit, grant +3 turns
+            // so the agent has turns to update its task ledger and call complete_recipe.
+            const std::string target_file = call.args.value("path", call.args.value("file", ""));
+            const bool is_deliverable_created = is_modifying_action &&
+                (target_file.find("report") != std::string::npos ||
+                 target_file.find("manuscript") != std::string::npos ||
+                 target_file.find("synthesis") != std::string::npos ||
+                 target_file.find("syllabus") != std::string::npos);
+            if (is_deliverable_created && !deliverable_grace_granted && (turn + 2 >= limits.max_turns)) {
+                limits.max_turns += 3;
+                deliverable_grace_granted = true;
+                emit_guidance(condenser, logger, turn,
+                              "[DELIVERABLE CREATED: Granted +3 turns extension. Call OrchestratorModule.update_task_ledger to mark steps completed and call OrchestratorModule.complete_recipe to conclude the task.]",
+                              &pending_turn_guidance);
+            }
         }
 
-        std::vector<std::string> pending_turn_guidance;
+        if (consecutive_scrolls == 3) {
+            emit_guidance(
+                condenser, logger, turn,
+                "[BROWSER ADVICE: You have scrolled 3 times consecutively on this page. Avoid exhausting your turn budget with repetitive scrolling. Use BrowserModule.browser_find(query=\"...\") to jump directly to target tables/sections, or proceed to KnowledgeModule.store_fact and write your report.]",
+                &pending_turn_guidance);
+        }
         if (!action_result.success && (effective_repeat >= 1 || consecutive_failures >= 2)) {
             const bool gated = recipe.post_llm_validation_hook.has_value();
             const std::string recovery_hint = (call.module == "BrowserModule")
@@ -594,22 +627,28 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 ".]",
                 &pending_turn_guidance);
         } else if (effective_repeat == 1) {
+            const std::string conclude_hint = (call.action == "complete_recipe")
+                ? "Address the deliverable exit gate requirements using WorkspaceModule before calling complete_recipe again."
+                : "or call OrchestratorModule.complete_recipe to conclude.";
             emit_guidance(
                 condenser, logger, turn,
                 "[SYSTEM NOTICE: You just called '" + call.module + "::" + call.action +
-                "' with identical arguments. Doing this again will trigger the circuit breaker. Change your query/arguments, choose a different module/action, or call OrchestratorModule.complete_recipe to conclude.]",
+                "' with identical arguments. Doing this again will trigger the circuit breaker. Change your query/arguments, choose a different module/action, " + conclude_hint + "]",
                 &pending_turn_guidance);
         } else if (effective_repeat >= 2) {
+            const std::string conclude_hint = (call.action == "complete_recipe")
+                ? "You must edit/update your deliverable with WorkspaceModule before calling complete_recipe."
+                : "Immediately call OrchestratorModule.complete_recipe to conclude the task.";
             emit_guidance(
                 condenser, logger, turn,
                 "[CRITICAL SYSTEM WARNING: Repetition loop detected! You must NOT call '" + call.module + "::" + call.action +
-                "' again. Immediately call OrchestratorModule.complete_recipe to conclude the task.]",
+                "' again. " + conclude_hint + "]",
                 &pending_turn_guidance);
         } else if (oscillation_count >= 2) {
             emit_guidance(
                 condenser, logger, turn,
                 "[SYSTEM WARNING: Oscillation loop detected! You are alternating between '" + call.module + "::" + call.action +
-                "' and the previous action without making new progress. Stop repeating this cycle; proceed to store facts with KnowledgeModule.store_fact, finalize the output file, and call OrchestratorModule.complete_recipe.]",
+                "' and the previous action without making new progress. Stop repeating this cycle; update the deliverable file and call OrchestratorModule.complete_recipe.]",
                 &pending_turn_guidance);
         }
         if (config.max_repeated_calls > 0 &&
@@ -663,7 +702,9 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                 // as guidance so the next turn can satisfy the gate.
                 gate_remediation_active = true;
                 if (!gate.completion_output.empty()) {
-                    emit_guidance(condenser, logger, turn, std::move(gate.completion_output),
+                    emit_guidance(condenser, logger, turn,
+                                  "[DELIVERABLE VALIDATION REJECTED]: " + gate.completion_output +
+                                  " You MUST modify or expand the deliverable file using WorkspaceModule (write_file / create_file / surgical_edit) to satisfy these requirements BEFORE calling complete_recipe again. Do NOT call complete_recipe again without updating the deliverable.",
                                   &pending_turn_guidance);
                 }
                 if (!gate.success && !gate_grace_granted && limits.max_turns >= 16 && (turn + 2 >= limits.max_turns)) {
@@ -691,8 +732,8 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
             }
         }
 
-        // Gentle wrap-up reminder when any sufficiently long recipe nears turn exhaustion.
-        if (limits.max_turns >= 8 && pending_turn_guidance.empty()) {
+        // Urgency reminder when any sufficiently long recipe nears turn exhaustion.
+        if (limits.max_turns >= 8) {
             const auto remaining = limits.max_turns - (turn + 1);
             const std::size_t warn_window = (limits.max_turns >= 16) ? 5 : 3;
             if (remaining >= 1 && remaining <= warn_window) {
@@ -724,7 +765,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                     std::string ledger_hint;
                     if (!pending_ids.empty()) {
                         ledger_hint = " Remaining mandatory work steps: " + pending_summary +
-                                      ". Finish any unwritten deliverable (e.g. store_fact / create_file research_report.md), "
+                                      ". Finish any unwritten deliverable (e.g. WorkspaceModule.create_file research_report.md), "
                                       "then call OrchestratorModule.update_task_ledger with completed_steps: [" +
                                       pending_ids + "] BEFORE calling complete_recipe!";
                     }
@@ -732,7 +773,7 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                         condenser, logger, turn,
                         "[TURN BUDGET NOTICE: Only " + std::to_string(remaining) +
                         (remaining == 1 ? " turn remains" : " turns remain") +
-                        " before the turn limit. Stop extra web exploration now." +
+                        " before the turn limit. Stop extra web exploration now; compile and write your deliverable report (e.g. WorkspaceModule.create_file research_report.md) right now." +
                         ledger_hint +
                         (pending_ids.empty() ? " Call OrchestratorModule.complete_recipe now." : "") + "]",
                         &pending_turn_guidance);

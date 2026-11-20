@@ -587,7 +587,7 @@ def _latest_activity_timestamp(watch_paths) -> float:
 
 
 def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, report_path,
-                    recipe_timeout=900, stall_timeout=300):
+                    recipe_timeout=900, stall_timeout=300, enable_spec=False):
     ws_path = Path(workspace).resolve()
     ws_path.mkdir(parents=True, exist_ok=True)
     if recipe in ("fn_research_offline", "knowledge_smoke") and not (ws_path / "docs").exists():
@@ -611,6 +611,8 @@ def run_single_eval(bin_path, recipe, task, workspace, backend, model, tier, rep
         "--tier", tier,
         "--report", str(Path(report_path).resolve())
     ]
+    if enable_spec:
+        cmd.append("--spec")
 
     print("\n" + "=" * 70)
     print(f"RUNNING LIVE EVAL: {recipe}")
@@ -809,6 +811,8 @@ def main():
                         help="Hard wall timeout per recipe in seconds (default: 900 GPU / 2400 CPU)")
     parser.add_argument("--stall-timeout", type=int, default=0,
                         help="Inactivity timeout without log/workspace progress in seconds (default: 300 GPU / 480 CPU)")
+    parser.add_argument("--spec", action="store_true", default=False,
+                        help="Enable SpecCreator autonomous milestone synthesis prior to recipe execution")
     args = parser.parse_args()
 
     if args.recipe_timeout <= 0:
@@ -862,7 +866,7 @@ def main():
                 rep_path = reports_dir / f"eval_{rec}.json"
                 res = run_single_eval(
                     bin_path, rec, tsk, str(rec_ws), args.backend, args.model, args.tier, str(rep_path),
-                    recipe_timeout=args.recipe_timeout, stall_timeout=args.stall_timeout,
+                    recipe_timeout=args.recipe_timeout, stall_timeout=args.stall_timeout, enable_spec=args.spec,
                 )
                 dissect_and_print_autopsy(res)
                 battery_results.append(res)
@@ -925,7 +929,7 @@ def main():
             task = "Execute recipe autonomously to completion"
         res = run_single_eval(
             bin_path, args.recipe, task, args.workspace, args.backend, args.model, args.tier, args.report,
-            recipe_timeout=args.recipe_timeout, stall_timeout=args.stall_timeout,
+            recipe_timeout=args.recipe_timeout, stall_timeout=args.stall_timeout, enable_spec=args.spec,
         )
         dissect_and_print_autopsy(res)
         sys.exit(0 if res.get("overall_passed") else 1)

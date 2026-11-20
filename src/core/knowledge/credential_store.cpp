@@ -1,10 +1,13 @@
 #include "aquila/knowledge/credential_store.hpp"
 #include "aquila/json.hpp"
 
+#include <sqlite3.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 namespace aquila::knowledge {
@@ -277,6 +280,48 @@ std::vector<Credential> CredentialStore::list_safe() const {
 void CredentialStore::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
+}
+
+std::vector<std::string> CredentialStore::list_browser_session_domains() {
+    const std::filesystem::path cookies_db = get_home_dir() / ".aquila" / "browser_profile" / "Cookies";
+    std::error_code ec;
+    if (!std::filesystem::exists(cookies_db, ec) || !std::filesystem::is_regular_file(cookies_db, ec)) {
+        return {};
+    }
+
+    sqlite3* db = nullptr;
+    const std::string u8path = cookies_db.string();
+    if (sqlite3_open_v2(u8path.c_str(), &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nullptr) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return {};
+    }
+
+    const char* sql =
+        "SELECT DISTINCT host_key FROM cookies "
+        "WHERE host_key NOT LIKE '%doubleclick%' "
+        "  AND host_key NOT LIKE '%analytics%' "
+        "  AND host_key NOT LIKE '%telemetry%' "
+        "  AND host_key NOT LIKE '%scorecardresearch%';";
+    sqlite3_stmt* stmt = nullptr;
+    std::set<std::string> domains;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* text = sqlite3_column_text(stmt, 0);
+            if (text != nullptr) {
+                std::string host = reinterpret_cast<const char*>(text);
+                while (!host.empty() && host.front() == '.') {
+                    host.erase(host.begin());
+                }
+                if (!host.empty()) {
+                    domains.insert(normalize_domain(host));
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+
+    return std::vector<std::string>(domains.begin(), domains.end());
 }
 
 } // namespace aquila::knowledge
