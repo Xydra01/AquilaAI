@@ -47,7 +47,7 @@ public slots:
     void onThemeToggle();
     void onSleepCycle();
     void onChatSend(const QString& prompt, const QStringList& attachments);
-    void onTaskRun(const QString& recipeId, const QString& prompt);
+    void onTaskRun(const QString& recipeId, const QString& prompt, bool enableSpec = false, bool reviewSpec = false);
     void onCancelCurrentTask();
     void openCartridgeInBuilder(const QString& recipeId);
     void onSettingsApplied();

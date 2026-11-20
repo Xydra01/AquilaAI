@@ -335,6 +335,37 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
         active_backend = owned_backend.get();
     }
 
+    if (opts.enable_spec && active_backend != nullptr) {
+        out << "[SpecCreator] Synthesizing execution specification & milestones...\n";
+        SpecCreatorOptions spec_opts;
+        spec_opts.user_prompt = task;
+        spec_opts.recipe = recipe;
+        spec_opts.workspace_root = opts.workspace_root;
+        spec_opts.include_workspace_grounding = true;
+        try {
+            TaskSpec spec = SpecCreator::generate_spec(*active_backend, spec_opts);
+            out << "[SpecCreator] Spec Synthesized: " << spec.title << " (" << spec.milestones.size() << " milestones)\n";
+            out << "[SpecCreator] Archived to: " << spec.saved_path.string() << "\n";
+            if (opts.review_spec) {
+                out << "\n----------------------------------------\n"
+                    << spec.markdown_spec << "\n"
+                    << "----------------------------------------\n"
+                    << "Proceed with execution? [Y/n]: ";
+                out.flush();
+                std::string ans;
+                if (std::getline(std::cin, ans)) {
+                    if (!ans.empty() && (ans[0] == 'n' || ans[0] == 'N')) {
+                        out << "Execution cancelled by user.\n";
+                        return 0;
+                    }
+                }
+            }
+            config.task_spec = std::move(spec);
+        } catch (const std::exception& e) {
+            err << "[SpecCreator] Warning: Spec generation failed: " << e.what() << ". Continuing with recipe defaults.\n";
+        }
+    }
+
     AgentLoop loop(*active_backend, registry, mod_ctx);
     const auto res = loop.run(recipe, task, config);
     out << "\n========================================\n"
@@ -810,6 +841,13 @@ CliOptions parse_args(int argc, const char* const* argv) {
             opts.image_paths.emplace_back(argv[++i]);
         } else if (arg == "--host" && i + 1 < argc) {
             opts.ollama_host = argv[++i];
+        } else if (arg == "--spec") {
+            opts.enable_spec = true;
+        } else if (arg == "--no-spec") {
+            opts.enable_spec = false;
+        } else if (arg == "--review-spec" || arg == "--plan") {
+            opts.enable_spec = true;
+            opts.review_spec = true;
         } else {
             opts.extra_args.emplace_back(arg);
         }

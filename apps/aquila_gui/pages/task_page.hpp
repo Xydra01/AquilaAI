@@ -3,6 +3,7 @@
 
 #include "base_page.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -31,9 +32,11 @@ public:
     QString hypothesis() const;
     int factsCount() const;
     int checklistCount() const;
+    bool isSpecEnabled() const;
+    bool isReviewSpecEnabled() const;
 
 signals:
-    void runRecipeRequested(const QString& recipeId, const QString& prompt);
+    void runRecipeRequested(const QString& recipeId, const QString& prompt, bool enableSpec = false, bool reviewSpec = false);
     void cancelRequested();
     void openBuilderRequested(const QString& recipeId);
 
@@ -42,6 +45,8 @@ private:
 
     QComboBox* recipeCombo_ = nullptr;
     QLineEdit* promptInput_ = nullptr;
+    QCheckBox* enableSpecCheck_ = nullptr;
+    QCheckBox* reviewSpecCheck_ = nullptr;
     QPushButton* runButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
     QPushButton* openBuilderButton_ = nullptr;

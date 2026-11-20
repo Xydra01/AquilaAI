@@ -5,6 +5,7 @@
 #include "aquila/agent/orchestrator_module.hpp"
 #include "aquila/agent/run_record.hpp"
 #include "aquila/agent/runtime_tier.hpp"
+#include "aquila/agent/spec_creator.hpp"
 #include "aquila/inference/backend.hpp"
 #include "aquila/modules/registry.hpp"
 #include "aquila/types/action.hpp"
@@ -66,6 +67,9 @@ struct LoopConfig {
     // Logging:
     std::shared_ptr<logging::RunLogger> logger = nullptr;
     bool enable_disk_logging = true;
+
+    // Optional pre-synthesized TaskSpec (from SpecCreator):
+    std::optional<TaskSpec> task_spec;
 };
 
 // Single-threaded, deterministic driver (Req 1, Req 5, R14). No async, no

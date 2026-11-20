@@ -51,6 +51,7 @@ add_library(aquila_core STATIC
     agent/orchestrator_module.cpp
     agent/agent_loop.cpp
     agent/micro_pass.cpp
+    agent/spec_creator.cpp
     document/document_module.cpp
     persona/persona_module.cpp
     learn/learn_module.cpp

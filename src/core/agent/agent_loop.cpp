@@ -294,7 +294,12 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
         if (init_ledger.objective.empty()) {
             init_ledger.objective = user_request;
         }
-        if (init_ledger.steps.empty() && !recipe.scratchpad_checklist.empty()) {
+        if (config.task_spec.has_value() && !config.task_spec->milestones.empty()) {
+            init_ledger.steps = config.task_spec->milestones;
+            if (!config.task_spec->title.empty()) {
+                init_ledger.current_status = "Executing Spec: " + config.task_spec->title;
+            }
+        } else if (init_ledger.steps.empty() && !recipe.scratchpad_checklist.empty()) {
             for (std::size_t i = 0; i < recipe.scratchpad_checklist.size(); ++i) {
                 init_ledger.add_step(recipe.scratchpad_checklist[i], "step_" + std::to_string(i + 1));
             }
@@ -316,7 +321,13 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                                 json_io::canonical_dump(action_call_schema(&recipe)));
 
     // Pin the user's primary task request so all subsequent turns retain context across condensation.
-    condenser.set_initial_user_prompt(user_request);
+    if (config.task_spec.has_value() && !config.task_spec->title.empty()) {
+        condenser.set_initial_user_prompt(
+            user_request + "\n\n[Active Task Specification: " + config.task_spec->title +
+            " (refer to specs/latest_spec.md for full technical blueprint)]");
+    } else {
+        condenser.set_initial_user_prompt(user_request);
+    }
 
     // Precompute the deterministic generation parameters the turn cycle uses (R14)
     // and capture the backend's starting context position.

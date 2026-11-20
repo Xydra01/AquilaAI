@@ -29,6 +29,8 @@ struct CliOptions {
     bool version = false;
     bool live = false;
     bool dissect = false;
+    bool enable_spec = false;
+    bool review_spec = false;
     std::string report_path;
     std::vector<std::string> extra_args;
 };

@@ -65,6 +65,25 @@ TaskPage::TaskPage(QWidget* parent)
 
     layout->addLayout(controls);
 
+    // Options Row: Spec Planning & Review
+    auto* optionsRow = new QHBoxLayout();
+    optionsRow->setSpacing(16);
+
+    enableSpecCheck_ = new QCheckBox(QStringLiteral("Generate Execution Plan / Spec"), this);
+    enableSpecCheck_->setChecked(true);
+    enableSpecCheck_->setToolTip(QStringLiteral("Pre-synthesizes a structured task specification and tailored milestones before running"));
+    optionsRow->addWidget(enableSpecCheck_);
+
+    reviewSpecCheck_ = new QCheckBox(QStringLiteral("Review Spec before running"), this);
+    reviewSpecCheck_->setChecked(false);
+    reviewSpecCheck_->setToolTip(QStringLiteral("Displays the synthesized specification in a review dialog before the agent begins"));
+    optionsRow->addWidget(reviewSpecCheck_);
+
+    connect(enableSpecCheck_, &QCheckBox::toggled, reviewSpecCheck_, &QCheckBox::setEnabled);
+
+    optionsRow->addStretch(1);
+    layout->addLayout(optionsRow);
+
     // Splitter: Left = Execution Ledger, Right = Scratchpad Monitor
     auto* splitter = new QSplitter(Qt::Horizontal, this);
 
@@ -169,14 +188,24 @@ void TaskPage::onRunClicked() {
     clearLedger();
     setRunning(true);
     setStatus(QStringLiteral("Running recipe %1...").arg(recipe));
-    emit runRecipeRequested(recipe, prompt);
+    emit runRecipeRequested(recipe, prompt, isSpecEnabled(), isReviewSpecEnabled());
 }
 
 void TaskPage::setRunning(bool running) {
     runButton_->setEnabled(!running);
     recipeCombo_->setEnabled(!running);
     promptInput_->setEnabled(!running);
+    if (enableSpecCheck_) enableSpecCheck_->setEnabled(!running);
+    if (reviewSpecCheck_) reviewSpecCheck_->setEnabled(!running && isSpecEnabled());
     cancelButton_->setEnabled(running);
+}
+
+bool TaskPage::isSpecEnabled() const {
+    return enableSpecCheck_ != nullptr && enableSpecCheck_->isChecked();
+}
+
+bool TaskPage::isReviewSpecEnabled() const {
+    return isSpecEnabled() && reviewSpecCheck_ != nullptr && reviewSpecCheck_->isChecked();
 }
 
 void TaskPage::addLedgerEntry(int turn, const QString& module, const QString& action, const QString& status, const QString& output) {

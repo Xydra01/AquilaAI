@@ -203,8 +203,14 @@ void AgentWorker::run() {
         ctx.workspace_root = workspace_root_;
 
         QStringList initChecklist;
-        for (const auto& item : recipe_.scratchpad_checklist) {
-            initChecklist.append(QString::fromStdString(item));
+        if (config_.task_spec.has_value() && !config_.task_spec->milestones.empty()) {
+            for (const auto& item : config_.task_spec->milestones) {
+                initChecklist.append(QString::fromStdString(item.description));
+            }
+        } else {
+            for (const auto& item : recipe_.scratchpad_checklist) {
+                initChecklist.append(QString::fromStdString(item));
+            }
         }
         emit scratchpadUpdated(QString::fromStdString(user_request_.empty() ? recipe_.goal_template : user_request_),
                                QStringLiteral("Formulating execution plan and inspecting context"),

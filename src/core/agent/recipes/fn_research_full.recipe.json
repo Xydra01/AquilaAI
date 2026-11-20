@@ -60,13 +60,14 @@
     "Search the web using BrowserModule browser_search or inspect local docs with KnowledgeModule search_local_docs",
     "Open authoritative source pages with BrowserModule browser_navigate, quickly locate terms or jump through long pages with browser_find, scroll deeper sections with browser_scroll when content continues below the fold, and click relevant links/tabs/controls with browser_click to gather thorough primary evidence",
     "Store key verified findings into long-term knowledge memory using KnowledgeModule store_fact",
-    "Write comprehensive final research report to research_report.md (with markdown headers and at least 3 distinct numbered real http(s):// URL citations, e.g. [1] https://..., [2] https://..., [3] https://...; minimum 2 required) using WorkspaceModule create_file",
+    "Write comprehensive final research report to research_report.md using WorkspaceModule create_file. Report MUST include: ## Executive Summary, ## Key Findings & Evidence (with detailed data tables & quantitative metrics), ## Detailed Analysis & Implications, and ## References & Sources (with at least 3 distinct numbered real citations/URLs/DOIs)",
+    "Call OrchestratorModule update_task_ledger to mark all completed steps before completing",
     "Call OrchestratorModule complete_recipe to finish"
   ],
   "post_llm_validation_hook": {
     "module": "KnowledgeModule",
     "action": "verify_research_deliverable",
     "must_succeed": true,
-    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact and written a comprehensive markdown report (at least 350 characters, with markdown headers and at least 2 distinct real http(s):// source URLs from your visited/retrieved pages, e.g. [1] https://..., [2] https://...) to research_report.md before completing."
+    "on_failure_instruction": "Research deliverable verification failed. Ensure you have recorded verified facts with KnowledgeModule.store_fact, marked steps complete in OrchestratorModule.update_task_ledger, and written a comprehensive markdown report (at least 350 characters, with markdown headers ## Executive Summary, ## Key Findings & Evidence, ## Detailed Analysis & Implications, ## References & Sources, and at least 2 distinct real citations/URLs/DOIs) to research_report.md before completing."
   }
 }

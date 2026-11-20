@@ -1,9 +1,11 @@
 // apps/aquila_gui/main_window.cpp
 #include "main_window.hpp"
+#include "dialogs/plan_review_dialog.hpp"
 #include "dialogs/setup_wizard.hpp"
 #include "theme/theme.hpp"
 
 #include "aquila/core.hpp"
+#include "aquila/agent/spec_creator.hpp"
 #include "aquila/knowledge/browser_module.hpp"
 #include "aquila/knowledge/knowledge_module.hpp"
 #include "aquila/knowledge/searxng_manager.hpp"
@@ -547,7 +549,7 @@ void MainWindow::onChatSend(const QString& prompt, const QStringList& attachment
     activeWorker_->start();
 }
 
-void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
+void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt, bool enableSpec, bool reviewSpec) {
     if (activeWorker_ && activeWorker_->isRunning()) {
         activeWorker_->cancel();
         activeWorker_->wait();
@@ -566,6 +568,16 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         }
     }
 
+    std::string goal = prompt.toStdString();
+    if (goal.empty()) {
+        goal = recipe.goal_template;
+        const std::string marker = "{{user_instructions}}";
+        const auto pos = goal.find(marker);
+        if (pos != std::string::npos) {
+            goal.replace(pos, marker.length(), "technical overview and key architectural findings");
+        }
+    }
+
     LoopConfig config;
     config.task_id = "gui-task-" + recipe.recipe_id;
     config.mode = "task";
@@ -579,18 +591,42 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt) {
         [](const ModuleLoad& lm) { return lm.module == "BrowserModule"; });
     config.tier.limits.max_turns = (usesBrowser || recipeId.contains(QStringLiteral("research"))) ? 32u : 24u;
 
-    taskPage_->setRunning(true);
-    statusBarLabel_->setText(QStringLiteral("Running %1...").arg(recipeId));
+    if (enableSpec && activeBackend_) {
+        statusBarLabel_->setText(QStringLiteral("Synthesizing Execution Spec & Milestones..."));
+        taskPage_->setStatus(QStringLiteral("Synthesizing Execution Spec & Milestones..."));
+        QApplication::processEvents();
 
-    std::string goal = prompt.toStdString();
-    if (goal.empty()) {
-        goal = recipe.goal_template;
-        const std::string marker = "{{user_instructions}}";
-        const auto pos = goal.find(marker);
-        if (pos != std::string::npos) {
-            goal.replace(pos, marker.length(), "technical overview and key architectural findings");
+        SpecCreatorOptions spec_opts;
+        spec_opts.user_prompt = goal;
+        spec_opts.recipe = recipe;
+        spec_opts.workspace_root = workspaceRoot_.toStdString();
+        spec_opts.include_workspace_grounding = true;
+
+        try {
+            TaskSpec spec = SpecCreator::generate_spec(*activeBackend_, spec_opts);
+            if (reviewSpec) {
+                QStringList milestones;
+                for (const auto& ms : spec.milestones) {
+                    milestones.append(QString::fromStdString(ms.description));
+                }
+                PlanReviewDialog dlg(recipeId, QString::fromStdString(goal),
+                                     QString::fromStdString(spec.markdown_spec),
+                                     milestones, this);
+                if (dlg.exec() != QDialog::Accepted || !dlg.isApproved()) {
+                    taskPage_->setRunning(false);
+                    statusBarLabel_->setText(QStringLiteral("Task cancelled during spec review."));
+                    taskPage_->setStatus(QStringLiteral("Task cancelled during spec review."));
+                    return;
+                }
+            }
+            config.task_spec = std::move(spec);
+        } catch (const std::exception& e) {
+            statusBarLabel_->setText(QStringLiteral("Spec synthesis notice: %1 (using defaults)").arg(e.what()));
         }
     }
+
+    taskPage_->setRunning(true);
+    statusBarLabel_->setText(QStringLiteral("Running %1...").arg(recipeId));
     if (settingsPage_) {
         const std::string ep = settingsPage_->searxngEndpoint().toStdString();
         if (!ep.empty()) {

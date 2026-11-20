@@ -61,7 +61,8 @@ add_executable(aquila_unit_tests
     micro_pass_test.cpp
     recipes_all_test.cpp
     run_logger_test.cpp
-    cli_test.cpp)
+    cli_test.cpp
+    spec_creator_test.cpp)
 target_link_libraries(aquila_unit_tests PRIVATE
     aquila::core aquila_cli_lib httplib::httplib Catch2::Catch2WithMain rapidcheck_catch
     # Carries AQUILA_HAS_LLAMACPP (1 built / 0 stubbed) into this test TU so the
