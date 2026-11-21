@@ -592,6 +592,9 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt, bool 
     config.tier.limits.max_turns = (usesBrowser || recipeId.contains(QStringLiteral("research"))) ? 32u : 24u;
 
     if (enableSpec && activeBackend_) {
+        // Clear old KV cache / context so spec generation runs isolated at pos 0
+        activeBackend_->rollback_to(0);
+
         statusBarLabel_->setText(QStringLiteral("Synthesizing Execution Spec & Milestones..."));
         taskPage_->setStatus(QStringLiteral("Synthesizing Execution Spec & Milestones..."));
         QApplication::processEvents();
@@ -601,9 +604,23 @@ void MainWindow::onTaskRun(const QString& recipeId, const QString& prompt, bool 
         spec_opts.recipe = recipe;
         spec_opts.workspace_root = workspaceRoot_.toStdString();
         spec_opts.include_workspace_grounding = true;
+        spec_opts.max_tokens = 768;
+        spec_opts.think = false;
+
+        int streamed_tokens = 0;
+        spec_opts.on_token = [this, &streamed_tokens](std::string_view /*tok*/, std::string_view /*think*/) -> bool {
+            ++streamed_tokens;
+            if (streamed_tokens % 4 == 0) {
+                statusBarLabel_->setText(QStringLiteral("Synthesizing Execution Spec (%1 tokens)...").arg(streamed_tokens));
+                taskPage_->setStatus(QStringLiteral("Synthesizing Execution Spec (%1 tokens)...").arg(streamed_tokens));
+                QApplication::processEvents();
+            }
+            return true;
+        };
 
         try {
             TaskSpec spec = SpecCreator::generate_spec(*activeBackend_, spec_opts);
+            statusBarLabel_->setText(QStringLiteral("Spec ready (%1 tokens)").arg(streamed_tokens));
             if (reviewSpec) {
                 QStringList milestones;
                 for (const auto& ms : spec.milestones) {

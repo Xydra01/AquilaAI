@@ -198,6 +198,7 @@ void AgentWorker::run() {
     };
 
     try {
+        backend_->rollback_to(0);
         ModuleRegistry registry = ModuleRegistry::builtin();
         ModuleContext ctx;
         ctx.workspace_root = workspace_root_;

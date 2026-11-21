@@ -13,6 +13,7 @@ struct MicroPassOptions {
     std::string user_prompt;
     double temperature = 0.0;
     std::uint32_t max_tokens = 1024;
+    std::optional<bool> think;
     OutputConstraint constraint = OutputConstraint::none();
     TokenCallback on_token = nullptr;
 };

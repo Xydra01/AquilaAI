@@ -337,15 +337,27 @@ int run_recipe(const CliOptions& opts, std::ostream& out, std::ostream& err,
     }
 
     if (opts.enable_spec && active_backend != nullptr) {
-        out << "[SpecCreator] Synthesizing execution specification & milestones...\n";
+        active_backend->rollback_to(0);
+        out << "[SpecCreator] Synthesizing execution specification & milestones " << std::flush;
         SpecCreatorOptions spec_opts;
         spec_opts.user_prompt = task;
         spec_opts.recipe = recipe;
         spec_opts.workspace_root = opts.workspace_root;
         spec_opts.include_workspace_grounding = true;
+        spec_opts.max_tokens = 768;
+        spec_opts.think = false;
+
+        int streamed_tokens = 0;
+        spec_opts.on_token = [&out, &streamed_tokens](std::string_view /*tok*/, std::string_view /*think*/) -> bool {
+            ++streamed_tokens;
+            if (streamed_tokens % 20 == 0) {
+                out << "." << std::flush;
+            }
+            return true;
+        };
         try {
             TaskSpec spec = SpecCreator::generate_spec(*active_backend, spec_opts);
-            out << "[SpecCreator] Spec Synthesized: " << spec.title << " (" << spec.milestones.size() << " milestones)\n";
+            out << "\n[SpecCreator] Spec Synthesized: " << spec.title << " (" << spec.milestones.size() << " milestones, " << streamed_tokens << " tokens)\n";
             out << "[SpecCreator] Archived to: " << spec.saved_path.string() << "\n";
             if (opts.review_spec) {
                 out << "\n----------------------------------------\n"
@@ -569,15 +581,27 @@ int run_eval(const CliOptions& opts, std::ostream& out, std::ostream& err,
         config.context_strategy = CondenserStrategy::eocc;
 
         if (opts.enable_spec && active_be != nullptr) {
-            out << "[SpecCreator] Synthesizing execution specification & milestones for live eval...\n";
+            active_be->rollback_to(0);
+            out << "[SpecCreator] Synthesizing execution specification & milestones for live eval " << std::flush;
             SpecCreatorOptions spec_opts;
             spec_opts.user_prompt = goal;
             spec_opts.recipe = recipe;
             spec_opts.workspace_root = opts.workspace_root;
             spec_opts.include_workspace_grounding = true;
+            spec_opts.max_tokens = 768;
+            spec_opts.think = false;
+
+            int streamed_tokens = 0;
+            spec_opts.on_token = [&out, &streamed_tokens](std::string_view /*tok*/, std::string_view /*think*/) -> bool {
+                ++streamed_tokens;
+                if (streamed_tokens % 20 == 0) {
+                    out << "." << std::flush;
+                }
+                return true;
+            };
             try {
                 TaskSpec spec = SpecCreator::generate_spec(*active_be, spec_opts);
-                out << "[SpecCreator] Spec Synthesized: " << spec.title << " (" << spec.milestones.size() << " milestones)\n";
+                out << "\n[SpecCreator] Spec Synthesized: " << spec.title << " (" << spec.milestones.size() << " milestones, " << streamed_tokens << " tokens)\n";
                 out << "[SpecCreator] Archived to: " << spec.saved_path.string() << "\n";
                 if (opts.review_spec) {
                     out << "\n================ TASK EXECUTION PLAN ================\n"

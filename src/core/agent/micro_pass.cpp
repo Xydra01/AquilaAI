@@ -32,6 +32,8 @@ MicroPassResult run_micro_pass(
     params.temperature = options.temperature;
     params.max_tokens = options.max_tokens;
     params.constraint = options.constraint;
+    params.think = options.think;
+    params.repeat_penalty = 1.1;
 
     GenerationResult gen = backend.generate(params, options.on_token);
 

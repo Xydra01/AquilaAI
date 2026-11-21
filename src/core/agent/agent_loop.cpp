@@ -360,6 +360,10 @@ TerminalResult AgentLoop::run(const RecipeCartridge& recipe, const std::string& 
                                       (res.outcome == LoopOutcome::aborted) ? "aborted" : "turn_limit";
             logger->log_session_end(res.success, outcome_str, res.completion_output, res.transcript.size());
         }
+        try {
+            backend_.rollback_to(context_baseline);
+        } catch (...) {
+        }
         return res;
     };
 

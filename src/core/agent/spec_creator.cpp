@@ -289,7 +289,7 @@ std::string SpecCreator::build_system_prompt(
     }
 
     prompt += "OUTPUT FORMAT REQUIREMENT:\n"
-              "Your response must be a comprehensive Markdown document with these exact top-level sections:\n"
+              "Your response must be a concise, actionable Markdown document (under 500 words) with these exact top-level sections:\n"
               "# Task Specification: <Clear Descriptive Title>\n\n"
               "## 1. Objective & Scope\n"
               "- Concise mission statement\n"
@@ -297,7 +297,7 @@ std::string SpecCreator::build_system_prompt(
               "- Explicit out-of-scope boundaries\n\n"
               "## 2. Technical Context & Strategy\n"
               "- Grounding assessment (existing files, build systems, or research corpus)\n"
-              "- Strategic approach and architectural choices\n\n"
+              "- Strategic approach\n\n"
               "## 3. Key Deliverables & Validation Criteria\n"
               "- Expected deliverables (file paths, formats, required sections)\n"
               "- Acceptance criteria and verification tests\n\n"
@@ -310,7 +310,8 @@ std::string SpecCreator::build_system_prompt(
               "]\n"
               "```\n\n"
               "## 5. Constraints & Exit Gate Checklist\n"
-              "- Operational constraints (tool choices, token budgets, exit criteria)\n";
+              "- Operational constraints (tool choices, token budgets, exit criteria)\n\n"
+              "IMPORTANT: Keep descriptions direct, compact, and free of filler commentary. Avoid verbose prose.\n";
 
     return prompt;
 }
@@ -520,7 +521,8 @@ TaskSpec SpecCreator::generate_spec(
     pass_opts.system_prompt = sys_prompt;
     pass_opts.user_prompt = usr_prompt;
     pass_opts.temperature = options.temperature;
-    pass_opts.max_tokens = options.max_tokens;
+    pass_opts.max_tokens = std::min<std::uint32_t>(options.max_tokens, 1024);
+    pass_opts.think = options.think;
     pass_opts.on_token = options.on_token;
 
     MicroPassResult res = run_micro_pass(backend, pass_opts);

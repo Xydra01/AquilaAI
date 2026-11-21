@@ -46,8 +46,9 @@ struct SpecCreatorOptions {
     RecipeCartridge recipe;
     std::filesystem::path workspace_root = ".";
     bool include_workspace_grounding = true;
-    std::uint32_t max_tokens = 4096;
+    std::uint32_t max_tokens = 768;
     double temperature = 0.2;
+    std::optional<bool> think = false;
     TokenCallback on_token = nullptr;
 };
 
